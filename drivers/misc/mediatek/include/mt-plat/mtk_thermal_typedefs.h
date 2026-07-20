@@ -91,7 +91,6 @@ typedef short *LPWSTR;
 #endif
 
 #ifndef NULL
-#define NULL  (0)
 #endif
 
 /* enum boolean {false, true}; */

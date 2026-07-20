@@ -1880,6 +1880,10 @@ static int mt_auxadc_resume(struct platform_device *dev)
 
 #ifdef CONFIG_OF
 static const struct of_device_id mt_auxadc_of_match[] = {
+	/* The MT6755 AUXADC IP matches MT6757 (mt6755.dtsi adc_hw@11001000).
+	 * Without this match the battery NTC and thermal bts readings are
+	 * dead. */
+	{.compatible = "mediatek,mt6755-auxadc",},
 	{.compatible = "mediatek,mt6757-auxadc",},
 	{.compatible = "mediatek,mt8167-auxadc",},
 	{},

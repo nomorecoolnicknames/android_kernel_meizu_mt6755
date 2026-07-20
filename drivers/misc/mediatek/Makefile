@@ -49,7 +49,7 @@ obj-$(CONFIG_CUSTOM_KERNEL_MAGNETOMETER) += magnetometer/
 # [yanlin start] Porting sensors
 obj-$(CONFIG_CUSTOM_KERNEL_HALL) += hall/
 obj-$(CONFIG_CUSTOM_KERNEL_MUTE_SWITCH) += keys/
-#obj-$(CONFIG_CUSTOM_KERNEL_BAROMETER) += barometer/
+obj-$(CONFIG_CUSTOM_KERNEL_BAROMETER) += barometer/
 #obj-$(CONFIG_CUSTOM_KERNEL_HUMIDITY) += humidity/
 obj-$(CONFIG_CUSTOM_KERNEL_STEP_COUNTER)	+= step_counter/
 obj-$(CONFIG_CUSTOM_KERNEL_SIGNIFICANT_MOTION_SENSOR)	+= step_counter/
@@ -93,7 +93,9 @@ obj-$(CONFIG_MTK_VIDEOCODEC_DRIVER) += videocodec/
 obj-$(CONFIG_MTK_JPEG)	+= jpeg/
 obj-$(CONFIG_MTK_RTC)	+= rtc/
 obj-$(CONFIG_REG_MONITOR_DRIVER) += reg_monitor/
-obj-$(CONFIG_MTK_PMIC)	+= power/
+# power/ is the battery-meter and charger-IC HAL; its only consumer is
+# drivers/power/mediatek/, so build it with CONFIG_MTK_SMART_BATTERY.
+obj-$(CONFIG_MTK_SMART_BATTERY)	+= power/
 obj-$(CONFIG_MTK_PMIC_NEW_ARCH)	+= pmic/
 obj-$(CONFIG_MTK_PMIC_WRAP_HAL) += pmic_wrap/
 #obj-$(CONFIG_USB_MTK_HDRC) += usb20/

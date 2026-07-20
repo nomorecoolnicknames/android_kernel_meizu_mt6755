@@ -15,4 +15,4 @@ obj-y += usb2jtag_v1.o
 ifeq ($(CONFIG_MTK_ENG_BUILD),y)
 CFLAGS_usb2jtag_v1.o := -DDEBUG
 endif
-obj-y += $(subst ",,$(CONFIG_MTK_PLATFORM))/
+obj-$(CONFIG_MTK_USB2JTAG_SUPPORT) += $(subst ",,$(CONFIG_MTK_PLATFORM))/

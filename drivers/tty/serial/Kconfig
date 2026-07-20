@@ -1626,6 +1626,7 @@ config SERIAL_STM32
 
 config SERIAL_MTK_EARLY_CONSOLE
 	bool "Support for MTK Early Console"
+	select SERIAL_CORE
 	select SERIAL_CORE_CONSOLE
 	select SERIAL_EARLYCON
 	help

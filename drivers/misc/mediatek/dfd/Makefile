@@ -1,3 +1,3 @@
 obj-y += dfd.o
 
-obj-$(CONFIG_MACH_MT6757) += $(subst ",,$(CONFIG_MTK_PLATFORM))/
+obj-$(CONFIG_MACH_MT6755) += $(subst ",,$(CONFIG_MTK_PLATFORM))/

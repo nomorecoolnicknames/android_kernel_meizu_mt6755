@@ -161,6 +161,8 @@ extern unsigned int pmic_config_interface_nospinlock(unsigned int RegNum,
 	unsigned int MASK,
 	unsigned int SHIFT);
 extern unsigned short pmic_set_register_value(PMU_FLAGS_LIST_ENUM flagname, unsigned int val);
+/* defined in mt6353/upmu_common.c; called by pmic_api_buck.c / pmic_api_ldo.c */
+extern unsigned short pmic_set_register_value_nolock(PMU_FLAGS_LIST_ENUM flagname, unsigned int val);
 extern unsigned short pmic_get_register_value(PMU_FLAGS_LIST_ENUM flagname);
 extern unsigned short pmic_get_register_value_nolock(PMU_FLAGS_LIST_ENUM flagname);
 extern unsigned short pmic_set_register_value_nospinlock(PMU_FLAGS_LIST_ENUM flagname, unsigned int val);
