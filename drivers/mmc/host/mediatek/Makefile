@@ -42,6 +42,14 @@ ccflags-y += -I$(srctree)/drivers/mmc/host/mediatek/mt6757/$(MTK_PLATFORM)
 obj-$(CONFIG_MMC_MTK_PRO) += mt6757/
 endif
 
+# MT6755: native MSDC dir (the MT6757 4.4 MSDC IP driver with the 3.18
+# MT6755 board layer in 4.4 format).
+ifeq ($(CONFIG_MTK_PLATFORM), "mt6755")
+ccflags-y += -I$(srctree)/drivers/mmc/host/mediatek/mt6755
+ccflags-y += -I$(srctree)/drivers/mmc/host/mediatek/mt6755/mt6755
+obj-$(CONFIG_MMC_MTK_PRO) += mt6755/
+endif
+
 ifeq ($(CONFIG_MTK_PLATFORM), "mt6798")
 ccflags-y += -I$(srctree)/drivers/mmc/host/mediatek/mt6798
 ccflags-y += -I$(srctree)/drivers/mmc/host/mediatek/mt6798/$(MTK_PLATFORM)
