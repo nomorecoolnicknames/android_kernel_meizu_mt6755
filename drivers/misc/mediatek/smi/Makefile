@@ -16,7 +16,7 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM)/
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/$(MTK_PLATFORM)/
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/$(MTK_PLATFORM)/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/mt6757/
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/dramc/$(MTK_PLATFORM)/
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/include/
 obj-y += smi_common.o
@@ -41,7 +41,10 @@ ccflags-y += -DSMI_R
 else ifeq ($(CONFIG_ARCH_MT6755),y)
 ccflags-y += -DSMI_J
 ccflags-y += -I$(srctree)/drivers/clk/mediatek
-obj-y += mmdvfs_mgr_v2.o
+# MM-DVFS (mmdvfs_mgr_v2) needs the display/camera vcorefs kickers
+# (KIR_MM_MHL/WFD/16MCAM) and freqhopping, which are not built; use the
+# dummy manager (the API smi_common calls, as no-ops).
+obj-y += mmdvfs_mgr_default.o
 else ifeq ($(CONFIG_ARCH_MT6797),y)
 ccflags-y += -DSMI_EV
 ccflags-y += -I$(srctree)/drivers/clk/mediatek

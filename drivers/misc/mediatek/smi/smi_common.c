@@ -1052,6 +1052,17 @@ static int larb_reg_backup(int larb)
 	return 0;
 }
 #if !defined(SMI_OLY)
+/* LK hands the kernel a live display, so at smi_larb_init() time the
+ * display larb (larb0) reads SMI_LARB_STAT != 0 and the original code skips
+ * enabling OSTD (outstanding-transaction depth) on it. With OSTD disabled
+ * the display's DRAM reads serialize, every read pays a full DRAM
+ * round-trip and the OVL0/RDMA0 FIFO drains while waiting: per-frame
+ * underflow and tearing, although the bandwidth demand (~0.5 GB/s) is far
+ * below the DRAM ceiling. Force the OSTD enable even when the larb is busy.
+ * Runtime toggle: /sys/module/mtk_smi/parameters/forge_force_ostd (1 = on). */
+static int forge_force_ostd = 1;
+module_param(forge_force_ostd, int, 0644);
+
 static int smi_larb_init(unsigned int larb)
 {
 	unsigned int regval = 0;
@@ -1075,7 +1086,14 @@ static int smi_larb_init(unsigned int larb)
 	} else {
 		SMIMSG("Larb: 0x%lx is busy : 0x%x , port:0x%x,0x%x ,fail to set OSTD\n",
 		       larb_base, regval, regval1, regval2);
-		if (smi_debug_level >= 1) {
+		if (forge_force_ostd) {
+			/* force OSTD on the busy (LK-live) display larb;
+			 * OSTDL_SOFT_EN only enables the outstanding depth per
+			 * port */
+			M4U_WriteReg32(larb_base, SMI_LARB_OSTDL_SOFT_EN, 0xffffffff);
+			SMIMSG("[FORGE] larb 0x%lx busy - forced OSTD enable anyway (stat=0x%x)\n",
+			       larb_base, regval);
+		} else if (smi_debug_level >= 1) {
 			SMIERR("DISP_MDP LARB  0x%lx OSTD cannot be set:0x%x,port:0x%x,0x%x\n",
 			       larb_base, regval, regval1, regval2);
 		} else {
@@ -2482,6 +2500,9 @@ static void smi_driver_setting(void)
 #ifdef SMI_PARAM_BUS_OPTIMIZATION
 	bus_optimization = SMI_PARAM_BUS_OPTIMIZATION;
 #endif
+	/* larb0 only: larb1+ are unpowered MM domains (SRAM_PDN_ACK wait),
+	 * display needs only larb0. */
+	bus_optimization = 0x1;
 
 #ifdef SMI_PARAM_ENABLE_IOCTL
 	enable_ioctl = SMI_PARAM_ENABLE_IOCTL;

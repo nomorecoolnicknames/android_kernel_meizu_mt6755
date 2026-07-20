@@ -606,6 +606,29 @@ int m4u_destroy_sgtable(struct sg_table *table)
 
 /* #define __M4U_MAP_MVA_TO_KERNEL_FOR_DEBUG__ */
 
+/* Pre-map the unmapped 1 MB block tail of DISP buffers to a shared zeroed
+ * scratch page, so OVL/RDMA scan-out prefetch past the buffer end never
+ * faults in the M4U (the fault and guard remap glitched the first scan-out
+ * of every new buffer). Runtime switch. */
+static bool m6_disp_pad = true;
+module_param_named(disp_pad, m6_disp_pad, bool, 0644);
+static unsigned int m6_disp_pad_count;
+module_param_named(disp_pad_count, m6_disp_pad_count, uint, 0444);
+
+static struct page *m6_get_disp_pad_page(void)
+{
+	static struct page *pg;
+	static DEFINE_MUTEX(lk);
+
+	if (!pg) {
+		mutex_lock(&lk);
+		if (!pg)
+			pg = alloc_page(GFP_KERNEL | __GFP_ZERO);
+		mutex_unlock(&lk);
+	}
+	return pg;
+}
+
 int m4u_alloc_mva(m4u_client_t *client, M4U_PORT_ID port,
 		  unsigned long va, struct sg_table *sg_table,
 		  unsigned int size, unsigned int prot, unsigned int flags, unsigned int *pMva)
@@ -613,6 +636,17 @@ int m4u_alloc_mva(m4u_client_t *client, M4U_PORT_ID port,
 	int ret;
 	m4u_buf_info_t *pMvaInfo;
 	unsigned int mva = 0, mva_align, size_align;
+
+	/* Log the first 8 M4U mappings. */
+	{
+		static int _fm;
+
+		if (_fm < 8) {
+			_fm++;
+			pr_emerg("[FORGE_M681] #120 m4u_alloc_mva#%d port=%d size=0x%x comm=%s\n",
+				 _fm, port, size, current->comm);
+		}
+	}
 
 	MMProfileLogEx(M4U_MMP_Events[M4U_MMP_ALLOC_MVA], MMProfileFlagStart, va, size);
 
@@ -685,6 +719,38 @@ int m4u_alloc_mva(m4u_client_t *client, M4U_PORT_ID port,
 	pMvaInfo->mva = mva;
 	pMvaInfo->mva_align = mva_align;
 	pMvaInfo->size_align = size_align;
+
+	/* Pad the DISP (larb0) buffer's block tail with scratch so OVL/RDMA
+	 * prefetch-past-end reads valid pages instead of faulting.
+	 * blk_end = end of the block containing the last mapped page, which is
+	 * always inside this allocation's reserved blocks; the tail is unused
+	 * by any other buffer. size_align is grown so m4u_dealloc_mva ->
+	 * m4u_unmap clears these scratch PTEs (it only zeroes PTEs, no put_page,
+	 * so over-unmap is safe), keeping the block clean for later reuse. */
+	if (m6_disp_pad && m4u_port_2_larb_id(port) == 0) {
+		extern int m4u_map_4K(m4u_domain_t *m4u_domain, unsigned int mva,
+				      phys_addr_t pa, unsigned int prot);
+		unsigned int pad_start = mva_align + size_align;
+		unsigned int blk_end = round_up(mva + size, 0x100000u);
+		struct page *sp = m6_get_disp_pad_page();
+		m4u_domain_t *dom = m4u_get_domain_by_port(port);
+		unsigned int p;
+		int padded = 0;
+
+		if (sp && dom) {
+			for (p = pad_start; p < blk_end; p += PAGE_SIZE) {
+				if (m4u_map_4K(dom, p, page_to_phys(sp),
+					       M4U_PROT_READ | M4U_PROT_WRITE))
+					break;
+				padded++;
+			}
+			if (padded) {
+				pMvaInfo->size_align = blk_end - mva_align;
+				m6_disp_pad_count += padded;
+			}
+		}
+	}
+
 	*pMva = mva;
 
 	if (flags & M4U_FLAGS_SEQ_ACCESS)

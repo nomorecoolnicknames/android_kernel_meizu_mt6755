@@ -38,7 +38,9 @@
 			SMIMSG(string, ##args);\
 	} while (0)
 #else
-#define SMIMSG3(string, args...) SMIMSG(string, ##args)
+/* Keep the CMDQ-form signature (onoff, string, ...) even without CMDQ so
+ * smi_debug.c compiles; the gce-buffer flag is irrelevant without CMDQ. */
+#define SMIMSG3(onoff, string, args...) SMIMSG(string, ##args)
 #endif
 #define SMITMP(string, args...) pr_debug("[pid=%d]"string, current->tgid, ##args)
 
