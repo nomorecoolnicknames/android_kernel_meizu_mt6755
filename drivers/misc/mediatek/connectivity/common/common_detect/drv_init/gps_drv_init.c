@@ -28,7 +28,15 @@ int do_gps_drv_init(int chip_id)
 	i_ret = mtk_wcn_stpgps_drv_init();
 	WMT_DETECT_INFO_FUNC("finish gps driver init, i_ret:%d\n", i_ret);
 #else
+	/* "Not configured" is not a failure: do_connectivity_driver_init()
+	 * sums its sub-results, so returning -1 here made DO_MODULE_INIT fail
+	 * even when BT and WLAN succeeded. wmt_loader then skips its HIF setup
+	 * (it calls configure_soc_sdio_hif() only on 0), and every WMT func_on
+	 * fails with "WMT-CORE: no hif info!". The __weak stubs in
+	 * conn_drv_init.c return 0 for "not supported" as well.
+	 */
 	WMT_DETECT_INFO_FUNC("CONFIG_MTK_COMBO_GPS is not defined\n");
+	i_ret = 0;
 #endif
 	return i_ret;
 

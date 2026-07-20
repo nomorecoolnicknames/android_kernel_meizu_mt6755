@@ -22,6 +22,7 @@
 
 #include "gl_os.h"
 #include "gl_wext_priv.h"
+#include "gl_cfg80211.h"
 #if CFG_SUPPORT_WAPI
 #include "gl_sec.h"
 #endif
@@ -4562,6 +4563,50 @@ exit:
 #define CMD_CH_ENV_GET			"CH_ENV_GET"
 #endif
 
+/*
+ * Android sends "SETSUSPENDMODE 1|0" (supplicant HIDL
+ * setSuspendModeEnabled) at screen off/on. The ROM's lib_driver_cmd_mt66xx
+ * does not translate it and passes it here as a private command; the stock
+ * wpa_supplicant turned it into NL80211 testmode TESTMODE_CMD_ID_SUSPEND
+ * (101) instead. The Android block below that used to dispatch it is #if 0
+ * and the handler was never written, so without this no packet/ARP filter
+ * reaches the firmware with the screen off. Same work as the
+ * TESTMODE_CMD_ID_SUSPEND case of mtk_cfg80211_testmode_cmd(). Always
+ * returns 0: a negative value makes the library report a HANG and restart
+ * Wi-Fi.
+ */
+static int priv_driver_set_suspend_mode(IN struct net_device *prNetDev, IN PCHAR pcCommand,
+					IN INT_32 i4TotalLen)
+{
+	P_GLUE_INFO_T prGlueInfo = *((P_GLUE_INFO_T *) netdev_priv(prNetDev));
+	size_t n = strlen(CMD_SETSUSPENDMODE);
+	BOOLEAN fgEnable;
+
+	if (strnlen(pcCommand, i4TotalLen) < n + 2 || pcCommand[n] != ' ' ||
+	    (pcCommand[n + 1] != '0' && pcCommand[n + 1] != '1')) {
+		DBGLOG(REQ, WARN, "%s: bad \"%s\", ignored\n", __func__, pcCommand);
+		return 0;
+	}
+	fgEnable = pcCommand[n + 1] == '1';
+	if (!prGlueInfo || !prGlueInfo->prAdapter)
+		return 0;
+	if (fgIsUnderSuspend == fgEnable) {
+		DBGLOG(REQ, INFO, "%s: suspend mode already %d\n", __func__, fgEnable);
+		return 0;
+	}
+	DBGLOG(REQ, INFO, "%s: suspend mode %d\n", __func__, fgEnable);
+	if (fgEnable) {
+		wlanHandleSystemSuspend();
+		if (prGlueInfo->prAdapter->fgIsP2PRegistered)
+			p2pHandleSystemSuspend();
+	} else {
+		wlanHandleSystemResume();
+		if (prGlueInfo->prAdapter->fgIsP2PRegistered)
+			p2pHandleSystemResume();
+	}
+	return 0;
+}
+
 INT_32 priv_driver_cmds(IN struct net_device *prNetDev, IN PCHAR pcCommand, IN INT_32 i4TotalLen)
 {
 	P_GLUE_INFO_T prGlueInfo = NULL;
@@ -4577,6 +4622,8 @@ INT_32 priv_driver_cmds(IN struct net_device *prNetDev, IN PCHAR pcCommand, IN I
 
 		if (strncasecmp(pcCommand, CMD_MIRACAST, strlen(CMD_MIRACAST)) == 0)
 			i4BytesWritten = priv_driver_set_miracast(prNetDev, pcCommand, i4TotalLen);
+		else if (strncasecmp(pcCommand, CMD_SETSUSPENDMODE, strlen(CMD_SETSUSPENDMODE)) == 0)
+			i4BytesWritten = priv_driver_set_suspend_mode(prNetDev, pcCommand, i4TotalLen);
 #if CFG_SUPPORT_P2P_ECSA
 		else if (kalStrniCmp(pcCommand, CMD_ECSA, strlen(CMD_ECSA)) == 0)
 			i4BytesWritten = priv_driver_ecsa(prNetDev, pcCommand, i4TotalLen);

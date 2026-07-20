@@ -21,6 +21,7 @@
 #include <linux/sched.h>
 #include <asm/current.h>
 #include <linux/uaccess.h>
+#include <linux/uio.h>		/* iov_iter, iov_iter_count, copy_from_iter */
 #include <linux/fcntl.h>
 #include <linux/poll.h>
 #include <linux/time.h>
@@ -92,6 +93,31 @@ static INT32 flag;
  */
 static volatile UINT32 rstflag;
 static UINT8 HCI_EVT_HW_ERROR[] = {0x04, 0x10, 0x01, 0x00};
+/* Bytes of HCI_EVT_HW_ERROR already handed to userspace. BT_read used to
+ * copy all 4 bytes regardless of `count`, which violates read(2): AOSP's
+ * H4Protocol::OnDataReady reads the H4 type indicator with
+ * read(fd, buf, 1), so 4 bytes landed in a 1-byte stack buffer and the HAL
+ * aborted with "More bytes read than expected (4)!". The event is now
+ * delivered across as many reads as `count` requires. Reset to 0 on reset
+ * start and in BT_open, so a new HAL instance never inherits a
+ * half-delivered event.
+ */
+static UINT32 rst_evt_sent;
+
+/* Counter C: bytes that reached the HAL (A and B, what arrived from the
+ * chip and what STP routed per task, live in core/stp_core.c). Both are
+ * incremented under rd_mtx, which every read holds, so they are exact.
+ *
+ *     /sys/module/stp_chrdev_bt/parameters/forge_bt_rd_bytes
+ *
+ * Only the normal data path is counted. The Hardware Error event delivered
+ * by the reset branch is excluded: it is generated here, not received from
+ * the chip.
+ */
+static unsigned int forge_bt_rd_calls;
+static unsigned int forge_bt_rd_bytes;
+module_param(forge_bt_rd_calls, uint, 0444);
+module_param(forge_bt_rd_bytes, uint, 0444);
 
 /*******************************************************************
  * WHOLE CHIP RESET message handler
@@ -115,6 +141,9 @@ static VOID bt_cdev_rst_cb(ENUM_WMTDRV_TYPE_T src,
 		case WMTRSTMSG_RESET_START:
 			BT_INFO_FUNC("Whole chip reset start!\n");
 			rstflag = 1;
+			/* a new reset re-arms the whole event, even if the previous
+			 * one was only partially consumed. */
+			rst_evt_sent = 0;
 			break;
 
 		case WMTRSTMSG_RESET_END:
@@ -176,6 +205,28 @@ unsigned int BT_poll(struct file *filp, poll_table *wait)
 	return mask;
 }
 
+/* Shared tail of the two write entry points. `o_buf` holds `count` bytes
+ * and the caller holds wr_mtx. The plain write() path is unchanged.
+ */
+static ssize_t bt_send_locked(size_t count)
+{
+	INT32 retval;
+
+	retval = mtk_wcn_stp_send_data(o_buf, count, BT_TASK_INDX);
+	if (retval < 0)
+		BT_ERR_FUNC("mtk_wcn_stp_send_data fail, retval %d\n", retval);
+	else if (retval == 0) {
+		/* Device cannot process data in time, STP queue is full and no space is available for write,
+		 * native program should not call BT_write with no delay.
+		 */
+		BT_ERR_FUNC("Packet length %zd, sent bytes %d, no space is available!\n", count, retval);
+		retval = -EAGAIN;
+	} else
+		BT_DBG_FUNC("Packet length %zd, sent bytes %d\n", count, retval);
+
+	return retval;
+}
+
 ssize_t BT_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	INT32 retval = 0;
@@ -192,8 +243,8 @@ ssize_t BT_write(struct file *filp, const char __user *buf, size_t count, loff_t
 
 	if (count > 0) {
 		if (count > BT_BUFFER_SIZE) {
-			count = BT_BUFFER_SIZE;
 			BT_WARN_FUNC("Shorten write count from %zd to %d\n", count, BT_BUFFER_SIZE);
+			count = BT_BUFFER_SIZE;
 		}
 
 		if (copy_from_user(o_buf, buf, count)) {
@@ -201,17 +252,68 @@ ssize_t BT_write(struct file *filp, const char __user *buf, size_t count, loff_t
 			goto OUT;
 		}
 
-		retval = mtk_wcn_stp_send_data(o_buf, count, BT_TASK_INDX);
-		if (retval < 0)
-			BT_ERR_FUNC("mtk_wcn_stp_send_data fail, retval %d\n", retval);
-		else if (retval == 0) {
-			/* Device cannot process data in time, STP queue is full and no space is available for write,
-			 * native program should not call BT_write with no delay.
-			 */
-			BT_ERR_FUNC("Packet length %zd, sent bytes %d, no space is available!\n", count, retval);
-			retval = -EAGAIN;
-		} else
-			BT_DBG_FUNC("Packet length %zd, sent bytes %d\n", count, retval);
+		retval = bt_send_locked(count);
+
+	} else {
+		BT_ERR_FUNC("Packet length %zd is not allowed\n", count);
+		retval = -EINVAL;
+	}
+
+OUT:
+	up(&wr_mtx);
+	return retval;
+}
+
+/* iovec-aware write.
+ *
+ * Without .write_iter, vfs_writev() falls back to do_loop_readv_writev(),
+ * which calls ->write once per iovec segment, and each call became its own
+ * STP packet in mtk_wcn_stp_send_data(). AOSP's H4Protocol::Send() does
+ *
+ *     struct iovec iov[] = {{&type, sizeof(type)}, {data, length}};
+ *     writev(uart_fd_, iov, 2);
+ *
+ * one syscall with a complete H4 frame, which the loop split into a 1-byte
+ * packet holding only the H4 type indicator and a second one with the
+ * payload. The firmware's transport parser asserts on the lone type byte
+ * ("<ASSERT> system/transport/hcit_mtk_stp.c #2171") and never answers
+ * HCI_Reset, while the HAL still sees a full-length return. WMT is
+ * unaffected because wmt_ctrl.c sends from a kernel buffer via
+ * mtk_wcn_stp_send_data() directly.
+ *
+ * Implementing .write_iter keeps the caller's write in one packet without
+ * adding state; coalescing inside BT_write() would need H4 length parsing
+ * and partial-frame state across calls.
+ */
+ssize_t BT_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	INT32 retval = 0;
+	size_t count;
+
+	down(&wr_mtx);
+
+	count = iov_iter_count(from);
+	BT_DBG_FUNC("count %zd (segments %lu)\n", count, (unsigned long)from->nr_segs);
+
+	if (rstflag) {
+		BT_ERR_FUNC("whole chip reset occurs! rstflag=%d\n", rstflag);
+		retval = -EIO;
+		goto OUT;
+	}
+
+	if (count > 0) {
+		if (count > BT_BUFFER_SIZE) {
+			BT_WARN_FUNC("Shorten write count from %zd to %d\n", count, BT_BUFFER_SIZE);
+			count = BT_BUFFER_SIZE;
+		}
+
+		/* Gather every segment into one buffer, then emit ONE STP packet. */
+		if (copy_from_iter(o_buf, count, from) != count) {
+			retval = -EFAULT;
+			goto OUT;
+		}
+
+		retval = bt_send_locked(count);
 
 	} else {
 		BT_ERR_FUNC("Packet length %zd is not allowed\n", count);
@@ -251,22 +353,47 @@ ssize_t BT_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos
 		 * To avoid high frequency read from stack before process is killed, set rstflag to 3
 		 * to block poll and read after Hardware Error event is sent.
 		 */
-		BT_INFO_FUNC("Send Hardware Error event to stack to restart Bluetooth\n");
-		memcpy(i_buf, HCI_EVT_HW_ERROR, sizeof(HCI_EVT_HW_ERROR));
-		retval = sizeof(HCI_EVT_HW_ERROR);
-		rstflag = 3;
+		/* Deliver the event honouring `count`. rstflag stays at 2 until the
+		 * last byte lands, so a partial delivery cannot be stranded: the next
+		 * read re-enters here and continues from rst_evt_sent. Only when the
+		 * event is complete do we advance to 3 and block further reads.
+		 * No interleaving with the normal path is possible — the whole reset
+		 * branch returns via OUT before mtk_wcn_stp_receive_data() is reached,
+		 * and every read holds rd_mtx.
+		 */
+		{
+			UINT32 remaining = sizeof(HCI_EVT_HW_ERROR) - rst_evt_sent;
+			UINT32 chunk = (count < remaining) ? (UINT32)count : remaining;
 
-		if (copy_to_user(buf, i_buf, retval)) {
-			retval = -EFAULT;
-			rstflag = 2;
+			if (chunk == 0) {	/* read(fd, buf, 0) */
+				retval = 0;
+				goto OUT;
+			}
+
+			if (copy_to_user(buf, &HCI_EVT_HW_ERROR[rst_evt_sent], chunk)) {
+				/* leave rst_evt_sent and rstflag alone so the stack can retry */
+				retval = -EFAULT;
+				goto OUT;
+			}
+
+			rst_evt_sent += chunk;
+			retval = chunk;
+
+			BT_INFO_FUNC("Hardware Error event: sent %u/%zu byte(s) (count=%zd)\n",
+				     rst_evt_sent, sizeof(HCI_EVT_HW_ERROR), count);
+
+			if (rst_evt_sent >= sizeof(HCI_EVT_HW_ERROR)) {
+				BT_INFO_FUNC("Hardware Error event complete; blocking further reads\n");
+				rstflag = 3;
+			}
 		}
 
 		goto OUT;
 	}
 
 	if (count > BT_BUFFER_SIZE) {
-		count = BT_BUFFER_SIZE;
 		BT_WARN_FUNC("Shorten read count from %zd to %d\n", count, BT_BUFFER_SIZE);
+		count = BT_BUFFER_SIZE;
 	}
 
 	do {
@@ -289,6 +416,8 @@ ssize_t BT_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos
 			flag = 0;
 		} else {	/* Got something from STP driver */
 			BT_DBG_FUNC("Read bytes %d\n", retval);
+			forge_bt_rd_calls++;	/* C: exact, under rd_mtx */
+			forge_bt_rd_bytes += retval;
 			break;
 		}
 	} while (!mtk_wcn_stp_is_rxqueue_empty(BT_TASK_INDX) && rstflag == 0);
@@ -298,18 +427,44 @@ ssize_t BT_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos
 			WARN(1, "Blocking read is waken up with no data but rstflag=%d\n", rstflag);
 			retval = -EIO;
 			goto OUT;
-		} else {	/* Reset end, send Hardware Error event only once */
-			BT_INFO_FUNC("Send Hardware Error event to stack to restart Bluetooth\n");
-			memcpy(i_buf, HCI_EVT_HW_ERROR, sizeof(HCI_EVT_HW_ERROR));
-			retval = sizeof(HCI_EVT_HW_ERROR);
-			rstflag = 3;
+		} else {	/* Reset end: send the Hardware Error event honouring `count`.
+			 * SECOND instance of the same defect as the rstflag branch above,
+			 * and in practice the likelier one: the HAL is normally already
+			 * blocked in read() when the reset arrives, so it wakes here with
+			 * retval == 0 and rstflag == 2. Unbounded, this wrote 4 bytes into
+			 * the caller's 1-byte buffer exactly as the other site did.
+			 * rst_evt_sent is shared with that branch, so a delivery split
+			 * across the two paths still cannot duplicate or drop bytes.
+			 */
+			UINT32 remaining = sizeof(HCI_EVT_HW_ERROR) - rst_evt_sent;
+			UINT32 chunk = (count < remaining) ? (UINT32)count : remaining;
+
+			if (chunk == 0) {	/* read(fd, buf, 0) */
+				retval = 0;
+				goto OUT;
+			}
+
+			memcpy(i_buf, &HCI_EVT_HW_ERROR[rst_evt_sent], chunk);
+			retval = chunk;
+			rst_evt_sent += chunk;
+
+			BT_INFO_FUNC("Hardware Error event (blocking path): sent %u/%zu byte(s) (count=%zd)\n",
+				     rst_evt_sent, sizeof(HCI_EVT_HW_ERROR), count);
+
+			if (rst_evt_sent >= sizeof(HCI_EVT_HW_ERROR))
+				rstflag = 3;
 		}
 	}
 
 	if (copy_to_user(buf, i_buf, retval)) {
-		retval = -EFAULT;
 		if (rstflag == 3)
 			rstflag = 2;
+		/* nothing reached userspace: rewind the Hardware Error cursor so the
+		 * retry re-sends this chunk instead of resuming past it. retval is
+		 * only ever the HW_ERROR chunk size when rstflag is non-zero. */
+		if (rstflag && retval > 0 && (UINT32)retval <= rst_evt_sent)
+			rst_evt_sent -= retval;
+		retval = -EFAULT;
 		goto OUT;
 	}
 
@@ -388,6 +543,7 @@ static int BT_open(struct inode *inode, struct file *file)
 
 	BT_INFO_FUNC("WMT turn on BT OK!\n");
 	rstflag = 0;
+	rst_evt_sent = 0;
 
 	if (mtk_wcn_stp_is_ready()) {
 
@@ -417,6 +573,7 @@ static int BT_close(struct inode *inode, struct file *file)
 {
 	BT_INFO_FUNC("major %d minor %d (pid %d)\n", imajor(inode), iminor(inode), current->pid);
 	rstflag = 0;
+	rst_evt_sent = 0;
 	mtk_wcn_wmt_msgcb_unreg(WMTDRV_TYPE_BT);
 	mtk_wcn_stp_register_event_cb(BT_TASK_INDX, NULL);
 
@@ -434,6 +591,10 @@ const struct file_operations BT_fops = {
 	.release = BT_close,
 	.read = BT_read,
 	.write = BT_write,
+	/* Without this the VFS splits a writev() across ->write per segment and
+	 * puts a malformed 1-byte H4 frame on the wire. See BT_write_iter().
+	 */
+	.write_iter = BT_write_iter,
 	/* .ioctl = BT_ioctl, */
 	.unlocked_ioctl = BT_unlocked_ioctl,
 	.compat_ioctl = BT_compat_ioctl,

@@ -26,6 +26,9 @@
 #include "gps_drv_init.h"
 #include "ant_drv_init.h"
 
+/* connectivity power-on tracer (survives a WDT reset) */
+#include "../../../forge_conn_trace.h"
+
 int __weak do_wlan_drv_init(int chip_id)
 {
 	WMT_DETECT_ERR_FUNC("Can not find wlan module for chip: %d !\n", chip_id);
@@ -43,6 +46,7 @@ int do_connectivity_driver_init(int chip_id)
 	int i_ret = 0;
 	int tmp_ret = 0;
 
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0B0);
 	tmp_ret = do_common_drv_init(chip_id);
 	i_ret += tmp_ret;
 	if (tmp_ret) {
@@ -51,15 +55,18 @@ int do_connectivity_driver_init(int chip_id)
 		return i_ret;
 	}
 
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0C1);
 	tmp_ret = do_bluetooth_drv_init(chip_id);
 	i_ret += tmp_ret;
 	if (tmp_ret)
 		WMT_DETECT_ERR_FUNC("do common driver init failed, ret:%d\n", tmp_ret);
 
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0C3);
 	tmp_ret = do_gps_drv_init(chip_id);
 	i_ret += tmp_ret;
 	if (tmp_ret)
 		WMT_DETECT_ERR_FUNC("do common driver init failed, ret:%d\n", tmp_ret);
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0C4);
 
         //[qinxiaosong start]
 	/*tmp_ret = do_fm_drv_init(chip_id);
@@ -68,15 +75,18 @@ int do_connectivity_driver_init(int chip_id)
 		WMT_DETECT_ERR_FUNC("do fm module init failed, ret:%d\n", tmp_ret);
         */
         //[qinxiaosong end]
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0C5);
 	tmp_ret = do_wlan_drv_init(chip_id);
 	i_ret += tmp_ret;
 	if (tmp_ret)
 		WMT_DETECT_ERR_FUNC("do wlan module init failed, ret:%d\n", tmp_ret);
 
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0C8);
 	tmp_ret = do_ant_drv_init(chip_id);
 	i_ret += tmp_ret;
 	if (tmp_ret)
 		WMT_DETECT_ERR_FUNC("do ANT module init failed, ret:%d\n", tmp_ret);
 
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0C9);
 	return i_ret;
 }

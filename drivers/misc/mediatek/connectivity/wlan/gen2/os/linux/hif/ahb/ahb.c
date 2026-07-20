@@ -1457,6 +1457,10 @@ static int HifAhbPltmProbe(IN struct platform_device *PDev)
 		WmtCb.wlan_bus_cnt_clr_cb = HifAhbBusCntClr;
 		mtk_wcn_wmt_wlan_reg(&WmtCb);
 	}
+	/* Probe marker. This probe (driver "mt-wifi", node wifi@180f0000
+	 * "mediatek,wifi") registers the wlan_probe_cb that
+	 * `echo 1 > /dev/wmtWifi` needs; it touches no consys hardware. */
+	pr_info("[FORGE_WIFI] mt-wifi platform probe OK: wmt wlan cb registered (deny retirement positive marker)\n");
 #endif /* MTK_WCN_SINGLE_MODULE */
 	return 0;
 }

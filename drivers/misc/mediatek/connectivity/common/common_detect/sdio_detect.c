@@ -262,20 +262,39 @@ static void sdio_detect_remove(struct sdio_func *func)
 	WMT_DETECT_INFO_FUNC("do sdio remove\n");
 }
 
+/* Make init/exit idempotent: wmt_kick issues COMBO_IOCTL_MODULE_CLEANUP
+ * (-> sdio_detect_exit()) and DO_MODULE_INIT also calls sdio_detect_exit(),
+ * so the unregister could run twice; a double driver_unregister() WARNs on
+ * 4.4. msdc2 is denied and the MT6755 consys is an AHB SoC block, so this
+ * never touches hardware. */
+static int g_sdio_detect_registered;
+
 int sdio_detect_init(void)
 {
 	int ret = -1;
+
+	if (g_sdio_detect_registered) {
+		WMT_DETECT_INFO_FUNC("sdio detect already registered\n");
+		return 0;
+	}
 	/* register to mmc driver */
 	ret = sdio_register_driver(&mtk_sdio_client_drv);
 	WMT_DETECT_INFO_FUNC("sdio_register_driver() ret=%d\n", ret);
+	if (ret == 0)
+		g_sdio_detect_registered = 1;
 	return 0;
 }
 
 int sdio_detect_exit(void)
 {
 	g_func = NULL;
+	if (!g_sdio_detect_registered) {
+		WMT_DETECT_INFO_FUNC("sdio detect not registered, skip unregister\n");
+		return 0;
+	}
 	/* register to mmc driver */
 	sdio_unregister_driver(&mtk_sdio_client_drv);
+	g_sdio_detect_registered = 0;
 	WMT_DETECT_INFO_FUNC("sdio_unregister_driver\n");
 	return 0;
 }

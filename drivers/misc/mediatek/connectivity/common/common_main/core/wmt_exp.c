@@ -31,6 +31,7 @@
 *                    E X T E R N A L   R E F E R E N C E S
 ********************************************************************************
 */
+#include <linux/moduleparam.h>
 #include "osal_typedef.h"
 
 #include <wmt_exp.h>
@@ -131,12 +132,29 @@ static MTK_WCN_BOOL mtk_wcn_wmt_func_ctrl(ENUM_WMTDRV_TYPE_T type, ENUM_WMT_OPID
 	return bRet;
 }
 
+/* Gate on the PSM enable path, default 1 (stock behaviour).
+ *
+ * With 0, the enable branch becomes a logged no-op and PSM stays off. Both
+ * the BT HAL's /dev/stpbt COMBO_IOCTL_BT_SET_PSM ioctl (stp_chrdev_bt.c)
+ * and mtk_wcn_wmt_func_off(BT) below reach PSM through here.
+ *
+ * The chip does not answer the WMT sleep request here, so opfunc_pwr_sv()
+ * reads back 0 of the 6 expected SLEEP_EVT bytes and the host asserts the
+ * firmware (wmt_core.c, "host trigger firmware assert", reason 33).
+ * Holding PSM off avoids that assert; it does not fix Bluetooth by itself.
+ */
+static int forge_conn_psm = 1;
+module_param(forge_conn_psm, int, 0644);
+MODULE_PARM_DESC(forge_conn_psm, "1 = stock PSM behaviour (default); 0 = never enable PSM");
+
 INT32 mtk_wcn_wmt_psm_ctrl(MTK_WCN_BOOL flag)
 {
 #if CFG_WMT_PS_SUPPORT
 	if (flag == MTK_WCN_BOOL_FALSE) {
 		wmt_lib_ps_ctrl(0);
 		WMT_INFO_FUNC("disable PSM\n");
+	} else if (!forge_conn_psm) {
+		WMT_INFO_FUNC("[FORGE_CONN] psm gate: enable PSM SUPPRESSED (forge_conn_psm=0)\n");
 	} else {
 		wmt_lib_ps_set_idle_time(5000);
 		wmt_lib_ps_ctrl(1);

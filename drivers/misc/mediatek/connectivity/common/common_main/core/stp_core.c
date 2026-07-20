@@ -18,6 +18,7 @@
 #include "stp_dbg.h"
 #include "stp_sdio.h"
 #include "stp_btif.h"
+#include <linux/moduleparam.h>
 
 #define PFX                         "[STP] "
 #define STP_LOG_DBG                  4
@@ -911,6 +912,41 @@ static VOID stp_add_to_tx_queue(const PUINT8 buffer, UINT32 length)
 	}
 }
 
+/* RX counters, read-only witnesses (no behaviour change, no hot-path
+ * logging, no allocation, no new locks):
+ *
+ *   forge_rx_calls_lowerbound  A: calls of the STP rx entry, i.e.
+ *   forge_rx_bytes_lowerbound     anything at all arriving from the chip.
+ *   forge_rxq_pkts[]           B: what STP routed, per task index
+ *   forge_rxq_bytes[]             (BT=0 ... WMT=4).
+ *   forge_rxq_full[]           B': enqueues dropped, the ring was full.
+ *
+ * C (bytes delivered to userspace) lives in stp_chrdev_bt.c.
+ *
+ * Read them from sysfs, not by opening /dev/stpbt (single-open; the reader
+ * blocks in D state):
+ *     /sys/module/stp_core/parameters/forge_rx_calls_lowerbound
+ *     /sys/module/stp_core/parameters/forge_rxq_pkts        (comma-separated)
+ *
+ * A is incremented without a lock (the rx callback may run from a
+ * tasklet), so it is a lower bound under concurrency, hence the name
+ * (MODULE_PARM_DESC is invisible for a built-in). B is incremented under
+ * the per-ring mutex the function already holds, so it is exact; A < B is
+ * expected. Cumulative, not cleared on a WMT reset. WMT traffic goes
+ * through the same entry and enqueue, so on any boot that reaches
+ * wmt_loader A and forge_rxq_pkts[WMT_TASK_INDX] must be non-zero.
+ */
+static unsigned int forge_rx_calls_lowerbound;
+static unsigned int forge_rx_bytes_lowerbound;
+static unsigned int forge_rxq_pkts[MTKSTP_MAX_TASK_NUM];
+static unsigned int forge_rxq_bytes[MTKSTP_MAX_TASK_NUM];
+static unsigned int forge_rxq_full[MTKSTP_MAX_TASK_NUM];
+module_param(forge_rx_calls_lowerbound, uint, 0444);
+module_param(forge_rx_bytes_lowerbound, uint, 0444);
+module_param_array(forge_rxq_pkts, uint, NULL, 0444);
+module_param_array(forge_rxq_bytes, uint, NULL, 0444);
+module_param_array(forge_rxq_full, uint, NULL, 0444);
+
 /*****************************************************************************
 * FUNCTION
 *  stp_add_to_rx_queue
@@ -935,6 +971,8 @@ static INT32 stp_add_to_rx_queue(UINT8 *buffer, UINT32 length, UINT8 type)
 		roomLeft = stp_core_ctx.ring[type].read_p - stp_core_ctx.ring[type].write_p - 1;
 
 	if (roomLeft < length) {
+		if (type < MTKSTP_MAX_TASK_NUM)
+			forge_rxq_full[type]++;	/* B': counted under the lock */
 		osal_unlock_unsleepable_lock(&stp_core_ctx.ring[type].mtx);
 		STP_ERR_FUNC("Queue is full !!!, type = %d\n", type);
 		osal_assert(0);
@@ -949,6 +987,11 @@ static INT32 stp_add_to_rx_queue(UINT8 *buffer, UINT32 length, UINT8 type)
 		osal_memcpy(stp_core_ctx.ring[type].buffer + stp_core_ctx.ring[type].write_p, buffer, last_len);
 		osal_memcpy(stp_core_ctx.ring[type].buffer, buffer + last_len, length - last_len);
 		stp_core_ctx.ring[type].write_p = length - last_len;
+	}
+
+	if (type < MTKSTP_MAX_TASK_NUM) {	/* rung B: exact, still under the lock */
+		forge_rxq_pkts[type]++;
+		forge_rxq_bytes[type] += length;
 	}
 
 	osal_unlock_unsleepable_lock(&stp_core_ctx.ring[type].mtx);
@@ -2384,6 +2427,12 @@ INT32 mtk_wcn_stp_parser_data(PUINT8 buffer, UINT32 length)
 	/*flags = (*sys_mutex_lock)(stp_core_ctx.stp_mutex); */
 	i = length;
 	p_data = (PUINT8) buffer;
+
+	/* rung A: unlocked on purpose -- this is the rx callback and may run from
+	 * a tasklet. Lost increments make it a lower bound, never an overcount.
+	 */
+	forge_rx_calls_lowerbound++;
+	forge_rx_bytes_lowerbound += length;
 
 /* stp_dump_data(buffer, "rx queue", length); */
 	/*STP is not enabled and only WMT can use Raw data path */

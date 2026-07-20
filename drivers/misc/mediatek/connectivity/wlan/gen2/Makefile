@@ -87,6 +87,10 @@ MTK_SRAM_SIZE_OPTION=0
 ifeq ($(CONFIG_ARCH_MT6755), y)
     MTK_SRAM_SIZE_OPTION=2
 endif
+# MT6755 is selected as MACH_MT6755 (not ARCH_MT6755)
+ifeq ($(CONFIG_MACH_MT6755), y)
+    MTK_SRAM_SIZE_OPTION=2
+endif
 ifeq ($(CONFIG_MACH_MT6757), y)
     MTK_SRAM_SIZE_OPTION=2
 endif
@@ -255,6 +259,12 @@ HIF_OBJS :=  $(HIF_DIR)arm.o \
              $(HIF_DIR)ahb.o \
              $(HIF_AHB_PDMA)ahb_pdma.o
 ifeq ($(CONFIG_ARCH_MT6755), y)
+PLAT_OBJS := $(PLAT_DIR)plat_priv.o
+$(MODULE_NAME)-objs  += $(PLAT_OBJS)
+endif
+
+# MT6755 is selected as MACH_MT6755 (not ARCH_MT6755)
+ifeq ($(CONFIG_MACH_MT6755), y)
 PLAT_OBJS := $(PLAT_DIR)plat_priv.o
 $(MODULE_NAME)-objs  += $(PLAT_OBJS)
 endif

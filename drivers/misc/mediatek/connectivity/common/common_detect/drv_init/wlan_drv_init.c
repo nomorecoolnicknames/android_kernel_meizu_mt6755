@@ -20,6 +20,8 @@
 #include "wmt_detect.h"
 #include "wlan_drv_init.h"
 
+/* connectivity power-on tracer (survives a WDT reset) */
+#include "../../../forge_conn_trace.h"
 
 int do_wlan_drv_init(int chip_id)
 {
@@ -34,6 +36,7 @@ int do_wlan_drv_init(int chip_id)
 	ret = mtk_wcn_wmt_wifi_init();
 	WMT_DETECT_INFO_FUNC("WMT-WIFI char dev init, ret:%d\n", ret);
 	i_ret += ret;
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0C6);
 
 	switch (chip_id) {
 	case 0x6630:
@@ -55,6 +58,7 @@ int do_wlan_drv_init(int chip_id)
 		ret = mtk_wcn_wlan_gen2_init();
 		WMT_DETECT_INFO_FUNC("WLAN-GEN2 driver init, ret:%d\n", ret);
 		i_ret += ret;
+		forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0C7);
 #else
 		WMT_DETECT_ERR_FUNC("WLAN-GEN2 driver is not supported, please check CONFIG_MTK_COMBO_CHIP\n");
 		i_ret = -1;

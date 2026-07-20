@@ -23,6 +23,9 @@
 #include "wmt_detect.h"
 #include "wmt_gpio.h"
 
+/* connectivity power-on tracer, see the header for readback */
+#include "../../forge_conn_trace.h"
+
 #if MTK_WCN_REMOVE_KO
 #include "conn_drv_init.h"
 #endif
@@ -85,6 +88,9 @@ static long wmt_detect_unlocked_ioctl(struct file *filp, unsigned int cmd, unsig
 	int retval = 0;
 
 	WMT_DETECT_INFO_FUNC("cmd (%d),arg(%ld)\n", cmd, arg);
+	/* Every detect ioctl leaves a WDT-surviving breadcrumb (step
+	 * 0x0001xx, xx = low byte of cmd). */
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x000100u | (cmd & 0xFFu));
 
 	switch (cmd) {
 	case COMBO_IOCTL_GET_CHIP_ID:
@@ -132,8 +138,22 @@ static long wmt_detect_unlocked_ioctl(struct file *filp, unsigned int cmd, unsig
 
 	case COMBO_IOCTL_DO_MODULE_INIT:
 #if (MTK_WCN_REMOVE_KO)
+		/* Unregister the boot-time SDIO detect driver before the real
+		 * connectivity init: sdio_detect_init() claimed the sdio_driver
+		 * name "mtk_sdio_client" at boot, and hif_sdio.c re-registers the
+		 * same name, which fails with -EBUSY and leaves /dev/wmtWifi and
+		 * /dev/stpbt uncreated. Userspace normally issues
+		 * COMBO_IOCTL_MODULE_CLEANUP first; wmt_loader here does not.
+		 * Idempotent. (The Wi-Fi HIF is AHB; the SDIO detect path is
+		 * unused.) */
+		forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0A1);
+		sdio_detect_exit();
+		forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0A2);
 		/*deinit SDIO-DETECT module */
+		forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0A3);
 		retval = do_connectivity_driver_init(arg);
+		forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0CF);
+		pr_info("[FORGE_CONN] DO_MODULE_INIT done ret=%d\n", retval);
 #else
 		WMT_DETECT_INFO_FUNC("no MTK_WCN_REMOVE_KO defined\n");
 #endif

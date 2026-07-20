@@ -47,6 +47,9 @@
 #include "psm_core.h"
 #include "stp_sdio.h"
 #include "stp_dbg.h"
+
+/* connectivity power-on tracer (survives a WDT reset) */
+#include "../../../forge_conn_trace.h"
 #if defined(CONFIG_MTK_PMIC_CHIP_MT6355)
 #include <mtk_clkbuf_ctl.h>
 #endif
@@ -372,10 +375,12 @@ INT32 wmt_lib_init(VOID)
 			iRet = wmt_plat_init(NULL);
 		}
 	} else if (chip_type == WMT_CHIP_TYPE_SOC) {
+		forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0BC);
 		if (gDevWmt.rWmtGenConf.cfgExist != 0)
 			iRet = wmt_plat_soc_init(gDevWmt.rWmtGenConf.co_clock_flag & 0x0f);
 		else
 			iRet = wmt_plat_soc_init(0);
+		forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0BD);
 		gDevWmt.rWmtGenConf.co_clock_flag = wmt_plat_soc_co_clock_flag_get();
 		#if defined(CONFIG_MTK_PMIC_CHIP_MT6355)
 		if (gDevWmt.rWmtGenConf.co_clock_flag) {

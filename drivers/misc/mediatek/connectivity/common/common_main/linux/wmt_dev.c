@@ -66,6 +66,18 @@
 #include "wmt_detect.h"
 #include "hif_sdio.h"
 
+/* connectivity power-on tracer (DRAM, survives a WDT reset) */
+#include "../../../forge_conn_trace.h"
+
+/* Auto power-on gate. WMT_init registers an fb notifier whose work item
+ * calls mtk_wcn_wmt_func_on(WMTDRV_TYPE_LPBK) on every screen
+ * blank/unblank after DO_MODULE_INIT. A failed consys power-on resets the
+ * board, and the next boot would retry on the next blank, in a loop.
+ * Default 0: power-on only on request (wmt_loader, echo 1 > /dev/wmtWifi,
+ * stpbt open). /sys/module/wmt_dev/parameters/forge_conn_autopwr. */
+static int forge_conn_autopwr;
+module_param(forge_conn_autopwr, int, 0644);
+
 #ifdef CONFIG_COMPAT
 #define COMPAT_WMT_IOCTL_SET_PATCH_NAME		_IOW(WMT_IOC_MAGIC, 4, compat_uptr_t)
 #define COMPAT_WMT_IOCTL_LPBK_TEST		_IOWR(WMT_IOC_MAGIC, 8, compat_uptr_t)
@@ -244,6 +256,15 @@ static VOID wmt_pwr_on_off_handler(struct work_struct *work)
 	INT32 retryCounter = 1;
 
 	WMT_DBG_FUNC("wmt_pwr_on_off_handler start to run\n");
+
+	/* see forge_conn_autopwr above */
+	if (!forge_conn_autopwr) {
+		forge_conn_trace(FORGE_CONN_TRACE_PWRON, 0x003);
+		pr_info("[FORGE_CONN] autopwr gate: skip LPBK func on/off (forge_conn_autopwr=0)\n");
+		return;
+	}
+	forge_conn_trace(FORGE_CONN_TRACE_PWRON,
+			 g_es_lr_flag_for_lpbk_onoff ? 0x001 : 0x002);
 
 	if (DisablePoweronConnsys == 0) {
 		osal_lock_sleepable_lock(&g_es_lr_lock);
@@ -1394,7 +1415,9 @@ static INT32 WMT_init(VOID)
 	gWmtInitDone = 0;
 	init_waitqueue_head((wait_queue_head_t *) &gWmtInitWq);
 
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0B8);
 	stp_drv_init();
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0B9);
 
 	ret = register_chrdev_region(devID, WMT_DEV_NUM, WMT_DRIVER_NAME);
 	if (ret) {
@@ -1443,11 +1466,13 @@ static INT32 WMT_init(VOID)
 		goto error;
 	}
 #endif
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0BA);
 	ret = wmt_lib_init();
 	if (ret) {
 		WMT_ERR_FUNC("wmt_lib_init() fails (%d)\n", ret);
 		goto error;
 	}
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0BB);
 #if CFG_WMT_DBG_SUPPORT
 	wmt_dev_dbg_setup();
 #endif
@@ -1484,6 +1509,7 @@ static INT32 WMT_init(VOID)
 		WMT_INFO_FUNC("wmt register fb_notifier OK!\n");
 #endif /* CONFIG_EARLYSUSPEND */
 #endif /* CONFIG_MTK_COMBO_COMM_APO */
+	forge_conn_trace(FORGE_CONN_TRACE_DETECT, 0x0BF);
 	WMT_INFO_FUNC("success\n");
 
 	return 0;

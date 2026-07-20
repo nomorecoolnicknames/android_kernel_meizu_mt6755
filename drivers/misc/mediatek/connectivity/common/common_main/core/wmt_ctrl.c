@@ -386,6 +386,15 @@ INT32 wmt_ctrl_hw_pwr_on(P_WMT_CTRL_DATA pWmtCtrlData)
 	} else {
 		WMT_DBG_FUNC("off->on\n");
 		iret = wmt_plat_pwr_ctrl(FUNC_ON);
+		/* The bit is test-and-set before the attempt; a failed power-on
+		 * (e.g. forge_conn_pwron_stage returning -EPERM) must not leave
+		 * it set, or the next attempt reads "already on", stp_init runs on
+		 * unpowered hardware and its cleanup powers off a consys that never
+		 * came up. */
+		if (iret) {
+			pr_info("[FORGE_CONN] hw_pwr_on failed (%d) - clearing WMT_STAT_PWR for a clean retry\n", iret);
+			osal_clear_bit(WMT_STAT_PWR, &pDev->state);
+		}
 	}
 
 	return iret;
