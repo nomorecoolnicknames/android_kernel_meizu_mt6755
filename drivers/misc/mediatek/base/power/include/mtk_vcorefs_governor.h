@@ -14,7 +14,9 @@
 #ifndef _COMMON_MT_VCOREFS_GOVERNOR_H
 #define _COMMON_MT_VCOREFS_GOVERNOR_H
 
-#if defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS)
+/* MT6755 uses the MT6757 vcorefs governor declarations (KIR_*, OPPI_*
+ * enums, used by msdc autok_dvfs); the governor itself is not built. */
+#if defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || defined(CONFIG_MACH_MT6755)
 
 #include "vcorefs_v1/mtk_vcorefs_governor_mt6757.h"
 

@@ -16,7 +16,14 @@
 
 /* SPM resource request APIs: public */
 
-#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797)
+#if defined(CONFIG_ARCH_MT6755)
+
+/* Expose the SPM resource-request API (enums and the spm_resource_req()
+ * prototype) for MT6755; mtk-phy-asic.c needs it. The implementation is not
+ * built; a stub lives in mt_vcorefs_stub.c. */
+#include "spm_v2/mtk_spm_resource_req.h"
+
+#elif defined(CONFIG_ARCH_MT6797)
 
 #elif defined(CONFIG_ARCH_MT6735) || defined(CONFIG_ARCH_MT6735M) || defined(CONFIG_ARCH_MT6753)
 

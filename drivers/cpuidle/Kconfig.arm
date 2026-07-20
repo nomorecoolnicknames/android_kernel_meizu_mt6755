@@ -74,3 +74,15 @@ config ARM_MVEBU_V7_CPUIDLE
 	depends on ARCH_MVEBU && !ARM64
 	help
 	  Select this to enable cpuidle on Armada 370, 38x and XP processors.
+
+config MTK_MT6755_CPUIDLE
+	bool "MediaTek MT6755 CPU idle driver"
+	depends on MACH_MT6755 && CPU_IDLE_GOV_MTK && ARM64
+	default n
+	help
+	  Register the MT6755 cpuidle driver (drivers/cpuidle/
+	  cpuidle-mt6755.c) and build the SPM idle framework it sits on
+	  (spm_v2/mt_idle*.c, deep idle, SODI, SODI3). Only WFI (rgidle)
+	  is chosen by default; SODI, deep idle and SODI3 each need their
+	  own mt_idle.forge_sodi / forge_dpidle / forge_sodi3 = 1. MCDI
+	  cannot be switched on. Port of the m681 4.9 driver.
