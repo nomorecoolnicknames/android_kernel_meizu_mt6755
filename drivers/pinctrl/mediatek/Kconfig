@@ -49,6 +49,15 @@ config PINCTRL_MT6757
 	depends on !ARCH_MEDIATEK && (MACH_KIBOPLUS || MACH_MT6757)
 	select PINCTRL_MTK_COMMON
 
-
+config PINCTRL_MT6755
+	bool "Mediatek MT6755"
+	default n
+	depends on !ARCH_MEDIATEK && MACH_MT6755
+	select PINCTRL_MTK_COMMON
+	help
+	  Pin controller for the MediaTek MT6755 (Helio P10 / m681).
+	  Forward-ported from the 3.18 m681 vendor kernel. MACH_MT6755
+	  already selects this symbol. 3.18 used def_bool MACH_MT6755;
+	  kept explicit here to mirror the MT6757 4.4 entry.
 
 
