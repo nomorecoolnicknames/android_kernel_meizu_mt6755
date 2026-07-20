@@ -26,12 +26,16 @@
 
 extern const struct cpu_operations smp_spin_table_ops;
 extern const struct cpu_operations cpu_psci_ops;
+/* PSCI-backed ops registered under the MTK DTB enable-method "mt-boot"
+ * (defined in psci.c), so the secondary CPUs pass the cpu-ops parse. */
+extern const struct cpu_operations mt_boot_psci_alias_ops;
 
 const struct cpu_operations *cpu_ops[NR_CPUS];
 
 static const struct cpu_operations *supported_cpu_ops[] __initconst = {
 	&smp_spin_table_ops,
 	&cpu_psci_ops,
+	&mt_boot_psci_alias_ops,
 	NULL,
 };
 

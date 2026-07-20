@@ -194,6 +194,16 @@ config IRQ_MXS
 	select IRQ_DOMAIN
 	select STMP_DEVICE
 
+config MTK_GIC
+	bool
+	select IRQ_DOMAIN
+	select MULTI_IRQ_HANDLER
+	help
+	  Support for the MediaTek GICv2 (ARM GIC-400) interrupt controller
+	  used on MT6735/MT6755 (Helio P10) class SoCs. This is a full fork
+	  of the generic ARM_GIC driver (drivers/irqchip/irq-mt-gic.c) and is
+	  mutually exclusive with ARM_GIC / GICv3 on these SoCs.
+
 config MTK_EIC
 	bool
 	select IRQ_DOMAIN

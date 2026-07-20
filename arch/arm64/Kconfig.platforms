@@ -46,6 +46,14 @@ config ARCH_MEDIATEK
 	help
 	  Support for Mediatek MT65xx & MT81xx ARMv8 SoCs
 
+# m681/mt6755: the platform code forward-ported from the 3.18 m6-graft is gated on
+# CONFIG_ARCH_MT6755 (the 3.18 symbol). The 4.4 tree uses CONFIG_MACH_MT675x, so
+# define ARCH_MT6755 to track MACH_MT6755 — this activates the graft's mt6755
+# clk/SPM/idle/MTCMOS code paths uniformly instead of per-file #ifdef patching.
+config ARCH_MT6755
+	bool
+	default y if MACH_MT6755
+
 config MACH_MT6757
 	bool "MediaTek MT6757"
 	select GENERIC_TIME
@@ -74,7 +82,7 @@ config MACH_MT6757
 	select MTK_EIC
 	select MTK_L2C_PARITY_CHECK
 	select MTK_LASTPC_V2
-	select MTK_USB2JTAG_SUPPORT
+	# select MTK_USB2JTAG_SUPPORT
 	select MTK_IRQ_NEW_DESIGN
 	select MTK_IRQ_NEW_DESIGN_DEBUG
 	select MTK_WATCHPOINT
@@ -89,6 +97,57 @@ config MACH_MT6757
 	  and our most advanced camera/video features to date. Helio P20 also offers
 	  significant multitasking and multimedia improvements thanks to its new
 	  LPDDR4X memory support.
+
+config MACH_MT6755
+	bool "MediaTek MT6755"
+	select GENERIC_TIME
+	select GENERIC_CLOCKEVENTS
+	select ARCH_HAS_CPUFREQ
+	select ARM_AMBA
+	select CPU_V7
+	select HAVE_SMP
+	select NEED_MACH_MEMORY_H
+	select IRQ_DOMAIN
+	select IRQ_DOMAIN_DEBUG
+	select GENERIC_SCHED_CLOCK
+	select MTK_SYS_CIRQ
+	select ARMV7_COMPAT
+	select ARMV7_COMPAT_CPUINFO
+	select CPU_IDLE
+	select PINCTRL
+	select PINCTRL_MT6755
+	select MFD_SYSCON
+	select MTK_BASE_POWER
+	# m681: systracker (bus-transaction tracker) is debug-only and needs a
+	# systracker/mt6755 dir; deferred for the boot milestone.
+	select MTK_SYSTRACKER_V2
+	# m681 (MT6755/Helio P10) is GIC-400 / GICv2, NOT GICv3.
+	# Carried MTK GICv2 driver: drivers/irqchip/irq-mt-gic.c (config MTK_GIC).
+	# Do NOT select MTK_GIC_V3_EXT / ARM_GIC_V3 here.
+	select MTK_GIC
+	select MTK_CPU_STRESS
+	select MTK_LM_MODE if !MTK_GMO_RAM_OPTIMIZE
+	select MTK_EIC_HISTORY_DUMP
+	select MTK_EIC
+	# m681: L2C parity check is a debug/RAS feature (default n); its l2c-parity.c
+	# needs a per-platform plat-cfg.h that only ships for mt6757. Don't select it
+	# for the boot milestone (graft 3.18 didn't build it for mt6755 either).
+	# select MTK_L2C_PARITY_CHECK
+	select MTK_LASTPC_V2
+	# m681: USB2JTAG (debug bridge) needs a usb2jtag/mt6755 dir; defer for boot.
+	select MTK_USB2JTAG_SUPPORT
+	select MTK_WATCHPOINT
+	select MTK_SEC_DEINT_SUPPORT
+	select MTK_CQDMA
+	select MTK_BOUNCING_CHECK
+	help
+	  This enables support for MediaTek Helio P10 - MT6755
+	  (m681 / Meizu M3 Note). 64-bit octa-core Cortex-A53 LTE SoC built
+	  on a 28nm process. Forward-ported from the working Linux 3.18 m681
+	  vendor kernel (which used CONFIG_ARCH_MT6755) into this 4.4 tree
+	  using the 4.4 CONFIG_MACH_MT675x convention. NOTE: MT6755 uses a
+	  GICv2 (GIC-400) interrupt controller, unlike the MT6757 donor's
+	  GICv3 (MTK_GIC_V3_EXT) - see the GICv2 TODO above.
 
 config MACH_KIBOPLUS
 	bool "MediaTek KIBOPLUS"

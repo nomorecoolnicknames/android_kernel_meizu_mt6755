@@ -67,7 +67,14 @@ static int arch_timer_ppi[MAX_TIMER_PPI];
 
 static struct clock_event_device __percpu *arch_timer_evt;
 
-static bool arch_timer_use_virtual = true;
+/*
+ * MT6755: force the physical arch timer. The DT lists a virtual PPI and the
+ * kernel runs at EL1, so the generic driver would pick the virtual timer,
+ * whose interrupt never fires here (the secure firmware does not route CNTV
+ * to the non-secure GIC) and jiffies would stay frozen. The physical timer
+ * (PPI 14, INTID 30 non-secure) fires, as in the 3.18 MT6755 driver.
+ */
+static bool arch_timer_use_virtual = false;
 static bool arch_timer_c3stop;
 static bool arch_timer_mem_use_virtual;
 

@@ -21,6 +21,8 @@
 #include <linux/delay.h>
 #include <linux/psci.h>
 #include <linux/slab.h>
+#include <linux/io.h>	/* ioremap/writel_relaxed for the BROM boot address */
+#include <linux/moduleparam.h>	/* forge_cpu_kill_mtcmos */
 
 #include <uapi/linux/psci.h>
 
@@ -227,6 +229,122 @@ const struct cpu_operations cpu_psci_ops = {
 	.cpu_disable	= cpu_psci_cpu_disable,
 	.cpu_die	= cpu_psci_cpu_die,
 	.cpu_kill	= cpu_psci_cpu_kill,
+#endif
+};
+
+/*
+ * MT6755 "mt-boot" enable-method. Secondary CPUs boot as in the stock
+ * mt_psci.c: PSCI CPU_ON first (ATF initialises the core: GIC, secure
+ * state, caches), then SPM MTCMOS power-on. With MTCMOS alone the cores come
+ * online without ATF init and deadlock under load.
+ * m681_smp_set_boot_addr() (BROM boot address) is kept but unused.
+ */
+extern int spm_mtcmos_ctrl_cpu(unsigned int cpu, int state, int chkWfiBeforePdn);
+extern int spm_mtcmos_cpu_init(void);
+#define M681_STA_POWER_ON	1		/* mach/mt_spm_mtcmos.h */
+#define M681_INFRACFG_AO_PHYS	0x10001000UL	/* mt-smp.c MT6735_INFRACFG_AO */
+#define M681_BROM_BOOT_ADDR_OFF	0x800		/* mt-smp.c bootrom boot-addr reg */
+
+static __maybe_unused void m681_smp_set_boot_addr(void)
+{
+	void __iomem *infracfg_ao = ioremap(M681_INFRACFG_AO_PHYS, 0x1000);
+
+	if (!infracfg_ao) {
+		pr_emerg("M681_SMP: INFRACFG_AO ioremap FAILED\n");
+		return;
+	}
+	/* Where a MTCMOS-powered core jumps out of the BROM. __pa() resolves a
+	 * kernel-text symbol on this early-4.4 arm64 tree (cf. smp_spin_table.c
+	 * __pa(secondary_holding_pen)); the reg is 32-bit and the kernel is <4GB. */
+	writel_relaxed((u32)__pa(secondary_entry),
+		       infracfg_ao + M681_BROM_BOOT_ADDR_OFF);
+	wmb();	/* boot-addr must land before any core is powered to read it */
+	pr_emerg("M681_SMP: BROM boot-addr(INFRACFG_AO+0x800)=0x%x -> secondary_entry\n",
+		 (u32)__pa(secondary_entry));
+	iounmap(infracfg_ao);
+}
+
+static int __init mt_boot_cpu_init(struct device_node *dn, unsigned int cpu)
+{
+	return 0;
+}
+
+static int __init mt_boot_cpu_prepare(unsigned int cpu)
+{
+	/* cpu1 maps the shared SPM base once; the generic PSCI prepare then
+	 * validates psci_ops.cpu_on. */
+	if (cpu == 1)			/* once, before the first secondary */
+		spm_mtcmos_cpu_init();	/* ioremap SPM (mediatek,SLEEP) */
+	return cpu_psci_cpu_prepare(cpu);
+}
+
+static int mt_boot_cpu_boot(unsigned int cpu)
+{
+	int ret;
+
+	/* PSCI CPU_ON first, then confirm power-on through SPM MTCMOS. */
+	pr_emerg("M681_SMP: cpu%u PSCI CPU_ON ...\n", cpu);
+	ret = cpu_psci_cpu_boot(cpu);
+	pr_emerg("M681_SMP: cpu%u PSCI CPU_ON ret=%d\n", cpu, ret);
+	if (ret < 0)
+		return ret;
+	ret = spm_mtcmos_ctrl_cpu(cpu, M681_STA_POWER_ON, 1);
+	pr_emerg("M681_SMP: cpu%u mtcmos STA_POWER_ON ret=%d\n", cpu, ret);
+	return ret;
+}
+
+#ifdef CONFIG_HOTPLUG_CPU
+/*
+ * Power the core's MTCMOS down after CPU_OFF, as the stock mt_psci_cpu_kill
+ * does. With PSCI v0.1 (no AFFINITY_INFO) cpu_psci_cpu_kill() returns at
+ * once and nothing powers the core off, so SPM sees it powered and SODI
+ * stays blocked. Wait (up to 100 ms) for STANDBYWFI, then power down.
+ * mt_boot_cpu_boot() re-powers it on cpu_up.
+ * /sys/module/psci/parameters/forge_cpu_kill_mtcmos, 1 = on (default).
+ */
+#define M681_STA_POWER_DOWN	0		/* mach/mt_spm_mtcmos.h */
+#define M681_KILL_WFI_TIMEOUT_US	100000	/* 100 ms */
+extern int spm_mtcmos_cpu_wait_wfi(unsigned int cpu, unsigned int timeout_us);
+static int forge_cpu_kill_mtcmos = 1;
+module_param(forge_cpu_kill_mtcmos, int, 0644);
+
+static int mt_boot_cpu_kill(unsigned int cpu)
+{
+	int ret, mret;
+
+	ret = cpu_psci_cpu_kill(cpu);
+	if (!forge_cpu_kill_mtcmos) {
+		pr_info("M681_SMP: cpu%u kill psci ret=%d (mtcmos skipped)\n", cpu, ret);
+		return ret;
+	}
+	/*
+	 * Bounded STANDBYWFI wait instead of the endless chkWfi=1 spin: we
+	 * hold cpu_add_remove_lock, so a hang would also block
+	 * kernel_restart(). On timeout leave the MTCMOS on. No spinlock is held
+	 * here; the cpuN functions take spm_cpu_lock only after the WFI check,
+	 * and chkWfi=0 is passed because we already waited.
+	 */
+	if (spm_mtcmos_cpu_wait_wfi(cpu, M681_KILL_WFI_TIMEOUT_US)) {
+		pr_emerg("M681_SMP: cpu%u kill psci ret=%d: no STANDBYWFI in %u us, mtcmos left ON\n",
+			 cpu, ret, M681_KILL_WFI_TIMEOUT_US);
+		return ret;
+	}
+	mret = spm_mtcmos_ctrl_cpu(cpu, M681_STA_POWER_DOWN, 0);
+	pr_info("M681_SMP: cpu%u kill psci ret=%d mtcmos STA_POWER_DOWN ret=%d\n",
+		cpu, ret, mret);
+	return ret ? ret : mret;
+}
+#endif
+
+const struct cpu_operations mt_boot_psci_alias_ops = {
+	.name		= "mt-boot",
+	.cpu_init	= mt_boot_cpu_init,
+	.cpu_prepare	= mt_boot_cpu_prepare,
+	.cpu_boot	= mt_boot_cpu_boot,
+#ifdef CONFIG_HOTPLUG_CPU
+	.cpu_disable	= cpu_psci_cpu_disable,
+	.cpu_die	= cpu_psci_cpu_die,
+	.cpu_kill	= mt_boot_cpu_kill,
 #endif
 };
 

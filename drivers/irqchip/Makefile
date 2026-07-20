@@ -62,5 +62,6 @@ MTK_PLATFORM := $(subst ",,$(CONFIG_MTK_PLATFORM))
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/include
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat/$(MTK_PLATFORM)/include
 
+obj-$(CONFIG_MTK_GIC)			+= irq-mt-gic.o
 obj-$(CONFIG_MTK_EIC)			+= irq-mtk-eic.o
 obj-$(CONFIG_MTK_INTPOL)		+= irq-mtk-intpol.o

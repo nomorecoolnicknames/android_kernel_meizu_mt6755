@@ -48,14 +48,19 @@ obj-$(CONFIG_FSL_FTM_TIMER)	+= fsl_ftm_timer.o
 obj-$(CONFIG_VF_PIT_TIMER)	+= vf_pit_timer.o
 obj-$(CONFIG_CLKSRC_QCOM)	+= qcom-timer.o
 obj-$(CONFIG_MTK_TIMER)		+= mtk_timer.o
-obj-$(CONFIG_MACH_MT6757)	+= mtk_cpuxgpt_mt6757.o mtk_timer_mt6757.o arm_arch_timer_mt6757.o
+# Use the generic arm_arch_timer for "arm,armv8-timer": the MTK
+# arm_arch_timer_mt6755.c is 3.18-era code that hits a BRK in
+# arch_timer_init() on the 4.4 timer API. mtk_cpuxgpt/mtk_timer stay for the
+# GPT/cpuxgpt symbols used elsewhere (request_gpt, cpu_xgpt_*, enable_cpuxgpt).
+obj-$(CONFIG_MACH_MT6757)	+= mtk_cpuxgpt_mt6757.o mtk_timer_mt6757.o
+obj-$(CONFIG_MACH_MT6755)	+= mtk_cpuxgpt_mt6755.o mtk_timer_mt6755.o
 obj-$(CONFIG_CLKSRC_PISTACHIO)	+= time-pistachio.o
 obj-$(CONFIG_CLKSRC_TI_32K)	+= timer-ti-32k.o
 
-ifneq (,$(filter $(CONFIG_MACH_MT6757), y))
-else
+# Always build the generic arch timer. forge_enable_cpuxgpt() starts the
+# counter before time_init(); the 13 MHz rate comes from the DT
+# clock-frequency property.
 obj-$(CONFIG_ARM_ARCH_TIMER)		+= arm_arch_timer.o
-endif
 obj-$(CONFIG_ARM_GLOBAL_TIMER)		+= arm_global_timer.o
 obj-$(CONFIG_ARMV7M_SYSTICK)		+= armv7m_systick.o
 obj-$(CONFIG_ARM_TIMER_SP804)		+= timer-sp804.o
