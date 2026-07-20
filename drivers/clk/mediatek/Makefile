@@ -13,3 +13,4 @@
 
 obj-$(CONFIG_COMMON_CLK_MEDIATEK_V1) += clk-mtk-v1.o clk-pll-v1.o clk-gate-v1.o clk-mux.o
 obj-$(CONFIG_COMMON_CLK_MT6757) += clk-mt6757.o clk-mt6757-pll.o clk-mt6757-pg.o
+obj-$(CONFIG_COMMON_CLK_MT6755) += clk-mt6755.o clk-mt6755-pll.o clk-mt6755-pg.o

@@ -22,3 +22,14 @@ config COMMON_CLK_MT6757
 	  Use the config to support CCF on MT6757,
 	  instead of old clkmgr architecture.
 	  MT6757 default will use CCF.
+
+config COMMON_CLK_MT6755
+	bool "Clock driver for Mediatek MT6755"
+	depends on COMMON_CLK
+	select COMMON_CLK_MEDIATEK_V1
+	default y if MACH_MT6755 && !MTK_CLKMGR
+	---help---
+	  This driver supports Mediatek MT6755 (Helio P10) clocks.
+	  Forward-ported from the working 3.18 m681 vendor kernel; uses the
+	  same V1 CCF infra as MT6757. 3.18 selected via ARCH_MT6755; in this
+	  4.4 tree it is keyed off MACH_MT6755 instead.
