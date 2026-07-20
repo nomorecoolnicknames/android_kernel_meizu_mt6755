@@ -1429,9 +1429,28 @@ static void cal_md_settings_v2(struct device_node *node)
 /**************************************************************************************/
 /* Global functions                                                                   */
 /**************************************************************************************/
+
+/* This board has no C2K peer (CONFIG_MTK_MD3_SUPPORT=0, CONFIG_MTK_ECCCI_C2K
+ * unset), but CONFIG_MTK_MD1_SUPPORT=12 ("ulwctg") makes
+ * ubin_md_support_id_to_rat() return the full six-RAT set including
+ * CDMA2000, and that word is passed to MD1 as MISC_INFO_SBP_ID feature[1]
+ * in the HS2 runtime data. MD1 then assumes a C2K stack, registers a CAS
+ * arbitration context that is never confirmed, and asserts in RSVAS on the
+ * first RF arbitration during a network scan (about every 40 s); the modem
+ * is reset and registration never completes.
+ *
+ * Drop the CDMA2000 capability. md_type is not touched: the firmware image
+ * must stay ulwctg (the only MD1 image on this device). Set
+ * forge_wm_drop_c2k=0 to restore the stock value.
+ */
+static unsigned int forge_wm_drop_c2k = 1;
+module_param(forge_wm_drop_c2k, uint, 0644);
+MODULE_PARM_DESC(forge_wm_drop_c2k, "m681: clear CDMA2000 from the RAT capability sent to MD1");
+
 unsigned int get_wm_bitmap_for_ubin(void)
 {
 	unsigned int rat_cfg = 0;
+	unsigned int wm_id;
 	int md_support_val;
 
 	md_support_val = get_modem_support_cap(MD_SYS1);
@@ -1449,7 +1468,17 @@ unsigned int get_wm_bitmap_for_ubin(void)
 _get_wm_id_done:
 
 	rat_cfg = compatible_convert(rat_cfg);
-	return ap_rat_bitmap_to_md_bitmap(rat_cfg);
+	wm_id = ap_rat_bitmap_to_md_bitmap(rat_cfg);
+
+	/* Masked on the MD-side encoding, after every conversion, so this touches
+	 * exactly the bit MD1 tests and nothing else can put it back.
+	 */
+	if (forge_wm_drop_c2k && (wm_id & MD_CAP_CDMA2000_AT_MD)) {
+		wm_id &= ~MD_CAP_CDMA2000_AT_MD;
+		CCCI_UTIL_INF_MSG("[FORGE_WM] CDMA2000 dropped from RAT cap: wm_id=%u\n", wm_id);
+	}
+
+	return wm_id;
 }
 
 int get_ubin_img_type(void)

@@ -32,12 +32,50 @@
 #endif
 
 #ifdef FEATURE_RF_CLK_BUF
-#include <mtk_clkbuf_ctl.h>
+/* The MT6755 power base ships mt_clkbuf_ctl.h (mtk_clkbuf_ctl.h is the
+ * MT6757 name of the same API). */
+#include <mt_clkbuf_ctl.h>
 #endif
 
 #include "ccci_core.h"
 #include "ccci_bm.h"
 #include "port_rpc.h"
+
+#ifdef FEATURE_RF_CLK_BUF
+/* 1 = answer the MD's IPC_RPC_GET_RF_CLK_BUF_OP (see mt6755/ccci_config.h);
+ * 0 = reply FS_NO_OP as without the feature. Writable at
+ * /sys/module/ccci/parameters/forge_rf_clk_buf_rpc, effective per query
+ * (the MD asks during its RF init after MD boot). */
+static unsigned int forge_rf_clk_buf_rpc = 1;
+module_param(forge_rf_clk_buf_rpc, uint, 0644);
+MODULE_PARM_DESC(forge_rf_clk_buf_rpc, "1=answer MD RF clk buf RPC (stock PMIC reply), 0=FS_NO_OP");
+
+/* Which branch answers the MD's IPC_RPC_GET_RF_CLK_BUF_OP.
+ *
+ * The board's clock buffers are fed from RF (mt_clkbuf_ctl.c prints
+ * "clkbuf is from RF, CW00=0x21f" at boot); the from-PMIC branch (all-zero
+ * reply) tells the MD its RF clock buffers are all off, which can make MD1
+ * assert in mdipc/cc_irq.c once a SIM makes it engage RF.
+ *
+ * -1 = auto: ask the real driver (default)
+ *  1 = force from-PMIC (all-zero reply)
+ *  0 = force from-RF
+ * Live at /sys/module/ccci/parameters/forge_clkbuf_pmic_mode; takes effect
+ * on the next MD boot (the MD asks once per boot during RF init).
+ * forge_rf_clk_buf_rpc=0 still short-circuits the whole query to
+ * FS_NO_OP. */
+static int forge_clkbuf_pmic_mode = -1;
+module_param(forge_clkbuf_pmic_mode, int, 0644);
+MODULE_PARM_DESC(forge_clkbuf_pmic_mode,
+	"-1=auto(is_clk_buf_from_pmic), 1=force PMIC all-zero reply, 0=force RF reply");
+
+static bool forge_clkbuf_from_pmic(void)
+{
+	if (forge_clkbuf_pmic_mode >= 0)
+		return !!forge_clkbuf_pmic_mode;
+	return is_clk_buf_from_pmic();
+}
+#endif
 #include "port_proxy.h"
 
 #define MAX_QUEUE_LENGTH 16
@@ -893,6 +931,17 @@ static void ccci_rpc_work_helper(struct ccci_port *port, struct rpc_pkt *pkt,
 			u32 AfcDac;
 #endif
 
+			/* 0 = reply FS_NO_OP, as without the feature */
+			if (!forge_rf_clk_buf_rpc) {
+				CCCI_NORMAL_LOG(md_id, RPC,
+					"forge: RF_CLK_BUF answer disabled, replying FS_NO_OP\n");
+				tmp_data[0] = FS_NO_OP;
+				pkt_num = 0;
+				pkt[pkt_num].len = sizeof(int);
+				pkt[pkt_num++].buf = (void *)&tmp_data[0];
+				break;
+			}
+
 			if (pkt_num != 1) {
 				CCCI_ERROR_LOG(md_id, RPC, "invalid parameter for [0x%X]: pkt_num=%d!\n",
 					     p_rpc_buf->op_id, pkt_num);
@@ -923,7 +972,7 @@ static void ccci_rpc_work_helper(struct ccci_port *port, struct rpc_pkt *pkt,
 					     CLKBUF_MAX_COUNT);
 				clkbuf->CLKBuf_Count = 0xFF;
 				memset(&clkbuf->CLKBuf_Status, 0, sizeof(clkbuf->CLKBuf_Status));
-			} else if (is_clk_buf_from_pmic()) {
+			} else if (forge_clkbuf_from_pmic()) {
 				clkbuf->CLKBuf_Count = CLKBUF_MAX_COUNT;
 				memset(&clkbuf->CLKBuf_Status, 0, sizeof(clkbuf->CLKBuf_Status));
 				memset(&clkbuf->CLKBuf_SWCtrl_Status, 0, sizeof(clkbuf->CLKBuf_SWCtrl_Status));

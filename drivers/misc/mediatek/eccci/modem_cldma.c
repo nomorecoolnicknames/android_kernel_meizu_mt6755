@@ -2027,6 +2027,129 @@ static int md_cd_set_dsp_mpu(struct ccci_modem *md, int is_loaded)
 		ccci_set_dsp_region_protection(md, is_loaded);
 	return 0;
 }
+
+/* MD1<->MD3 shared-memory guard hygiene.
+ *
+ * The MD1 firmware requires the guard words of the MD1<->MD3 shared-memory
+ * window to read zero at init, and then stamps them with the magic
+ * 0x33325350 ("PS23", the PS2<->MD3 channel tag). If it finds a surviving
+ * stamp it asserts before sending HS2 (MD_BOOT_HS2_FAIL), and this repeats
+ * for the whole AP boot because DRAM survives a warm reboot.
+ *
+ * The AP hands MD1 this window unconditionally in the HS1->HS2 runtime
+ * feature negotiation (MD1MD3_SHARE_MEMORY, MUST_SUPPORT in
+ * config_ap_side_feature() under FEATURE_MD1MD3_SHARE_MEM); declining it
+ * fails the handshake in prepare_runtime_data(). Both in-tree paths that
+ * zeroed the window sit behind CONFIG_MTK_ECCCI_C2K, which is not set here.
+ * Clearing is safe: CONFIG_MTK_MD3_SUPPORT=0, so no MD3 can own this
+ * window.
+ *
+ * The report runs before the zeroing and shows what was in the window. The
+ * scan does not assume the guards sit at offset 0 (cc_irq_tx_md3_sharemem_p
+ * is a runtime pointer); every occurrence of the magic in the window is
+ * located.
+ *
+ * Knob: /sys/module/ccci/parameters/forge_md1md3_clear
+ *   0 = leave the window untouched
+ *   1 = report, then zero               (default)
+ *   2 = report only, do not zero
+ *   3 = zero only, skip the scan
+ */
+#define FORGE_MD1MD3_MAGIC	0x33325350u	/* "PS23" as a little-endian word */
+#define FORGE_MD1MD3_POSTFIX	0x2b54u		/* guard pair spacing, W1603 modem */
+/* The W1603 modem sets cc_irq_tx_md3_sharemem_p = start_address + 0x10, so the
+ * guards are at window+0x10 and window+0x10+0x2b54, NOT at window+0. Offsets are
+ * taken from W1603 and the running W1539 may differ, which is why the full scan
+ * below stays offset-agnostic; these two reads only make the common case legible.
+ */
+#define FORGE_MD1MD3_PTR_OFF	0x10u
+#define FORGE_MD1MD3_HEADWORDS	16		/* 64 B: covers +0 through +0x3c */
+
+static int forge_md1md3_clear = 1;
+module_param(forge_md1md3_clear, int, 0644);
+MODULE_PARM_DESC(forge_md1md3_clear,
+	"MD1<->MD3 smem guards: 0=untouched, 1=report+zero (default), 2=report only, 3=zero only");
+
+/* noinline: with a single call site -O2 would inline this away, and the
+ * symbol could not be checked in the built image.
+ */
+static noinline void forge_md1md3_smem_hygiene(struct ccci_modem *md)
+{
+	void __iomem *vir = md->mem_layout.md1_md3_smem_vir;
+	unsigned int size = md->mem_layout.md1_md3_smem_size;
+	unsigned int head[FORGE_MD1MD3_HEADWORDS];
+	unsigned int prefix = 0, postfix = 0;
+	unsigned int hits = 0;
+	unsigned int first[8];
+	unsigned int off;
+	void *buf = NULL;
+
+	if (forge_md1md3_clear == 0)
+		return;
+
+	if (vir == NULL || size == 0) {
+		CCCI_NOTICE_LOG(md->index, TAG,
+			"forge_md1md3: no window (vir=%p size=%u), nothing done\n",
+			vir, size);
+		return;
+	}
+
+	if (forge_md1md3_clear != 3) {
+		memset(head, 0, sizeof(head));
+		memcpy_fromio(head, vir, min_t(unsigned int, size, sizeof(head)));
+		/* the guards themselves, at the W1603 offsets */
+		if (size > FORGE_MD1MD3_PTR_OFF + sizeof(prefix))
+			memcpy_fromio(&prefix, vir + FORGE_MD1MD3_PTR_OFF,
+				sizeof(prefix));
+		if (size > FORGE_MD1MD3_PTR_OFF + FORGE_MD1MD3_POSTFIX + sizeof(postfix))
+			memcpy_fromio(&postfix,
+				vir + FORGE_MD1MD3_PTR_OFF + FORGE_MD1MD3_POSTFIX,
+				sizeof(postfix));
+
+		buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
+		if (buf != NULL) {
+			for (off = 0; off + PAGE_SIZE <= size; off += PAGE_SIZE) {
+				unsigned int *w = (unsigned int *)buf;
+				unsigned int i;
+
+				memcpy_fromio(buf, vir + off, PAGE_SIZE);
+				for (i = 0; i < PAGE_SIZE / sizeof(*w); i++) {
+					if (w[i] != FORGE_MD1MD3_MAGIC)
+						continue;
+					if (hits < ARRAY_SIZE(first))
+						first[hits] = off + i * sizeof(*w);
+					hits++;
+				}
+			}
+			kfree(buf);
+		}
+
+		CCCI_NOTICE_LOG(md->index, TAG,
+			"forge_md1md3: phy=0x%llx size=%u prefix(+0x%x)=%08x postfix(+0x%x)=%08x magic=%08x magic_hits=%u%s\n",
+			(unsigned long long)md->mem_layout.md1_md3_smem_phy, size,
+			FORGE_MD1MD3_PTR_OFF, prefix,
+			FORGE_MD1MD3_PTR_OFF + FORGE_MD1MD3_POSTFIX, postfix,
+			FORGE_MD1MD3_MAGIC, hits,
+			(buf == NULL) ? " (scan skipped: no mem)" : "");
+
+		for (off = 0; off < FORGE_MD1MD3_HEADWORDS; off += 4)
+			CCCI_NOTICE_LOG(md->index, TAG,
+				"forge_md1md3: +0x%02x: %08x %08x %08x %08x\n",
+				off * 4, head[off], head[off + 1],
+				head[off + 2], head[off + 3]);
+
+		for (off = 0; off < hits && off < ARRAY_SIZE(first); off++)
+			CCCI_NOTICE_LOG(md->index, TAG,
+				"forge_md1md3: magic @ +0x%x\n", first[off]);
+	}
+
+	if (forge_md1md3_clear == 1 || forge_md1md3_clear == 3) {
+		memset_io(vir, 0, size);
+		CCCI_NOTICE_LOG(md->index, TAG,
+			"forge_md1md3: window zeroed (%u bytes)\n", size);
+	}
+}
+
 static int md_cd_start(struct ccci_modem *md)
 {
 	struct md_cd_ctrl *md_ctrl = (struct md_cd_ctrl *)md->private_data;
@@ -2042,9 +2165,10 @@ static int md_cd_start(struct ccci_modem *md)
 		ccci_init_security();
 		/* MD will clear share memory itself after the first boot */
 		memset_io(md->mem_layout.smem_region_vir, 0, md->mem_layout.smem_region_size);
-#ifdef CONFIG_MTK_ECCCI_C2K
-		memset_io(md->mem_layout.md1_md3_smem_vir, 0, md->mem_layout.md1_md3_smem_size);
-#endif
+		/* The MD1<->MD3 window is cleared by forge_md1md3_smem_hygiene()
+		 * below, on every start (the in-tree clear here needs
+		 * CONFIG_MTK_ECCCI_C2K, which is not set).
+		 */
 
 #ifndef NO_POWER_OFF_ON_STARTMD
 		ret = md_cd_power_off(md, 0);
@@ -2052,6 +2176,11 @@ static int md_cd_start(struct ccci_modem *md)
 #endif
 		md->config.setting &= ~MD_SETTING_FIRST_BOOT;
 	}
+
+	/* Every MD start, not just the first: MD1 re-stamps the guards each run,
+	 * and a restart after an assert would otherwise still see the old stamp.
+	 */
+	forge_md1md3_smem_hygiene(md);
 
 	CCCI_BOOTUP_LOG(md->index, TAG, "CLDMA modem is starting\n");
 	/* 1. load modem image */
