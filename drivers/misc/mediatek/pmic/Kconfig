@@ -42,6 +42,32 @@ config MTK_PMIC_CHIP_MT6355
 	  Set y to support this driver.
 	  Set n and choose other chip.
 
+config MTK_PMIC_CHIP_MT6351
+	tristate "MediaTek PMIC MT6351 Driver"
+	default n
+	---help---
+	  This selects for MediaTek(R) PMIC MT6351 driver.
+	  It's the main PMIC of the Helio P10 (MT6755) family as used on the
+	  Meizu M3 Note (m681); provides auxadc, buck/ldo and the
+	  interrupt-controller.  Register map + init sequence are ported from
+	  the confirmed-bootable 3.10 stock tree.
+	  Set y to support this driver.
+	  Set n and choose other chip.
+
+config MTK_SPM_PMIC_MT6351
+	bool "SPM uses the MT6351 power tables under the MT6353-named driver"
+	depends on MTK_PMIC_CHIP_MT6353 && MACH_MT6755
+	default n
+	---help---
+	  The m681/l681 4.4 kernels run MT6351 hardware through the
+	  MT6353-named PMIC driver (MTK_PMIC_CHIP_MT6353=y).  spm_v2 keyed
+	  its firmware names (pcm_*_m.bin / _r.bin) and its PMIC-wrap command
+	  table (VCORE/VSRAM/VPROC addresses) on the same symbol, i.e. it
+	  asked for MT6750/MT6353 SPM firmware and would program MT6353
+	  register addresses into an MT6351.  Say y on MT6351 boards to give
+	  spm_v2 its MT6351 branch (plain pcm_*.bin names, MT6351_* tables)
+	  while the PMIC driver itself stays MT6353-named.
+
 config MTK_PMIC_CHIP_MT6335
 	tristate "MediaTek Power MT6335 Driver"
 	default n

@@ -27,29 +27,24 @@
 #include <linux/regulator/consumer.h>
 
 #include "include/pmic.h"
-#include "mtk_pmic_regulator.h"
-/*
-*#ifdef CONFIG_MTK_PMIC_CHIP_MT6353
-*#include "mt6353/mtk_pmic_regulator.h"
-*#endif
-*
-*#ifdef CONFIG_MTK_PMIC_CHIP_MT6335
-*#include "mt6335/mtk_pmic_regulator.h"
-*#endif
-*
-*#ifdef CONFIG_MTK_PMIC_CHIP_MT6355
-*#include "mt6355/mtk_pmic_regulator.h"
-*#endif
-*/
+
+#ifdef CONFIG_MTK_PMIC_CHIP_MT6353
+#include "mt6353/mt_pmic_regulator.h"
+#endif
+
+#ifdef CONFIG_MTK_PMIC_CHIP_MT6335
+#include "mt6335/mt_pmic_regulator.h"
+#endif
+
 #define REGULATOR_TEST 0
 
+#define GETSIZE(array) (sizeof(array)/sizeof(array[0]))
 extern struct mtk_regulator mtk_ldos[];
 extern struct of_regulator_match pmic_regulator_matches[];
 extern int mtk_ldos_size;
 extern int pmic_regulator_matches_size;
 
 #ifndef CONFIG_MTK_PMIC_CHIP_MT6353
-#ifdef CONFIG_MTK_PMIC_CHIP_MT6335
 /*---extern variable---*/
 extern struct mtk_bucks_t mtk_bucks_class[];
 /*---extern function---*/
@@ -58,7 +53,6 @@ extern int buck_enable(BUCK_TYPE type, unsigned char en);
 extern int buck_set_mode(BUCK_TYPE type, unsigned char pmode);
 extern int buck_set_voltage(BUCK_TYPE type, unsigned int voltage);
 extern unsigned int buck_get_voltage(BUCK_TYPE type);
-#endif /*--COMMON API after MT6335--*/
 #endif /*--COMMON API after MT6335--*/
 
 #ifdef REGULATOR_TEST

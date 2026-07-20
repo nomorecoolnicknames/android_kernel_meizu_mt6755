@@ -29,15 +29,11 @@
 #include <mach/upmu_sw.h>
 
 #ifdef CONFIG_MTK_PMIC_CHIP_MT6335
-#include "mt6335/mtk_regulator_codegen.h"
+#include "mt6335/mt_regulator_codegen.h"
 #endif
 
 #ifdef CONFIG_MTK_PMIC_CHIP_MT6353
-#include "mt6353/mtk_regulator_codegen.h"
-#endif
-
-#ifdef CONFIG_MTK_PMIC_CHIP_MT6355
-#include "mt6355/mtk_regulator_codegen.h"
+#include "mt6353/mt_regulator_codegen.h"
 #endif
 
 /*****************************************************************************

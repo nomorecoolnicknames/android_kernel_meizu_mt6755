@@ -14,9 +14,9 @@
 #ifndef __PMIC_IRQ_H
 #define __PMIC_IRQ_H
 
-#include "mtk_pmic_irq.h"
+#include "mt_pmic_irq.h"
 
-#define PMIC_INT_WIDTH 16
+#define PMIC_INTERRUPT_WIDTH 16
 
 #define PMIC_S_INT_GEN(_name)	\
 	{	\

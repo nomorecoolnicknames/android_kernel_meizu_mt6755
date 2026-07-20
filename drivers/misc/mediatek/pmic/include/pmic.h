@@ -17,7 +17,6 @@
 #define PMIC_DEBUG
 
 #include <linux/smp.h>
-#include <linux/sysfs.h>
 #include <linux/device.h>
 #include <linux/debugfs.h>
 #include <linux/printk.h>
@@ -30,24 +29,24 @@
 #include <mach/upmu_sw.h>
 
 #include "mtk_pmic_common.h"
-#include "mtk_pmic_info.h"
-/*
-*#ifdef CONFIG_MTK_PMIC_CHIP_MT6335
-*#include "mt6335/mtk_pmic_info.h"
-*#endif
-*
-*#ifdef CONFIG_MTK_PMIC_CHIP_MT6353
-*#include "mt6353/mtk_pmic_info.h"
-*#endif
-*
-*#ifdef CONFIG_MTK_PMIC_CHIP_MT6355
-*#include "mt6355/mtk_pmic_info.h"
-*#endif
-*/
+
+#ifdef CONFIG_MTK_PMIC_CHIP_MT6335
+#include "mt6335/mt_pmic_info.h"
+#endif
+
+#ifdef CONFIG_MTK_PMIC_CHIP_MT6353
+#include "mt6353/mt_pmic_info.h"
+extern void sched_show_task_local(struct task_struct *p);
+extern int pmic_chk_intf(void);
+#endif
+
 #define PMIC_EN REGULATOR_CHANGE_STATUS
 #define PMIC_VOL REGULATOR_CHANGE_VOLTAGE
 #define PMIC_EN_VOL 9
 
+#define PMIC_INT_WIDTH 16
+
+#define GETSIZE(array) (sizeof(array)/sizeof(array[0]))
 
 /*
  * PMIC EXTERN VARIABLE
@@ -57,8 +56,6 @@ extern int g_lowbat_int_bottom;
 extern int g_low_battery_level;
 /*----- BATTERY_OC_PROTECT -----*/
 extern int g_battery_oc_level;
-/* for update VBIF28 by AUXADC */
-extern unsigned int g_pmic_pad_vbif28_vol;
 
 /*
  * PMIC EXTERN FUNCTIONS
@@ -105,7 +102,12 @@ extern void kpd_pmic_rstkey_handler(unsigned long pressed);
 extern int is_mt6311_sw_ready(void);
 extern int is_mt6311_exist(void);
 extern int get_mt6311_i2c_ch_num(void);
+/* 4.4 mt-plat/mtk_rtc.h provides crystal_exist_status() as a no-op macro; only
+ * declare the function form when that macro is absent (avoids the macro/extern
+ * clash). The mt6353 driver neither defines nor calls it. */
+#ifndef crystal_exist_status
 extern bool crystal_exist_status(void);
+#endif
 #if !defined CONFIG_MTK_LEGACY
 extern void pmu_drv_tool_customization_init(void);
 #endif
@@ -114,14 +116,6 @@ extern int batt_init_cust_data(void);
 extern unsigned int mt_gpio_to_irq(unsigned int gpio);
 extern int mt_gpio_set_debounce(unsigned gpio, unsigned debounce);
 extern unsigned int upmu_get_rgs_chrdet(void);
-#ifdef CONFIG_MTK_PMIC_COMMON
-extern int PMIC_check_battery(void);
-extern int PMIC_check_wdt_status(void);
-extern int PMIC_check_pwrhold_status(void);
-extern void PMIC_LP_INIT_SETTING(void);
-extern int PMIC_MD_INIT_SETTING_V1(void);
-extern void PMIC_PWROFF_SEQ_SETTING(void);
-#endif
 /*---------------------------------------------------*/
 
 struct regulator;
@@ -143,7 +137,6 @@ struct mtk_regulator {
 	PMU_FLAGS_LIST_ENUM qi_en_reg;
 	PMU_FLAGS_LIST_ENUM qi_vol_reg;
 	const void *pvoltages;
-	const void *idxs;
 	bool isUsedable;
 	struct regulator *reg;
 	int vsleep_en_saved;
@@ -151,8 +144,8 @@ struct mtk_regulator {
 	struct mtk_regulator_vosel vosel;
 	/*--- BUCK/LDO ---*/
 	const char *type;
-	unsigned int (*en_cb)(unsigned int);
-	unsigned int (*vol_cb)(unsigned int);
+	void (*en_cb)(unsigned int);
+	void (*vol_cb)(unsigned int);
 	unsigned int (*da_en_cb)(void);
 	unsigned int (*da_vol_cb)(void);
 };
