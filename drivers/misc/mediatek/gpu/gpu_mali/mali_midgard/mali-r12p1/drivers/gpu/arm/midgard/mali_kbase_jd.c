@@ -1160,6 +1160,21 @@ int kbase_jd_submit(struct kbase_context *kctx,
 	void __user *user_addr;
 	u32 latest_flush;
 
+	/* Log the first GPU job submissions and the submitting task. */
+	{
+		static int _fj;
+
+		if (_fj < 4) {
+			extern void forge_m681_gpuclk_snap(const char *tag);
+
+			_fj++;
+			pr_emerg("[FORGE_M681] #120 kbase_jd_submit#%d comm=%s\n",
+				 _fj, current->comm);
+			/* MMPLL_CON0.EN at submit time */
+			forge_m681_gpuclk_snap("jd_submit");
+		}
+	}
+
 	/*
 	 * kbase_jd_submit isn't expected to fail and so all errors with the jobs
 	 * are reported by immediately falling them (through event system)

@@ -28,6 +28,11 @@
 #include "ged_base.h"
 #include "ged_monitor_3D_fence.h"
 
+#include <linux/module.h>
+#define VSYNC_RESET_TIMER_TRUE	1
+#define VSYNC_RESET_TIMER_FALSE	0
+static int vsync_reset_timer = VSYNC_RESET_TIMER_FALSE;
+module_param(vsync_reset_timer, int, S_IRUGO|S_IWUSR);
 #define GED_DVFS_TIMER_TIMEOUT 25000000
 
 #ifndef ENABLE_TIMER_BACKUP
@@ -37,12 +42,7 @@
 
 #ifdef ENABLE_TIMER_BACKUP
 #include <linux/init.h>
-#include <linux/module.h>
 
-#define VSYNC_RESET_TIMER_TRUE	1
-#define VSYNC_RESET_TIMER_FALSE 0
-static int vsync_reset_timer = VSYNC_RESET_TIMER_FALSE;
-module_param(vsync_reset_timer, int, S_IRUGO|S_IWUSR);
 #endif
 
 

@@ -44,6 +44,23 @@ static irqreturn_t kbase_job_irq_handler(int irq, void *data)
 	struct kbase_device *kbdev = kbase_untag(data);
 	u32 val;
 
+	/* Count raw IRQ arrivals: the DT carries the right mt6755 SPI
+	 * triplet (218/217/216), but a correct number does not prove the IRQ
+	 * is delivered. */
+	{
+		static int _n;
+
+		if (_n < 3) {
+			extern void forge_m681_gpuclk_snap(const char *tag);
+
+			_n++;
+			pr_emerg("[FORGE_M681] #122 mali JOB irq#%d (irq=%d)\n", _n, irq);
+			/* MMPLL_CON0.EN while a job runs (the submit-time
+			 * snapshot is taken in kbase_jd_submit). */
+			forge_m681_gpuclk_snap("job_irq");
+		}
+	}
+
 	spin_lock_irqsave(&kbdev->pm.backend.gpu_powered_lock, flags);
 
 	if (!kbdev->pm.backend.gpu_powered) {
@@ -62,6 +79,29 @@ static irqreturn_t kbase_job_irq_handler(int irq, void *data)
 #endif /* CONFIG_MALI_DEBUG */
 	spin_unlock_irqrestore(&kbdev->pm.backend.gpu_powered_lock, flags);
 
+	/* Decode JOB_IRQ_STATUS for the first 4 interrupts: done_mask =
+	 * bits[15:0], fail_mask = bits[31:16], and on a failure the per-slot
+	 * JS_STATUS fault field. */
+	{
+		static int _js;
+
+		if (val && _js < 4) {
+			u32 done_mask = val & 0xFFFF;
+			u32 fail_mask = (val >> 16) & 0xFFFF;
+			u32 jsst = 0xFFFFFFFF;
+			int slot = -1;
+
+			if (fail_mask) {
+				slot = __builtin_ffs(fail_mask) - 1;
+				jsst = kbase_reg_read(kbdev,
+					JOB_SLOT_REG(slot, JS_STATUS), NULL);
+			}
+			_js++;
+			pr_emerg("[FORGE_M681] #124 JOB_IRQ_STATUS#%d raw=0x%08x done=0x%04x fail=0x%04x failslot=%d JS_STATUS=0x%x\n",
+				 _js, val, done_mask, fail_mask, slot, jsst);
+		}
+	}
+
 	if (!val)
 		return IRQ_NONE;
 
@@ -79,6 +119,16 @@ static irqreturn_t kbase_mmu_irq_handler(int irq, void *data)
 	unsigned long flags;
 	struct kbase_device *kbdev = kbase_untag(data);
 	u32 val;
+
+	/* see the kbase_job_irq_handler note */
+	{
+		static int _n;
+
+		if (_n < 3) {
+			_n++;
+			pr_emerg("[FORGE_M681] #122 mali MMU irq#%d (irq=%d)\n", _n, irq);
+		}
+	}
 
 	spin_lock_irqsave(&kbdev->pm.backend.gpu_powered_lock, flags);
 
@@ -119,6 +169,16 @@ static irqreturn_t kbase_gpu_irq_handler(int irq, void *data)
 	unsigned long flags;
 	struct kbase_device *kbdev = kbase_untag(data);
 	u32 val;
+
+	/* see the kbase_job_irq_handler note */
+	{
+		static int _n;
+
+		if (_n < 3) {
+			_n++;
+			pr_emerg("[FORGE_M681] #122 mali GPU irq#%d (irq=%d)\n", _n, irq);
+		}
+	}
 
 	spin_lock_irqsave(&kbdev->pm.backend.gpu_powered_lock, flags);
 
