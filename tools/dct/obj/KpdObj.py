@@ -3,10 +3,10 @@
 
 import re
 import string
-import ConfigParser
+import configparser
 import xml.dom.minidom
 
-from ModuleObj import ModuleObj
+from .ModuleObj import ModuleObj
 from utility.util import LogLevel
 from utility.util import log
 from data.KpdData import KpdData
@@ -18,7 +18,7 @@ class KpdObj(ModuleObj):
 
 
     def get_cfgInfo(self):
-        cp = ConfigParser.ConfigParser(allow_no_value=True)
+        cp = configparser.ConfigParser(allow_no_value=True)
         cp.read(ModuleObj.get_cmpPath())
 
         ops = cp.options('Key_definition')
@@ -109,7 +109,11 @@ class KpdObj(ModuleObj):
                 if node.nodeName == 'bPwrKeyGpioDinHigh':
                     flag = False
                     if node.childNodes[0].nodeValue == 'false':
-                        KpdData.set_gpioDinHigh(flag)
+                        flag = False
+                    else:
+                        flag = True
+
+                    KpdData.set_gpioDinHigh(flag)
 
                 if node.nodeName == 'pressPeriod':
                     time = string.atoi(node.childNodes[0].nodeValue)
@@ -204,7 +208,7 @@ class KpdObj(ModuleObj):
         gen_str += '''/****************Uboot Customation**************************/\n'''
         gen_str += '''/***********************************************************/\n'''
 
-        for (key, value) in KpdData.get_modeKeys().items():
+        for (key, value) in list(KpdData.get_modeKeys().items()):
             if cmp(value, 'NC') != 0:
                 idx = self.get_matrixIdx(value)
                 #idx = KpdData.get_matrix().index(value)
@@ -274,7 +278,7 @@ class KpdObj(ModuleObj):
                 continue
             gen_str += '''\tmediatek,kpd-hw-dl-key%d = <%s>;\n''' %(KpdData.get_downloadKeys().index(key), self.get_matrixIdx(key))
 
-        for (key, value) in KpdData.get_modeKeys().items():
+        for (key, value) in list(KpdData.get_modeKeys().items()):
             if cmp(value, 'NC') == 0:
                 continue
             gen_str += '''\tmediatek,kpd-hw-%s-key = <%d>;\n''' %(key.lower(), self.get_matrixIdx(value))

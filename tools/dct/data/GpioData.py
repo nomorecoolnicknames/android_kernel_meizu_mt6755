@@ -25,6 +25,7 @@ class GpioData:
         self.__smtNum = -1
         self.__smtEn = False
         self.__iesEn = True
+        self.__drvCur = ""
 
 
     def get_defMode(self):
@@ -99,6 +100,12 @@ class GpioData:
     def set_iesEn(self, flag):
         self.__iesEn = flag
 
+    def set_drvCur(self, val):
+        self.__drvCur = val
+
+    def get_drvCur(self):
+        return self.__drvCur
+
     def set_smtNum(self, num):
         self.__smtNum = num
 
@@ -113,7 +120,7 @@ class GpioData:
 
     @staticmethod
     def get_modeName(key, idx):
-        if key in GpioData._modeMap.keys():
+        if key in list(GpioData._modeMap.keys()):
             value = GpioData._modeMap[key]
             return value[idx]
 

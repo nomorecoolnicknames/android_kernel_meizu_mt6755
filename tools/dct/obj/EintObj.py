@@ -5,7 +5,7 @@ import re
 import os
 import string
 
-import ConfigParser
+import configparser
 import xml.dom.minidom
 
 from data.EintData import EintData
@@ -73,7 +73,7 @@ class EintObj(ModuleObj):
         ModuleObj.gen_spec(self, para)
 
     def get_cfgInfo(self):
-        cp = ConfigParser.ConfigParser(allow_no_value=True)
+        cp = configparser.ConfigParser(allow_no_value=True)
         cp.read(ModuleObj.get_figPath())
 
         ops = cp.options('GPIO')
@@ -138,7 +138,7 @@ class EintObj(ModuleObj):
 
         gen_str += '''\n\n'''
 
-        sorted_list = sorted(ModuleObj.get_data(self).keys(), key=compare)
+        sorted_list = sorted(list(ModuleObj.get_data(self).keys()), key=compare)
 
         for key in sorted_list:
             value = ModuleObj.get_data(self)[key]
@@ -196,7 +196,7 @@ class EintObj(ModuleObj):
             if value != -1:
                 gen_str += '''<%d %d>,\n\t\t\t\t\t''' %(key, value)
 
-        for (key, value) in EintData._int_eint.items():
+        for (key, value) in list(EintData._int_eint.items()):
             gen_str += '''<%s %s>,\n\t\t\t\t\t''' %(value, key)
 
         gen_str = gen_str[0:len(gen_str)-7]
@@ -208,8 +208,8 @@ class EintObj(ModuleObj):
 
         gen_str += '''\t\t\t\t\t/* gpio, built-in func mode, built-in eint */\n'''
         gen_str += '''\tmediatek,builtin_mapping = '''
-        for (key, value) in EintData._builtin_map.items():
-            for (sub_key, sub_value) in value.items():
+        for (key, value) in list(EintData._builtin_map.items()):
+            for (sub_key, sub_value) in list(value.items()):
                 gen_str += '''<%s %s %s>, /* %s */\n\t\t\t\t\t''' %(sub_key, sub_value[0:1], key, sub_value)
 
         gen_str = gen_str[0:gen_str.rfind(',')]
@@ -219,7 +219,7 @@ class EintObj(ModuleObj):
         return gen_str
 
     def get_gpioNum(self, eint_num):
-        for (key, value) in EintData.get_mapTable().items():
+        for (key, value) in list(EintData.get_mapTable().items()):
             if cmp(eint_num, value) == 0:
                 return key
 
@@ -238,14 +238,14 @@ class EintObj(ModuleObj):
                 if re.match(r'GPIO[\d]+', mode_name) or re.match(r'EINT[\d]+', mode_name):
                     return gpio_vec
 
-        for key in EintData._builtin_map.keys():
+        for key in list(EintData._builtin_map.keys()):
             if string.atoi(eint_num) == string.atoi(key):
                 temp_map = EintData._builtin_map[key]
-                for key in temp_map.keys():
+                for key in list(temp_map.keys()):
                     gpio_vec.append(key)
 
                 if flag:
-                    for item in temp_map.keys():
+                    for item in list(temp_map.keys()):
                         item_data = self.__gpio_obj.get_gpioData(string.atoi(item))
 
                         if item_data.get_defMode() == string.atoi(temp_map[item].split(':')[0]):
@@ -264,7 +264,7 @@ class EintObj(ModuleObj):
 
         gen_str += self.fill_mappingTable()
 
-        sorted_list = sorted(ModuleObj.get_data(self).keys(), key=compare)
+        sorted_list = sorted(list(ModuleObj.get_data(self).keys()), key=compare)
 
         for key in sorted_list:
             value = ModuleObj.get_data(self)[key]
@@ -291,5 +291,21 @@ class EintObj(ModuleObj):
             gen_str += '''\n'''
 
         return gen_str
+
+class EintObj_MT6750S(EintObj):
+    def __init__(self, gpio_obj):
+        EintObj.__init__(self, gpio_obj)
+
+    def parse(self, node):
+        EintObj.parse(self, node)
+
+    def gen_files(self):
+        EintObj.gen_files(self)
+
+    def gen_spec(self, para):
+        EintObj.gen_spec(self, para)
+
+    def fill_mappingTable(self):
+        return ''
 
 

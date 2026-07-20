@@ -4,15 +4,15 @@
 import sys,os
 import re
 import string
-import ConfigParser
+import configparser
 import xml.dom.minidom
 
-import ChipObj
+from . import ChipObj
 from data.PowerData import PowerData
 from utility.util import log
 from utility.util import LogLevel
 from utility.util import sorted_key
-from ModuleObj import ModuleObj
+from .ModuleObj import ModuleObj
 
 class PowerObj(ModuleObj):
     def __init__(self):
@@ -20,7 +20,7 @@ class PowerObj(ModuleObj):
         self.__list = {}
 
     def getCfgInfo(self):
-        cp = ConfigParser.ConfigParser(allow_no_value=True)
+        cp = configparser.ConfigParser(allow_no_value=True)
         cp.read(ModuleObj.get_figPath())
 
         self.__list = cp.options('POWER')
@@ -60,7 +60,7 @@ class PowerObj(ModuleObj):
 
     def fill_hFile(self):
         gen_str = ''
-        for key in sorted_key(ModuleObj.get_data(self).keys()):
+        for key in sorted_key(list(ModuleObj.get_data(self).keys())):
             value = ModuleObj.get_data(self)[key]
             if value.get_varName() == '':
                 continue

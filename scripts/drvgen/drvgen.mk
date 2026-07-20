@@ -12,6 +12,12 @@
 ifdef MTK_PLATFORM
 DRVGEN_PATH := drivers/misc/mediatek/dws/$(MTK_PLATFORM)
 
+# The DrvGen scripts under tools/dct are the python3-compatible versions
+# from the 3.18 tree. Default the recipe interpreter to python3 (as in that
+# tree's scripts/drvgen/drvgen.mk) so cust.dtsi generation does not fall
+# back to a python2 /usr/bin/python.
+python ?= python3
+
 ifndef DRVGEN_OUT
 DRVGEN_OUT := $(objtree)/arch/$(SRCARCH)/boot/dts
 endif
@@ -27,10 +33,23 @@ DRVGEN_FILE_LIST :=
 endif
 DRVGEN_TOOL := $(srctree)/tools/dct/DrvGen.py
 
+# Every board DWS of the platform also gets its own
+# $(DRVGEN_OUT)/<project>/cust.dtsi, and each board DTS includes
+# "<project>/cust.dtsi", so one tree builds the M681 and the L681 DTB with
+# their own DCT. The top-level cust.dtsi of MTK_PROJECT is kept as before.
+ifneq ($(DRVGEN_FILE_LIST),)
+DRVGEN_BOARDS := $(basename $(notdir $(wildcard $(srctree)/$(DRVGEN_PATH)/*.dws)))
+DRVGEN_FILE_LIST += $(foreach b,$(DRVGEN_BOARDS),$(DRVGEN_OUT)/$(b)/cust.dtsi)
+endif
+
 .PHONY: drvgen
 drvgen: $(DRVGEN_FILE_LIST)
 $(DRVGEN_OUT)/cust.dtsi: $(DRVGEN_TOOL) $(DWS_FILE)
 	@mkdir -p $(dir $@)
 	$(python) $(DRVGEN_TOOL) $(DWS_FILE) $(dir $@) $(dir $@) cust_dtsi
+
+$(DRVGEN_OUT)/%/cust.dtsi: $(DRVGEN_TOOL) $(srctree)/$(DRVGEN_PATH)/%.dws
+	@mkdir -p $(dir $@)
+	$(python) $(DRVGEN_TOOL) $(srctree)/$(DRVGEN_PATH)/$*.dws $(dir $@) $(dir $@) cust_dtsi
 
 endif#MTK_PLATFORM

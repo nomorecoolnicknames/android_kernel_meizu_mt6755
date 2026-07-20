@@ -7,6 +7,8 @@ import traceback
 import subprocess
 import xml.dom.minidom
 
+sys.dont_write_bytecode = True
+
 sys.path.append('.')
 sys.path.append('..')
 
@@ -16,12 +18,15 @@ from obj.ChipObj import Olympus
 from obj.ChipObj import MT6757_P25
 from obj.ChipObj import Rushmore
 from obj.ChipObj import Whitney
+from obj.ChipObj import MT6759
+from obj.ChipObj import MT6763
+from obj.ChipObj import MT6750S
 
 from utility.util import LogLevel
 from utility.util import log
 
 def usage():
-    print '''
+    print('''
 usage: DrvGen [dws_path] [file_path] [log_path] [paras]...
 
 options and arguments:
@@ -30,7 +35,7 @@ dws_path    :    dws file path
 file_path   :    where you want to put generated files
 log_path    :    where to store the log files
 paras        :    parameter for generate wanted file
-'''
+''')
 
 def is_oldDws(path, gen_spec):
     if not os.path.exists(path):
@@ -39,7 +44,7 @@ def is_oldDws(path, gen_spec):
 
     try:
         root = xml.dom.minidom.parse(dws_path)
-    except Exception, e:
+    except Exception as e:
         log(LogLevel.warn, '%s is not xml format, try to use old DCT!' %(dws_path))
         if len(gen_spec) == 0:
             log(LogLevel.warn, 'Please use old DCT UI to gen all files!')
@@ -130,6 +135,12 @@ if __name__ == '__main__':
         chipObj = Rushmore(dws_path, gen_path)
     elif cmp(chipId, 'MT6799') == 0:
         chipObj = Whitney(dws_path, gen_path)
+    elif cmp(chipId, 'MT6763') == 0:
+        chipObj = MT6763(dws_path, gen_path)
+    elif cmp(chipId, 'MT6759') == 0:
+        chipObj = MT6759(dws_path, gen_path)
+    elif cmp(chipId, 'MT6750S') == 0:
+        chipObj = MT6750S(dws_path, gen_path)
     else:
         chipObj = ChipObj(dws_path, gen_path)
 
