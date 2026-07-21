@@ -11,6 +11,7 @@
  * GNU General Public License for more details.
  */
 
+#include <linux/forge_hpl.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -402,6 +403,17 @@ int backlight_brightness_set(int level)
 
 }
 EXPORT_SYMBOL(backlight_brightness_set);
+
+/* Screen-off detection for HPS-lite: the level the LED core last stored
+ * (lights HAL -> /sys/class/leds/lcd-backlight/brightness). */
+int forge_lcd_bl_level(void)
+{
+	struct mt65xx_led_data *d = g_leds_data[MT65XX_LED_TYPE_LCD];
+
+	if (!d || !d->cdev.name || strcmp(d->cdev.name, "lcd-backlight"))
+		return -1;
+	return (int)READ_ONCE(d->cdev.brightness);
+}
 #if 0
 static ssize_t show_duty(struct device *dev, struct device_attribute *attr,
 			 char *buf)
@@ -811,6 +823,11 @@ static struct platform_device mt65xx_leds_device = {
 static int __init mt65xx_leds_init(void)
 {
 	int ret;
+
+	/* Rung C (qemu -M virt): the driver self-registers its platform_device,
+	 * so probe runs without any DT node and NULL-derefs the cust_led data
+	 * (virt boot #5: PC mt65xx_leds_probe+0x1f8, FAR 0x8).  Skip on virt. */
+	{ extern int forge_virt; if (forge_virt) return 0; }
 
 	LEDS_DRV_DEBUG("%s\n", __func__);
 
