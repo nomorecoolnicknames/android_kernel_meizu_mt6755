@@ -417,6 +417,14 @@ static int __init mtk_btcvsd_tx_soc_platform_init(void)
 {
 	int ret;
 
+	/* Stubbed, see the btcvsd_rx note: with the btcvsd platforms
+	 * stubbed the whole card is deferred, so the codec is never driven
+	 * and cannot disturb the MT6351 pwrap transport registers. Only
+	 * relevant with CONFIG_MTK_BTCVSD_ALSA enabled. */
+	pr_err("[FORGE_AUD] v266 btcvsd_tx STUBBED (ALSA card kills panel; display-first)\n");
+	(void)ret;
+	return 0;
+
 	pr_warn("+%s\n", __func__);
 #ifndef CONFIG_OF
 	soc_mtk_btcvsd_tx_dev = platform_device_alloc(MT_SOC_BTCVSD_TX_PCM, -1);

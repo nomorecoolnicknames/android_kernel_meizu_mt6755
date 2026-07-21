@@ -489,11 +489,20 @@ static struct snd_soc_dai_link mt_soc_dai_common[] = {
 		.codec_name = MT_SOC_CODEC_NAME,
 	},
 #ifdef CONFIG_MTK_BTCVSD_ALSA
+	/* The btcvsd OF node is left out of the boot walk
+	 * (forge_audio_node_stage returns 0 for mediatek,audio_bt_cvsd: CONN
+	 * space is unpowered until wmt_loader), so the mt-soc-btcvsd-*-pcm
+	 * platforms never register and snd_soc_register_card would stay in
+	 * -EPROBE_DEFER ("platform mt-soc-btcvsd-rx-pcm not registered").
+	 * These two links point at the always-registered snd-soc-dummy
+	 * platform instead of being pruned, so the dai_link count and pcm
+	 * indices stay identical to the vendor layout the HAL expects; BT-SCO
+	 * is not supported and these pcms are inert. */
 	{
 		.name = "BTCVSD_RX",
 		.stream_name = MT_SOC_BTCVSD_CAPTURE_STREAM_NAME,
 		.cpu_dai_name   = "snd-soc-dummy-dai",
-		.platform_name  = MT_SOC_BTCVSD_RX_PCM,
+		.platform_name  = "snd-soc-dummy",
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 		},
@@ -501,7 +510,7 @@ static struct snd_soc_dai_link mt_soc_dai_common[] = {
 		.name = "BTCVSD_TX",
 		.stream_name = MT_SOC_BTCVSD_PLAYBACK_STREAM_NAME,
 		.cpu_dai_name   = "snd-soc-dummy-dai",
-		.platform_name  = MT_SOC_BTCVSD_TX_PCM,
+		.platform_name  = "snd-soc-dummy",
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 	},
@@ -612,12 +621,68 @@ static struct snd_soc_card mt_snd_soc_card_mt = {
 	.num_links  = ARRAY_SIZE(mt_soc_dai_common),
 };
 
+/* Card registration gate: boot with mtk_soc_machine.forge_audio_gate=0 on
+ * the kernel cmdline to skip card registration entirely and keep audio
+ * out of the picture without a rebuild (assembling the card has caused
+ * display failures through codec writes before). Default 1 = the card
+ * registers normally. */
+static int forge_audio_gate = 1;
+module_param(forge_audio_gate, int, 0644);
+MODULE_PARM_DESC(forge_audio_gate,
+		 "0 = skip mt-snd-card registration at boot (bisect gate)");
+
+/* Staged bring-up knob. Audio DT devices can be held back at boot
+ * (drivers/of/platform.c gate); stepping this knob creates them:
+ *   echo 1 = AFE/pcm platform wave
+ *   echo 2 = + codec probe           (first PMIC writes)
+ *   echo 3 = + machine card assembly (respects forge_audio_gate above)
+ * One-way, forward only. Read returns the current stage. */
+extern int forge_audio_stage_current;
+extern int forge_audio_stage_populate(int stage);
+
+static int forge_audio_stage_set(const char *val,
+				 const struct kernel_param *kp)
+{
+	int n;
+	int ret;
+
+	ret = kstrtoint(val, 0, &n);
+	if (ret)
+		return ret;
+	if (n < forge_audio_stage_current) {
+		pr_err("[FORGE_AUDIO] stage is one-way (cur %d, got %d)\n",
+		       forge_audio_stage_current, n);
+		return -EINVAL;
+	}
+	return forge_audio_stage_populate(n);
+}
+
+static int forge_audio_stage_get(char *buffer,
+				 const struct kernel_param *kp)
+{
+	return scnprintf(buffer, PAGE_SIZE, "%d", forge_audio_stage_current);
+}
+
+static const struct kernel_param_ops forge_audio_stage_ops = {
+	.set = forge_audio_stage_set,
+	.get = forge_audio_stage_get,
+};
+module_param_cb(forge_audio_stage, &forge_audio_stage_ops, NULL, 0644);
+MODULE_PARM_DESC(forge_audio_stage,
+		 "staged audio bring-up: 0 inert, 1 platforms, 2 +codec, 3 +card");
+
 static int   mt_soc_snd_init(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &mt_snd_soc_card_mt;
 	int ret;
 	int daiLinkNum = 0;
 
+	if (!forge_audio_gate) {
+		pr_err("[FORGE_AUDIO] forge_audio_gate=0: skipping mt-snd-card registration\n");
+		return 0;
+	}
+
+	pr_err("[FORGE_AUDIO] mt_soc_snd_init: assembling mt-snd-card (gate=1)\n");
 	pr_err("mt_soc_snd_init dai_link = %p\n", mt_snd_soc_card_mt.dai_link);
 
 	/* DEAL WITH DAI LINK */

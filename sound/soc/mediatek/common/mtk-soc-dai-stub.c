@@ -64,6 +64,10 @@
 #include "mtk-auddrv-clk.h"
 #include "mtk-auddrv-kernel.h"
 #include "mtk-soc-pcm-platform.h"
+/* SND_SOC_ADV_MT_FMTS/SOC_HIGH_USE_RATE live in mtk-soc-pcm-common.h
+ * here; the MTK BSP patched them into include/sound/soc-dai.h, which this
+ * tree's sound headers lack. */
+#include "mtk-soc-pcm-common.h"
 
 /* Conventional and unconventional sample rate supported */
 static unsigned int audio_ap_supported_high_sample_rates[] = {

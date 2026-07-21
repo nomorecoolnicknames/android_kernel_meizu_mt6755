@@ -93,6 +93,13 @@ void *AFE_BASE_ADDRESS;
 void *AFE_SRAM_ADDRESS;
 void *AFE_TOP_ADDRESS;
 void *APMIXEDSYS_ADDRESS;
+/* topckgen/infracfg windows: the mt6755 clk driver (mtk-auddrv-clk.c)
+ * calls GetClkCfg/SetClkCfg/SetInfraCfg, whose implementations were
+ * missing from this 4.4 common file; restored from the 3.18
+ * common/AudDrv_Afe.c (same bases: AUDIO_CLKCFG_PHYSICAL_BASE 0x10000000,
+ * AUDIO_INFRA_BASE 0x10001000 in the platform mtk-auddrv-afe.h). */
+void *AFE_CLK_ADDRESS;
+void *AFE_INFRA_ADDRESS;
 struct regmap *pregmap;
 
 int Auddrv_Reg_map(struct device *pdev)
@@ -140,6 +147,10 @@ int Auddrv_Reg_map(struct device *pdev)
 	AFE_TOP_ADDRESS = ioremap_nocache(AUDIO_POWER_TOP, 0x1000);
 
 	APMIXEDSYS_ADDRESS = ioremap_nocache(APMIXEDSYS_BASE, 0x1000);
+
+	/* clk/infra windows for GetClkCfg/SetClkCfg/SetInfraCfg */
+	AFE_CLK_ADDRESS = ioremap_nocache(AUDIO_CLKCFG_PHYSICAL_BASE, 0x1000);
+	AFE_INFRA_ADDRESS = ioremap_nocache(AUDIO_INFRA_BASE, 0x1000);
 
 	return ret;
 }
@@ -198,6 +209,66 @@ void SetApmixedCfg(uint32 offset, uint32 value, uint32 mask)
 	val_tmp |= (value & mask);
 	mt_reg_sync_writel(val_tmp, AFE_Register);
 }
+
+/* From the 3.18 common/AudDrv_Afe.c; the mt6755 clk driver calls these
+ * and they were missing from this 4.4 file. */
+void *Get_AudClk_Pointer(void)
+{
+	return AFE_CLK_ADDRESS;
+}
+
+void *Get_Afe_Infra_Pointer(void)
+{
+	return AFE_INFRA_ADDRESS;
+}
+
+/* function to access topckgen clk cfg */
+uint32 GetClkCfg(uint32 offset)
+{
+	volatile long address = (long)((char *)AFE_CLK_ADDRESS + offset);
+	volatile uint32 *value;
+
+	value = (volatile uint32 *)(address);
+	return *value;
+}
+EXPORT_SYMBOL(GetClkCfg);
+
+void SetClkCfg(uint32 offset, uint32 value, uint32 mask)
+{
+	volatile long address = (long)((char *)AFE_CLK_ADDRESS + offset);
+	volatile uint32 *AFE_Register = (volatile uint32 *)address;
+	volatile uint32 val_tmp;
+
+	val_tmp = GetClkCfg(offset);
+	val_tmp &= (~mask);
+	val_tmp |= (value & mask);
+	mt_reg_sync_writel(val_tmp, AFE_Register);
+}
+EXPORT_SYMBOL(SetClkCfg);
+
+/* function to access infracfg */
+uint32 GetInfraCfg(uint32 offset)
+{
+	volatile long address = (long)((char *)AFE_INFRA_ADDRESS + offset);
+	volatile uint32 *value;
+
+	value = (volatile uint32 *)(address);
+	return *value;
+}
+EXPORT_SYMBOL(GetInfraCfg);
+
+void SetInfraCfg(uint32 offset, uint32 value, uint32 mask)
+{
+	volatile long address = (long)((char *)AFE_INFRA_ADDRESS + offset);
+	volatile uint32 *AFE_Register = (volatile uint32 *)address;
+	volatile uint32 val_tmp;
+
+	val_tmp = GetInfraCfg(offset);
+	val_tmp &= (~mask);
+	val_tmp |= (value & mask);
+	mt_reg_sync_writel(val_tmp, AFE_Register);
+}
+EXPORT_SYMBOL(SetInfraCfg);
 
 void Afe_Set_Reg(uint32 offset, uint32 value, uint32 mask)
 {

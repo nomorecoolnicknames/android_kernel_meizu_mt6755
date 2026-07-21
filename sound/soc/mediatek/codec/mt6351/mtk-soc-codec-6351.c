@@ -65,7 +65,10 @@
 #include "mtk-soc-analog-type.h"
 #include "mtk-soc-codec-63xx.h"
 #ifdef _GIT318_READY
-#include <mtk_clkbuf_ctl.h>
+/* mt6755 names this header mt_clkbuf_ctl.h (monolithic base/power/mt6755/,
+ * provides clk_buf_ctrl + CLK_BUF_AUDIO); mtk_clkbuf_ctl.h only exists for
+ * mt6757. */
+#include <mt_clkbuf_ctl.h>
 #endif
 #ifdef _GIT318_PMIC_READY
 #include <mach/mtk_pmic.h>
@@ -405,6 +408,27 @@ void SetAnalogSuspend(bool bEnable)
 		/*Ana_Log_Print();*/
 		mAnaSuspend = false;
 	}
+}
+
+/* Weak fallbacks for the clkbuf symbols. mt_clkbuf_ctl.o is built
+ * (base/power/mt6755/Makefile), so the strong definitions link and these
+ * stubs only matter if clkbuf is ever deferred again. On this board the
+ * 26M clock buffers come from the RF VCTCXO, not the MT6351 DCXO (dmesg:
+ * "clkbuf is from RF"), so the fallback returns false and
+ * audckbufEnable() takes the clk_buf_ctrl() branch (the no-op stub below,
+ * no PMIC write) instead of driving DCXO_CW01. With this default the audio
+ * path does no PMIC writes for its 26M clock. */
+bool __weak clk_buf_ctrl(enum clk_buf_id id, bool onoff)
+{
+	pr_warn("[FORGE_AUDIO] clk_buf_ctrl(%d,%d) stub (clkbuf deferred)\n",
+		id, onoff);
+	return false;
+}
+
+bool __weak is_clk_buf_from_pmic(void)
+{
+	pr_warn("[FORGE_AUDIO] is_clk_buf_from_pmic stub -> false (RF VCTCXO, flash18)\n");
+	return false;
 }
 
 static int audck_buf_Count;
@@ -759,6 +783,100 @@ void Auddrv_Read_Efuse_HPOffset(void)
 }
 EXPORT_SYMBOL(Auddrv_Read_Efuse_HPOffset);
 
+/* forge_amp_lo_gain_cap - analog LO (LOL/LOR) gain cap. The value is an
+ * index into DAC_DL_PGA_Speaker_GAIN (0 = "8Db", loudest ... 8 = "0Db" ...
+ * 18 = "-10Db", 0x1f = "-40Db"); the ZCD_CON1 gain fields get quieter with
+ * the index, so any enable-path write louder than the cap (index < cap) is
+ * clamped to the cap (covers both the Speaker_Amp_Change 0x0F89 literal
+ * and Apply_Speaker_Gain's cached volumes). -1 (default) = stock
+ * behaviour, the ~0 dB enable word 0x0F89. Headphone (ZCD_CON2) and
+ * earpiece (own buffer) do not use ZCD_CON1.
+ *
+ * forge_amp_need_lo - engage-order interlock. The AW8736 PA input is fed
+ * from the codec LO (LOL -> AW8736); engaging the external amp while the
+ * LO driver (Speaker_Amp) is off leaves its input floating (oscillation,
+ * maximum current draw). 1 (default) refuses Ext_Speaker_Amp_Switch=On
+ * until Speaker_Amp_Switch is On, which also covers a HAL-driven SPEAKER
+ * route (ringtone) engaging in the wrong order. */
+static int forge_amp_lo_gain_cap = -1;
+module_param(forge_amp_lo_gain_cap, int, 0644);
+MODULE_PARM_DESC(forge_amp_lo_gain_cap,
+		 "LO gain cap index (higher=quieter; -1=off/stock=default; 18=-10dB re-test)");
+
+static int forge_amp_need_lo = 1;
+module_param(forge_amp_need_lo, int, 0644);
+MODULE_PARM_DESC(forge_amp_need_lo,
+		 "1 = refuse ext speaker amp engage while LO driver is off");
+
+/* DL MTKIF receive-rate refresh.
+ *
+ * The AP -> PMIC serial downlink has a frame rate configured independently
+ * at each end. The AP end follows the stream: AFE_ADDA_DL_SRC2_CON0[31:28]
+ * is 0 / 7 / 8 for 8k / 44.1k / 48k. The PMIC end is written only by
+ * setDlMtkifSrc(), which is reached only from Audio_Amp_Change() /
+ * TurnOnDacPower() under GetDLStatus() == false, i.e. on the transition
+ * into DL-on; nothing re-programs it afterwards.
+ *
+ * If the route is engaged before the stream's rate is known (the normal
+ * HAL order, and also what plain tinymix + tinyplay do), the receiver
+ * keeps whatever rate was in mBlockSampleRate[OUT_DAC] at engage time and
+ * the two ends disagree for the whole stream. A serial link with
+ * mismatched frame rates delivers silence, not distortion. Observed: PMIC
+ * AFE_DL_SRC2_CON0_H stayed 0x7300 (code 7 = 44.1k) while playing 8k and
+ * 48k; writing code 8 by hand (0x2002=0x8300, 0x2038=0x8330) made a 48k
+ * stream audible mid-stream.
+ *
+ * Fix: remember the rate the PMIC receiver was programmed with, and when
+ * prepare() learns the stream rate, re-run the driver's own "reset sample
+ * rate" sequence (the setDlMtkifSrc(false)/(true) pair already used in
+ * Audio_Amp_Change) if the receiver is stale. Costs a brief DL mute on a
+ * rate change, as that pair already does.
+ *
+ * Default 1 = on: without it playback is silent. Set 0 for the stock
+ * behaviour. */
+static int forge_dl_rate_refresh = 1;
+module_param(forge_dl_rate_refresh, int, 0644);
+MODULE_PARM_DESC(forge_dl_rate_refresh,
+		 "1 = re-program the PMIC DL MTKIF rate when prepare() finds it stale (0 = stock, silent)");
+
+/* Rate last actually programmed into the PMIC MTKIF receiver. 0 = never. */
+static unsigned int forge_dl_mtkif_rate;
+
+/* Re-program the PMIC MTKIF receiver if it is running at a different frame
+ * rate than the stream now being prepared. No-op unless the downlink is
+ * already on -- if it is off, the engage path programs the rate itself and
+ * touching PMIC registers here would write to an unpowered block.
+ * Call AFTER mBlockSampleRate[OUT_DAC] has been updated: setDlMtkifSrc()
+ * derives the register values from that variable, not from an argument. */
+static void forge_dl_rate_sync(unsigned int rate)
+{
+	if (!forge_dl_rate_refresh || !rate)
+		return;
+	if (GetDLStatus() == false)
+		return;			/* engage path will program it */
+	if (forge_dl_mtkif_rate == rate)
+		return;			/* receiver already correct */
+
+	pr_err("[FORGE_AUDIO] DL MTKIF receiver stale: programmed %u Hz, stream %u Hz — re-programming\n",
+	       forge_dl_mtkif_rate, rate);
+	setDlMtkifSrc(false);
+	setDlMtkifSrc(true);
+	if (forge_dl_mtkif_rate != rate)
+		pr_err("[FORGE_AUDIO] DL MTKIF re-program did NOT take: still %u Hz (expected %u)\n",
+		       forge_dl_mtkif_rate, rate);
+}
+
+static unsigned int forge_amp_lo_clamp(unsigned int idx)
+{
+	unsigned int cap;
+
+	if (forge_amp_lo_gain_cap < 0)
+		return idx;
+	cap = forge_amp_lo_gain_cap > 0x1f ? 0x1f :
+	      (unsigned int)forge_amp_lo_gain_cap;
+	return idx < cap ? cap : idx;
+}
+
 #ifdef CONFIG_MTK_SPEAKER
 static void Apply_Speaker_Gain(void)
 {
@@ -769,8 +887,10 @@ static void Apply_Speaker_Gain(void)
 static void Apply_Speaker_Gain(void)
 {
 	Ana_Set_Reg(ZCD_CON1,
-		    (mCodec_data->mAudio_Ana_Volume[AUDIO_ANALOG_VOLUME_LINEOUTR] << 7) |
-		    mCodec_data->mAudio_Ana_Volume[AUDIO_ANALOG_VOLUME_LINEOUTL],
+		    (forge_amp_lo_clamp(mCodec_data->mAudio_Ana_Volume
+					[AUDIO_ANALOG_VOLUME_LINEOUTR]) << 7) |
+		    forge_amp_lo_clamp(mCodec_data->mAudio_Ana_Volume
+				       [AUDIO_ANALOG_VOLUME_LINEOUTL]),
 		    0x0f9f);
 }
 #endif
@@ -1256,13 +1376,86 @@ uint32 ULSampleRateTransform(uint32 SampleRate)
 }
 
 
+/* UL MTKIF receive-rate refresh, the uplink counterpart of
+ * forge_dl_rate_refresh.
+ *
+ * The PMIC uplink SRC rate (AFE_UL_SRC_CON0_H[3:1]) is written only in
+ * TurnOnADcPowerACC/Dmic/DCC under GetAdcStatus() == false, i.e. on the
+ * transition into ADC-on, from mBlockSampleRate[AUDIO_ANALOG_DEVICE_IN_ADC].
+ * Nothing re-programs it afterwards: the capture branches of
+ * mt63xx_codec_startup()/prepare() update that variable and call nothing.
+ *
+ * The AP end does follow the stream: SetChipI2SAdcIn() writes
+ * AFE_ADDA_UL_SRC_CON0[20:17] from substream->runtime->rate on every
+ * capture prepare, because its gate (false == audioAdcI2SStatus) is always
+ * open (AudioAdcI2SStatus in mtk-soc-afe-control.c is never set true). The
+ * stock 3.10 driver has the same two gates.
+ *
+ * mBlockSampleRate starts as { 48000, 48000, 48000 }, so the first capture
+ * after boot at any other rate engages the PMIC UL at 48k while the AP end
+ * runs at the real rate. Observed during a 16k capture: PMIC
+ * AFE_UL_SRC_CON0_H[3:1] = 3 (48k) vs AP AFE_ADDA_UL_SRC_CON0[20:17] = 0x5
+ * (16k), and the capture stayed silent; with this knob on, R 0x200a moved
+ * 0x0006 -> 0x0002 and the capture carried the tone.
+ * To check both ends during a capture:
+ *   PMIC: Ana_Get_Reg(AFE_UL_SRC_CON0_H) bits [3:1]  (0=8k 1=16k 2=32k 3=48k)
+ *   AP:   Afe_Get_Reg(AFE_ADDA_UL_SRC_CON0) bits [20:17]
+ * Default 1; echo 0 restores the stock behaviour at runtime. */
+static int forge_ul_rate_refresh = 1;
+module_param(forge_ul_rate_refresh, int, 0644);
+MODULE_PARM_DESC(forge_ul_rate_refresh,
+		 "1 = re-program the PMIC UL MTKIF rate when prepare() finds it stale (default; 0 = stock)");
+
+/* Rate last actually programmed into the PMIC UL SRC. 0 = never/powered down. */
+static unsigned int forge_ul_mtkif_rate;
+
+/* Re-program the PMIC UL SRC if it is running at a different frame rate than the
+ * capture now being prepared. No-op unless the uplink is already on: if it is
+ * off, the ADC engage path programs the rate itself and touching PMIC registers
+ * here would write to an unpowered block. */
+static void forge_ul_rate_sync(unsigned int rate)
+{
+	if (!forge_ul_rate_refresh || !rate)
+		return;
+	if (GetAdcStatus() == false)
+		return;			/* engage path will program it */
+	if (forge_ul_mtkif_rate == rate)
+		return;			/* receiver already correct */
+	if (useUl260k()) {
+		/* The 260k flow pairs the rate with anc_ul_src/anc_clk toggles, so
+		 * re-programming the rate alone would desynchronise them. Inert on
+		 * M681/L681 (mt6755.dtsi: use_ul_260k = <0>); guarded so this stays
+		 * correct if that ever changes. */
+		pr_err("[FORGE_AUDIO] UL MTKIF stale (%u -> %u Hz) but 260k flow is on; refusing\n",
+		       forge_ul_mtkif_rate, rate);
+		return;
+	}
+
+	pr_err("[FORGE_AUDIO] UL MTKIF receiver stale: programmed %u Hz, stream %u Hz -- re-programming\n",
+	       forge_ul_mtkif_rate, rate);
+	/* Only writes the three TurnOnADcPower* variants already perform: stop the
+	 * UL SRC (bit0 only, so Dmic/DCC fields survive), set the rate field,
+	 * restart. */
+	Ana_Set_Reg(AFE_UL_SRC_CON0_L, 0x0000, 0x0001);
+	Ana_Set_Reg(AFE_UL_SRC_CON0_H, (ULSampleRateTransform(rate) << 1), 0x7 << 1);
+	forge_ul_mtkif_rate = rate;
+	Ana_Set_Reg(AFE_UL_SRC_CON0_L, 0x0001, 0x0001);
+}
+
 static int mt63xx_codec_startup(struct snd_pcm_substream *substream, struct snd_soc_dai *Daiport)
 {
 	/* pr_warn("+mt63xx_codec_startup name = %s number = %d\n", substream->name, substream->number); */
-	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE && substream->runtime->rate)
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE && substream->runtime->rate) {
 		mBlockSampleRate[AUDIO_ANALOG_DEVICE_IN_ADC] = substream->runtime->rate;
-	else if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK && substream->runtime->rate)
+		/* Uplink counterpart of the DL sync below: covers a mic route
+		 * engaged before the stream existed. */
+		forge_ul_rate_sync(substream->runtime->rate);
+	} else if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK && substream->runtime->rate) {
 		mBlockSampleRate[AUDIO_ANALOG_DEVICE_OUT_DAC] = substream->runtime->rate;
+		/* Covers a route engaged before the stream existed, where
+		 * nothing else fixes the receiver. */
+		forge_dl_rate_sync(substream->runtime->rate);
+	}
 	/* pr_warn("-mt63xx_codec_startup name = %s number = %d\n", substream->name, substream->number); */
 	return 0;
 }
@@ -1273,11 +1466,18 @@ static int mt63xx_codec_prepare(struct snd_pcm_substream *substream, struct snd_
 		pr_aud("mt63xx_codec_prepare set up SNDRV_PCM_STREAM_CAPTURE rate = %d\n",
 		       substream->runtime->rate);
 		mBlockSampleRate[AUDIO_ANALOG_DEVICE_IN_ADC] = substream->runtime->rate;
+		/* prepare is where the capture rate is final. */
+		forge_ul_rate_sync(substream->runtime->rate);
 
 	} else if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		pr_aud("mt63xx_codec_prepare set up SNDRV_PCM_STREAM_PLAYBACK rate = %d\n",
 		       substream->runtime->rate);
 		mBlockSampleRate[AUDIO_ANALOG_DEVICE_OUT_DAC] = substream->runtime->rate;
+		/* prepare is where the rate is final. If the route was
+		 * engaged first (the normal HAL order), the PMIC MTKIF receiver
+		 * is still on the previous stream's rate and the link delivers
+		 * silence; re-program it here. See forge_dl_rate_refresh. */
+		forge_dl_rate_sync(substream->runtime->rate);
 	}
 	return 0;
 }
@@ -1734,9 +1934,17 @@ static void setDlMtkifSrc(bool enable)
 		/* turn on dl */
 		Ana_Set_Reg(PMIC_AFE_TOP_CON0, 0x0000, 0xffff);
 		/* set DL in normal path, not from sine gen table */
+
+		/* Record the rate the receiver was actually given, so
+		 * prepare() can detect a stale receiver later. Taken from the
+		 * same variable the register writes above were derived from,
+		 * not from the caller's idea of the rate. */
+		forge_dl_mtkif_rate =
+			mBlockSampleRate[AUDIO_ANALOG_DEVICE_OUT_DAC];
 	} else {
 		Ana_Set_Reg(AFE_DL_SRC2_CON0_L, 0x0000, 0xffff);
 		/* bit0, Turn off down-link */
+		forge_dl_mtkif_rate = 0;
 	}
 }
 
@@ -2204,8 +2412,9 @@ static void Speaker_Amp_Change(bool enable)
 		/* Switch LO MUX to audio DAC */
 		Ana_Set_Reg(AUDDEC_ANA_CON3, 0x4234, 0xffff);
 		/* Enable LOL */
-		Ana_Set_Reg(ZCD_CON1, 0x0F89, 0xffff);
-		/* Set LOL gain as 0dB */
+		Ana_Set_Reg(ZCD_CON1, 0x0F80 | forge_amp_lo_clamp(0x9), 0xffff);
+		/* Set LOL gain (stock literal 0x0F89 ~0 dB; clamped by
+		 * forge_amp_lo_gain_cap if set) */
 
 		Apply_Speaker_Gain();
 	} else {
@@ -2462,6 +2671,16 @@ static int Ext_Speaker_Amp_Set(struct snd_kcontrol *kcontrol, struct snd_ctl_ele
 {
 	pr_aud("%s() gain = %ld\n ", __func__, ucontrol->value.integer.value[0]);
 	if (ucontrol->value.integer.value[0]) {
+		/* Engage-order interlock: the AW8736 input is fed from the LO;
+		 * powering the PA with the LO driver off floats its input
+		 * (oscillation, maximum draw). Speaker_Amp (LOL) must be on
+		 * first; see forge_amp_need_lo. */
+		if (forge_amp_need_lo &&
+		    !mCodec_data->mAudio_Ana_DevicePower
+			[AUDIO_ANALOG_DEVICE_OUT_SPEAKERL]) {
+			pr_err("[FORGE_AMP] REFUSED: Ext_Speaker engage with LO driver OFF (Speaker_Amp_Switch first; forge_amp_need_lo=0 overrides)\n");
+			return 0;
+		}
 		Ext_Speaker_Amp_Change(true);
 		mCodec_data->mAudio_Ana_DevicePower[AUDIO_ANALOG_DEVICE_OUT_EXTSPKAMP] =
 		    ucontrol->value.integer.value[0];
@@ -3381,6 +3600,7 @@ static bool TurnOnADcPowerACC(int ADCType, bool enable)
 			Ana_Set_Reg(AFE_UL_SRC_CON0_H, (ULSampleRateTransform(SampleRate_VUL1)
 							 << 1), 0x7 << 1);
 			/* UL sample rate and mode configure */
+			forge_ul_mtkif_rate = SampleRate_VUL1;
 
 			/* fixed 260k path for 8/16/32/48 */
 			if (useUl260k() && (SampleRate_VUL1 <= 48000)) {
@@ -3397,6 +3617,7 @@ static bool TurnOnADcPowerACC(int ADCType, bool enable)
 		if (GetAdcStatus() == false) {
 			Ana_Set_Reg(AFE_UL_SRC_CON0_L, 0x0000, 0x0001);
 			/* UL turn off */
+			forge_ul_mtkif_rate = 0;
 
 			/* fixed 260k path for 8/16/32/48 */
 			if (useUl260k() && (SampleRate_VUL1 <= 48000)) {
@@ -3541,6 +3762,7 @@ static bool TurnOnADcPowerDmic(int ADCType, bool enable)
 			Ana_Set_Reg(AFE_UL_SRC_CON0_H, (ULSampleRateTransform(SampleRate_VUL1)
 							 << 1), 0x000E);
 			/* UL sample rate and mode configure */
+			forge_ul_mtkif_rate = SampleRate_VUL1;
 			Ana_Set_Reg(AFE_UL_SRC_CON0_H, 0x00e0, 0xfff0);
 			/* 2-wire dmic mode, ch1 and ch2 digital mic ON */
 
@@ -3563,6 +3785,7 @@ static bool TurnOnADcPowerDmic(int ADCType, bool enable)
 		if (GetAdcStatus() == false) {
 			Ana_Set_Reg(AFE_UL_SRC_CON0_L, 0x0000, 0xffff);
 			/* UL turn off */
+			forge_ul_mtkif_rate = 0;
 			Ana_Set_Reg(AFE_UL_SRC_CON0_H, 0x0000, 0xfff0);
 			/* ch1 and ch2 digital mic OFF */
 			Ana_Set_Reg(AFE_AUDIO_TOP_CON0, 0x0020, 0x0020);
@@ -3768,6 +3991,7 @@ static bool TurnOnADcPowerDCC(int ADCType, bool enable, int ECMmode)
 			Ana_Set_Reg(AFE_UL_SRC_CON0_H, (ULSampleRateTransform(SampleRate_VUL1)
 							 << 1), 0x7 << 1);
 			/* UL sample rate and mode configure */
+			forge_ul_mtkif_rate = SampleRate_VUL1;
 
 			/* fixed 260k path for 8/16/32/48 */
 			if (useUl260k() && (SampleRate_VUL1 <= 48000)) {
@@ -3789,6 +4013,7 @@ static bool TurnOnADcPowerDCC(int ADCType, bool enable, int ECMmode)
 		if (GetAdcStatus() == false) {
 			Ana_Set_Reg(AFE_UL_SRC_CON0_L, 0x0000, 0xffff);
 			/* UL turn off */
+			forge_ul_mtkif_rate = 0;
 
 			/* fixed 260k path for 8/16/32/48 */
 			if (useUl260k() && (SampleRate_VUL1 <= 48000)) {

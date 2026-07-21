@@ -84,6 +84,7 @@
 #include <linux/uaccess.h>
 #include <linux/irq.h>
 #include <linux/io.h>
+#include <linux/atomic.h>	/* forge_dl1_* counters */
 #include <asm/div64.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
@@ -108,6 +109,28 @@ static struct snd_dma_buffer *Dl1_Playback_dma_buf;
 static DEFINE_SPINLOCK(auddrv_DLCtl_lock);
 
 static struct device *mDev;
+
+/* Counters for the copy path's two blind spots. mtk_pcm_copy() below skips
+ * copy_from_user() when access_ok() fails but still advances u4WriteIdx
+ * and u4DataRemained, and the only report of that was PRINTK_AUDDRV, which
+ * compiles to nothing (DEBUG_AUDDRV is not defined in mtk-auddrv-def.h).
+ * A rejected user pointer therefore gave a silent stream of the correct
+ * duration, with AFE_DL1_CUR advancing and IRQs firing. These counters and
+ * the pr_err below make that visible; they change no behaviour. */
+static atomic_t forge_dl1_badptr = ATOMIC_INIT(0);
+static atomic_t forge_dl1_copies = ATOMIC_INIT(0);
+
+/* Program AFE_DAC_CON1[11:8] (I2S/DAC-out block rate) from the stream
+ * rate, as the stock 3.10 DL1 prepare does (mt_soc_pcm_dl1.c:
+ * "SetSampleRate(Soc_Aud_Digital_Block_MEM_I2S, runtime->rate)"). This 4.4
+ * DL1 driver never writes that field, so it keeps whatever the previous
+ * stream left, e.g. AFE_DAC_CON1 = 0x20a90a: DL1_MODE[3:0] = 0xa = 48k but
+ * I2S_MODE[11:8] = 0x9 = 44.1k. Default 0 = current behaviour. */
+static int forge_dl1_i2s_rate;
+module_param(forge_dl1_i2s_rate, int, 0644);
+MODULE_PARM_DESC(forge_dl1_i2s_rate,
+		 "1 = also set AFE_DAC_CON1[11:8] I2S rate from the stream rate (3.10 oracle parity)");
+
 
 /*
  *    function implementation
@@ -146,8 +169,121 @@ static struct snd_pcm_hardware mtk_pcm_dl1_hardware = {
 	.fifo_size = 0,
 };
 
+/* DL1 buffer census, read-only:
+ *
+ *   cat /sys/module/mtk_soc_pcm_dl1/parameters/forge_dl1_probe
+ *
+ * Shows whether the AFE fetches the bytes the CPU wrote: AFE_DL1_CUR
+ * advancing only proves the DMA engine walks BASE..END, not that the
+ * walked bytes are audio. /dev/mem is not available (CONFIG_DEVMEM is not
+ * set), so the census runs in the kernel over pucVirtBufAddr, the pointer
+ * mtk_pcm_copy() writes through.
+ *
+ * lo00_01 counts s16 samples whose low byte is 0x00 or 0x01: about 1/128
+ * of samples on real 16-bit PCM, near 100% if the low byte is stuck;
+ * peak_abs shows whether any amplitude survives.
+ *
+ * Bracketed in AudDrv_Clk_On/Off: with the audio bus clock-gated, both the
+ * AFE register window and the SRAM window hang the AXI bus on this SoC
+ * (see forge_audio_hold). */
+static int forge_dl1_probe_get(char *buffer, const struct kernel_param *kp)
+{
+	AFE_MEM_CONTROL_T *ctl = Get_Mem_ControlT(Soc_Aud_Digital_Block_MEM_DL1);
+	AFE_BLOCK_T *blk;
+	kal_int32 size;
+	int n = 0;
+	unsigned int nonzero = 0, lo00_01 = 0, samples = 0;
+	int peak_abs = 0;
+	s16 first[8] = {0};
+	u8 chunk[256];
+	kal_int32 off;
+
+	if (ctl == NULL)
+		return scnprintf(buffer, PAGE_SIZE, "no DL1 mem control\n");
+
+	blk = &ctl->rBlock;
+	size = blk->u4BufferSize;
+
+	AudDrv_Clk_On();
+
+	n += scnprintf(buffer + n, PAGE_SIZE - n,
+		       "prepared=%d dram=%u phys=0x%08x virt=%p size=%d\n",
+		       mPrepareDone, mPlaybackDramState,
+		       blk->pucPhysBufAddr, blk->pucVirtBufAddr, size);
+	n += scnprintf(buffer + n, PAGE_SIZE - n,
+		       "ring  wr=%d dmard=%d remained=%d reset=%u mask=0x%x\n",
+		       blk->u4WriteIdx, blk->u4DMAReadIdx, blk->u4DataRemained,
+		       blk->uResetFlag, blk->u4SampleNumMask);
+	n += scnprintf(buffer + n, PAGE_SIZE - n,
+		       "copy  calls=%d access_ok_fail=%d\n",
+		       atomic_read(&forge_dl1_copies),
+		       atomic_read(&forge_dl1_badptr));
+	n += scnprintf(buffer + n, PAGE_SIZE - n,
+		       "memif BASE=0x%08x CUR=0x%08x END=0x%08x MSB=0x%08x PBUF=0x%08x\n",
+		       Afe_Get_Reg(AFE_DL1_BASE), Afe_Get_Reg(AFE_DL1_CUR),
+		       Afe_Get_Reg(AFE_DL1_END), Afe_Get_Reg(AFE_MEMIF_MSB),
+		       Afe_Get_Reg(AFE_MEMIF_PBUF_SIZE));
+	n += scnprintf(buffer + n, PAGE_SIZE - n,
+		       "afe   DAC_CON0=0x%08x DAC_CON1=0x%08x CONN1=0x%08x CONN2=0x%08x\n",
+		       Afe_Get_Reg(AFE_DAC_CON0), Afe_Get_Reg(AFE_DAC_CON1),
+		       Afe_Get_Reg(AFE_CONN1), Afe_Get_Reg(AFE_CONN2));
+	n += scnprintf(buffer + n, PAGE_SIZE - n,
+		       "afe   CONN_24BIT=0x%08x I2S_CON1=0x%08x MEMIF_MON0=0x%08x SGEN=0x%08x\n",
+		       Afe_Get_Reg(AFE_CONN_24BIT), Afe_Get_Reg(AFE_I2S_CON1),
+		       Afe_Get_Reg(AFE_MEMIF_MON0), Afe_Get_Reg(AFE_SGEN_CON0));
+
+	/* content census over the buffer the AFE was told to fetch */
+	if (blk->pucVirtBufAddr != NULL && size > 0) {
+		for (off = 0; off + (kal_int32)sizeof(chunk) <= size;
+		     off += (kal_int32)sizeof(chunk)) {
+			unsigned int i;
+
+			memcpy_fromio(chunk, blk->pucVirtBufAddr + off,
+				      sizeof(chunk));
+			for (i = 0; i < sizeof(chunk); i++)
+				if (chunk[i])
+					nonzero++;
+			for (i = 0; i + 1 < sizeof(chunk); i += 2) {
+				s16 s = (s16)(chunk[i] | (chunk[i + 1] << 8));
+				int a = (s < 0) ? -(int)s : (int)s;
+
+				if (chunk[i] == 0x00 || chunk[i] == 0x01)
+					lo00_01++;
+				if (a > peak_abs)
+					peak_abs = a;
+				if (samples < ARRAY_SIZE(first))
+					first[samples] = s;
+				samples++;
+			}
+		}
+		n += scnprintf(buffer + n, PAGE_SIZE - n,
+			       "census bytes_scanned=%d nonzero=%u samples=%u lo00_01=%u peak_abs=%d\n",
+			       off, nonzero, samples, lo00_01, peak_abs);
+		n += scnprintf(buffer + n, PAGE_SIZE - n,
+			       "first8 %d %d %d %d %d %d %d %d\n",
+			       first[0], first[1], first[2], first[3],
+			       first[4], first[5], first[6], first[7]);
+	} else {
+		n += scnprintf(buffer + n, PAGE_SIZE - n,
+			       "census skipped (virt=%p size=%d)\n",
+			       blk->pucVirtBufAddr, size);
+	}
+
+	AudDrv_Clk_Off();
+
+	return n;
+}
+
+static const struct kernel_param_ops forge_dl1_probe_ops = {
+	.get = forge_dl1_probe_get,
+};
+module_param_cb(forge_dl1_probe, &forge_dl1_probe_ops, NULL, 0444);
+MODULE_PARM_DESC(forge_dl1_probe,
+		 "read: DL1 ring indices, memif window, and a content census of the fetched buffer");
+
 static int mtk_pcm_dl1_stop(struct snd_pcm_substream *substream)
 {
+	pr_emerg("[FORGE_AUDIO] dl1 trigger STOP\n"); /* breadcrumb */
 	pr_warn("%s\n", __func__);
 
 	irq_remove_user(substream, Soc_Aud_IRQ_MCU_MODE_IRQ1_MCU_MODE);
@@ -175,6 +311,7 @@ static int mtk_pcm_dl1_params(struct snd_pcm_substream *substream,
 	/* struct snd_dma_buffer *dma_buf = &substream->dma_buffer; */
 	int ret = 0;
 
+	pr_emerg("[FORGE_AUDIO] dl1 hw_params\n"); /* breadcrumb */
 	PRINTK_AUDDRV("mtk_pcm_dl1_params\n");
 
 	/* runtime->dma_bytes has to be set manually to allow mmap */
@@ -227,6 +364,7 @@ static int mtk_pcm_dl1_open(struct snd_pcm_substream *substream)
 
 	mPlaybackDramState = false;
 
+	pr_emerg("[FORGE_AUDIO] dl1 open\n"); /* breadcrumb */
 	PRINTK_AUDDRV("mtk_pcm_dl1_open\n");
 	mtk_pcm_dl1_hardware.buffer_bytes_max = GetPLaybackSramFullSize();
 
@@ -256,6 +394,7 @@ static int mtk_pcm_dl1_open(struct snd_pcm_substream *substream)
 
 static int mtk_soc_pcm_dl1_close(struct snd_pcm_substream *substream)
 {
+	pr_emerg("[FORGE_AUDIO] dl1 close\n"); /* breadcrumb */
 	pr_warn("%s\n", __func__);
 
 	if (mPrepareDone == true) {
@@ -276,6 +415,8 @@ static int mtk_pcm_prepare(struct snd_pcm_substream *substream)
 {
 	bool mI2SWLen;
 	struct snd_pcm_runtime *runtime = substream->runtime;
+
+	pr_emerg("[FORGE_AUDIO] dl1 prepare\n"); /* breadcrumb */
 
 	if (mPrepareDone == false) {
 		pr_warn
@@ -302,6 +443,14 @@ static int mtk_pcm_prepare(struct snd_pcm_substream *substream)
 			mI2SWLen = Soc_Aud_I2S_WLEN_WLEN_16BITS;
 		}
 
+		/* Stock 3.10 parity for AFE_DAC_CON1[11:8]; see
+		 * forge_dl1_i2s_rate at the top of this file. */
+		if (forge_dl1_i2s_rate) {
+			SetSampleRate(Soc_Aud_Digital_Block_MEM_I2S, runtime->rate);
+			pr_warn("[FORGE_AUDIO] dl1: I2S-out rate <- %d, AFE_DAC_CON1 = 0x%x\n",
+				runtime->rate, Afe_Get_Reg(AFE_DAC_CON1));
+		}
+
 		/* start I2S DAC out */
 		if (GetMemoryPathEnable(Soc_Aud_Digital_Block_I2S_OUT_DAC) == false) {
 			SetMemoryPathEnable(Soc_Aud_Digital_Block_I2S_OUT_DAC, true);
@@ -318,10 +467,16 @@ static int mtk_pcm_prepare(struct snd_pcm_substream *substream)
 }
 
 
+/* Marks the feed edge and re-arms the VBAT sampler when the external amp
+ * is engaged (mtk-auddrv-gpio.c). */
+extern void forge_amp_feed_mark(void);
+
 static int mtk_pcm_dl1_start(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 
+	pr_emerg("[FORGE_AUDIO] dl1 trigger START\n"); /* breadcrumb */
+	forge_amp_feed_mark();
 	pr_warn("%s\n", __func__);
 	/* here start digital part */
 
@@ -385,6 +540,7 @@ static int mtk_pcm_copy(struct snd_pcm_substream *substream,
 	}
 
 	AudDrv_checkDLISRStatus();
+	atomic_inc(&forge_dl1_copies);
 
 	spin_lock_irqsave(&auddrv_DLCtl_lock, flags);
 	copy_size = Afe_Block->u4BufferSize - Afe_Block->u4DataRemained;	/* free space of the buffer */
@@ -408,10 +564,13 @@ static int mtk_pcm_copy(struct snd_pcm_substream *substream,
 		if (Afe_WriteIdx_tmp + copy_size < Afe_Block->u4BufferSize) {
 
 			if (!access_ok(VERIFY_READ, data_w_ptr, copy_size)) {
-				PRINTK_AUDDRV("AudDrv_write 0ptr invalid data_w_ptr=%p, size=%d",
-					      data_w_ptr, copy_size);
-				PRINTK_AUDDRV("AudDrv_write u4BufferSize=%d, u4DataRemained=%d",
-					      Afe_Block->u4BufferSize, Afe_Block->u4DataRemained);
+				/* Was PRINTK_AUDDRV (compiled out): the ring
+				 * still advances below, so this path gives
+				 * silence with no trace at all. */
+				atomic_inc(&forge_dl1_badptr);
+				pr_err_ratelimited(
+					"[FORGE_AUDIO] dl1 copy: access_ok REJECTED ptr=%p size=%d (ring advances, stream will be SILENT)\n",
+					data_w_ptr, copy_size);
 			} else {
 				PRINTK_AUD_DL1
 				    ("memcpy VirtBufAddr+Afe_WriteIdx= %p,data_w_ptr = %p copy_size = 0x%x\n",
@@ -471,11 +630,11 @@ static int mtk_pcm_copy(struct snd_pcm_substream *substream,
 			spin_unlock_irqrestore(&auddrv_DLCtl_lock, flags);
 
 			if (!access_ok(VERIFY_READ, data_w_ptr + size_1, size_2)) {
-				PRINTK_AUDDRV
-				    ("AudDrv_write 2ptr invalid data_w_ptr=%p, size_1=%d, size_2=%d",
-				     data_w_ptr, size_1, size_2);
-				PRINTK_AUDDRV("AudDrv_write u4BufferSize=%d, u4DataRemained=%d",
-					      Afe_Block->u4BufferSize, Afe_Block->u4DataRemained);
+				/* see the size_1 site above */
+				atomic_inc(&forge_dl1_badptr);
+				pr_err_ratelimited(
+					"[FORGE_AUDIO] dl1 copy: access_ok REJECTED ptr=%p size_2=%u (ring advances, stream will be SILENT)\n",
+					data_w_ptr + size_1, size_2);
 			} else {
 
 				PRINTK_AUD_DL1
@@ -645,23 +804,31 @@ static int mtk_soc_dl1_probe(struct platform_device *pdev)
 
 	DL1GlobalVarInit();
 
+	/* Breadcrumbs: pr_emerg reaches console-ramoops synchronously, so on
+	 * a hard AXI hang the last line names the sub-operation. */
 #ifdef CONFIG_OF
+	pr_emerg("[FORGE_AUDIO] dl1: clk_probe\n");
 	AudDrv_Clk_probe(&pdev->dev);
 
 #ifndef CONFIG_MTK_LEGACY
+	pr_emerg("[FORGE_AUDIO] dl1: gpio_probe\n");
 	AudDrv_GPIO_probe(&pdev->dev);
 #endif
 #endif
 
+	pr_emerg("[FORGE_AUDIO] dl1: InitAfeControl\n");
 	InitAfeControl(&pdev->dev);
 
 #ifdef CONFIG_OF
+	pr_emerg("[FORGE_AUDIO] dl1: get_irqline\n");
 	auddrv_get_irqline(&pdev->dev);
+	pr_emerg("[FORGE_AUDIO] dl1: Register_Aud_Irq(%d)\n", afe_irq_number);
 	ret = Register_Aud_Irq(&pdev->dev, afe_irq_number);
 #else
 	ret = Register_Aud_Irq(&pdev->dev, MT6735_AFE_MCU_IRQ_LINE);
 #endif
 
+	pr_emerg("[FORGE_AUDIO] dl1: register_platform (irq ret=%d)\n", ret);
 	return snd_soc_register_platform(&pdev->dev, &mtk_soc_platform);
 }
 

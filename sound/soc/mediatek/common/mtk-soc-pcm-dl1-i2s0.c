@@ -73,7 +73,15 @@ static int mtk_pcm_i2s0_close(struct snd_pcm_substream *substream);
 static int mtk_asoc_pcm_i2s0_new(struct snd_soc_pcm_runtime *rtd);
 static int mtk_afe_i2s0_probe(struct snd_soc_platform *platform);
 
-int mtk_soc_always_hd;
+/* Default always-HD on. EnableAfe() runs EnableALLbySampleRate
+ * (EnableApll1/2 + EnableI2SCLKDiv + tuners) only under this flag; with 0
+ * the APLL path is only wired into the I2S0/I2S0dl1 pcm ops, so plain dl1
+ * playback never gets a serializer clock: apll1/apll2 stay prepared but
+ * disabled, audio_apll1div0/apll2div0 and audio_i2s at 0 Hz, while the
+ * AFE core runs on the 26M crystal (memifs drain, registers look right,
+ * silence in both directions). always-HD is a supported stock mode; the
+ * Audio_always_hd_Switch mixer control still turns it off at runtime. */
+int mtk_soc_always_hd = 1;
 int extcodec_echoref_control;
 static int mi2s0_sidegen_control;
 static int hdoutput_control;

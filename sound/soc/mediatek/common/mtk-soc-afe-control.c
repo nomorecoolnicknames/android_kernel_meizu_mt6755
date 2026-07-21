@@ -76,6 +76,11 @@
 #endif
 
 #include <linux/ftrace.h>
+#include <linux/moduleparam.h>
+#include <linux/kthread.h>
+#include <linux/kernel_stat.h>
+#include <linux/delay.h>
+#include <linux/io.h>
 
 #ifdef AUDIO_VCOREFS_SUPPORT
 #include <mtk_vcorefs_manager.h>
@@ -398,6 +403,141 @@ void SetExternalModemStatus(const bool bEnable)
 	mExternalModemStatus = bEnable;
 }
 
+/* forge_audio_hold: keep one audio clock reference from probe on, as the
+ * 3.18 driver does (its InitAfeControl calls AudDrv_Clk_On() and holds
+ * the reference).
+ *
+ * AudDrv_Clk_Power_On() does nothing here (its MMIO write is commented
+ * out) and the probe path takes no CCF references, so nothing pins the
+ * audio clock tree. clk_disable_unused (~15 s into every boot; LK
+ * truncates the cmdline at ~99 characters, so clk_ignore_unused cannot be
+ * passed) then gates INFRA_AUDIO (infra1 bit25, the audio APB
+ * "133m master / 66m slave" bus clock CG, GATE flags 0), powers down the
+ * topckgen aud_intbus mux (CLK_CFG 0x0080 bit31, registered without
+ * CLK_IGNORE_UNUSED) and gates the audiosys CGs; only the MTCMOS "clocks"
+ * (clk-mt6755-pg.c) carry CLK_IGNORE_UNUSED. After that any bare AFE MMIO
+ * hangs the AXI bus. At boot the probes run before clk_disable_unused on
+ * the LK-left state and survive, but the HAL mixer controls (bare
+ * Afe_Get/Set_Reg without an AudDrv_Clk_On bracket) arrive 40-130 s later
+ * and freeze the system.
+ *
+ *   forge_audio_hold=1 (default): InitAfeControl takes one AudDrv_Clk_On()
+ *     reference and never releases it. Stream open/close then cycles the
+ *     counter 2 -> 1, never 0, so the MTCMOS-off tail of AudDrv_Clk_Off
+ *     (which read-modify-writes AUDIO_TOP_CON0 after powering the domain
+ *     off) never runs either.
+ *   echo 0 > /sys/module/mtk_soc_afe_control/parameters/forge_audio_hold
+ *     drops the held reference at runtime and restores the gating; the
+ *     next audio MMIO is then expected to hang the bus. Test use only.
+ */
+int forge_audio_hold = 1;
+static bool forge_audio_hold_active;
+static bool forge_audio_hold_ready; /* InitAfeControl ran; clks gotten */
+
+static int forge_audio_hold_set(const char *val,
+				const struct kernel_param *kp)
+{
+	int n, ret;
+
+	ret = kstrtoint(val, 0, &n);
+	if (ret)
+		return ret;
+	n = !!n;
+	if (n == forge_audio_hold)
+		return 0;
+	forge_audio_hold = n;
+	if (!forge_audio_hold_ready)
+		return 0;	/* applied when InitAfeControl runs */
+	if (n && !forge_audio_hold_active) {
+		pr_emerg("[FORGE_AUDIO] hold: re-acquire (Clk_On)\n");
+		AudDrv_Clk_On();
+		forge_audio_hold_active = true;
+	} else if (!n && forge_audio_hold_active) {
+		pr_emerg("[FORGE_AUDIO] hold: RELEASE (Clk_Off) — stock gating environment restored\n");
+		forge_audio_hold_active = false;
+		AudDrv_Clk_Off();
+	}
+	return 0;
+}
+
+static int forge_audio_hold_get(char *buffer,
+				const struct kernel_param *kp)
+{
+	return scnprintf(buffer, PAGE_SIZE, "%d", forge_audio_hold);
+}
+
+static const struct kernel_param_ops forge_audio_hold_ops = {
+	.set = forge_audio_hold_set,
+	.get = forge_audio_hold_get,
+};
+module_param_cb(forge_audio_hold, &forge_audio_hold_ops, NULL, 0644);
+
+/* Audio watchdog sampler: a plain kthread (process context, msleep-paced)
+ * started once from InitAfeControl. Each second it prints one short line
+ * with pr_emerg, which lands in the FLOG DRAM ring (survives a warm WDT
+ * reset; ~3.5 KB holds about the last minute):
+ *   [FA]wd t=<s> afe=<kstat_irqs total>+<delta/s> ck=<Aud_AFE_Clk_cntr>
+ *        pw=<SPM PWR_STATUS>/<PWR_STATUS_2ND> pc=<AUDIO_PWR_CON> c=<cpu>
+ * Reading the tail after a watchdog reset:
+ *   IRQ storm:  the afe delta explodes (>> 1k/s) while lines keep flowing;
+ *   oops:       lines flow normally, the FLOG tail is a backtrace after
+ *               the last dl1 breadcrumb (first-stream path);
+ *   CCF/AEE:    [CCF]...fail and aee lines (AUDIO_AEE sites);
+ *   starvation: sampler lines stop early while other output continues, or
+ *               the WDT ticker heartbeats stop; the cutoff time dates it;
+ *   MTCMOS:     PWR_STATUS bit24 (AUDIO) and AUDIO_PWR_CON are in every
+ *               line; bit24 = 0 while the card runs means the AUD domain
+ *               is not powered (look at spm_mtcmos_ctrl_audio).
+ * Reads only kstat_irqs, one int and three always-on SPM registers
+ * (0x10006000 + 0x180/0x184/0x314, the block clk-mt6755-pg.c reads with
+ * spm_read()); no AFE/audio MMIO, so the sampler cannot hang the audio
+ * bus itself, and nothing is added to the ISR or the Clk_On/Clk_Off
+ * bodies. forge_audio_wdt_diag=0 silences it at runtime (the thread stays
+ * parked). */
+int forge_audio_wdt_diag = 1;
+module_param(forge_audio_wdt_diag, int, 0644);
+int forge_afe_irq_nr; /* set once in Register_Aud_Irq (probe context) */
+
+static int forge_audio_wdt_diag_fn(void *unused)
+{
+	void __iomem *spm = ioremap(0x10006000, 0x400);
+	unsigned int last = 0, t = 0;
+	extern int Aud_AFE_Clk_cntr;
+
+	while (!kthread_should_stop()) {
+		msleep(1000);
+		t++;
+		if (!forge_audio_wdt_diag)
+			continue;
+		{
+			unsigned int n = forge_afe_irq_nr > 0 ?
+					 kstat_irqs(forge_afe_irq_nr) : 0;
+
+			pr_emerg("[FA]wd t=%u afe=%u+%u ck=%d pw=%x/%x pc=%x c=%d\n",
+				 t, n, n - last, Aud_AFE_Clk_cntr,
+				 spm ? readl(spm + 0x180) : 0,
+				 spm ? readl(spm + 0x184) : 0,
+				 spm ? readl(spm + 0x314) : 0,
+				 raw_smp_processor_id());
+			last = n;
+		}
+	}
+	if (spm)
+		iounmap(spm);
+	return 0;
+}
+
+static void forge_audio_wdt_diag_start(void)
+{
+	static bool started;
+
+	if (started)
+		return;
+	started = true;
+	kthread_run(forge_audio_wdt_diag_fn, NULL, "forge_audwdt");
+	pr_emerg("[FORGE_AUDIO] wdt-31s sampler started (1 Hz, [FA]wd lines)\n");
+}
+
 /*****************************************************************************
  * FUNCTION
  *  InitAfeControl ,ResetAfeControl
@@ -415,11 +555,31 @@ bool InitAfeControl(struct device *pDev)
 
 	/* first time to init , reg init. */
 	AfeGlobalVarInit();
+	/* breadcrumbs to locate a hang (see dl1 probe) */
+	pr_emerg("[FORGE_AUDIO] afe: Reg_map\n");
 	Auddrv_Reg_map(pDev);
 	AudDrv_Clk_Global_Variable_Init();
+	pr_emerg("[FORGE_AUDIO] afe: Clk_Power_On\n");
 	AudDrv_Clk_Power_On();
+	/* Boot-state pin (see forge_audio_hold above); must come before the
+	 * first AFE MMIO (Bus_Init). At boot this runs on the LK-left power
+	 * state (the enables only pin refcounts); on a runtime staged populate
+	 * it re-enables the gated set (26M -> INFRA_AUDIO -> aud_intbus mux ->
+	 * AFE/DAC CGs -> MTCMOS) before Bus_Init touches AUDIO_TOP_CON0. */
+	forge_audio_hold_ready = true;
+	if (forge_audio_hold && !forge_audio_hold_active) {
+		pr_emerg("[FORGE_AUDIO] afe: v245 Clk_On HOLD enter\n");
+		AudDrv_Clk_On();
+		forge_audio_hold_active = true;
+		pr_emerg("[FORGE_AUDIO] afe: v245 Clk_On HOLD done\n");
+	}
+	/* 1 Hz FLOG sampler (see forge_audio_wdt_diag above) */
+	forge_audio_wdt_diag_start();
+	pr_emerg("[FORGE_AUDIO] afe: Bus_Init (first AFE MMIO write)\n");
 	AudDrv_Bus_Init();
+	pr_emerg("[FORGE_AUDIO] afe: Read_Efuse_HPOffset (PMIC pwrap)\n");
 	Auddrv_Read_Efuse_HPOffset();
+	pr_emerg("[FORGE_AUDIO] afe: init done, allocating\n");
 	AfeControlMutexLock();
 
 	/* allocate memory for pointers */
@@ -512,6 +672,8 @@ bool Register_Aud_Irq(void *dev, uint32 afe_irq_number)
 			dev);
 	if (ret)
 		pr_debug("Register_Aud_Irq AFE IRQ register fail!!!\n");
+	else
+		forge_afe_irq_nr = afe_irq_number; /* for the audio watchdog sampler */
 #else
 	pr_debug("%s dev name =%s\n", __func__, dev_name(dev));
 	ret =
@@ -1657,11 +1819,18 @@ int set_memif_pbuf_size(int aud_blk, enum memif_pbuf_size pbuf_size)
 	switch (aud_blk) {
 	case Soc_Aud_Digital_Block_MEM_DL1:
 		Afe_Set_Reg(AFE_MEMIF_PBUF_SIZE, pbuf_size << 0, 0x3 << 0);
+#ifdef AFE_MEMIF_MINLEN
+		/* MT6755 has no AFE_MEMIF_MINLEN (the stock 3.10 AudDrv_Afe.h
+		 * has it commented out as "93 w/o"); guarded so the mt6755
+		 * platform header can leave it undefined. */
 		Afe_Set_Reg(AFE_MEMIF_MINLEN, pbuf_size << 0, 0xf << 0);
+#endif
 		break;
 	case Soc_Aud_Digital_Block_MEM_DL2:
 		Afe_Set_Reg(AFE_MEMIF_PBUF_SIZE, pbuf_size << 2, 0x3 << 2);
+#ifdef AFE_MEMIF_MINLEN
 		Afe_Set_Reg(AFE_MEMIF_MINLEN, pbuf_size << 8, 0xf << 8);
+#endif
 		break;
 	default:
 		pr_err("%s(): invalid aud_blk %d\n", __func__, aud_blk);
@@ -1742,13 +1911,18 @@ int AudDrv_Allocate_mem_Buffer(struct device *pDev, Soc_Aud_Digital_Block MemBlo
 		if (Audio_dma_buf[MemBlock] != NULL) {
 			pr_debug("AudDrv_Allocate_mem_Buffer MemBlock = %d dma_alloc_coherent\n", MemBlock);
 			if (Audio_dma_buf[MemBlock]->area == NULL) {
-				pr_debug("dma_alloc_coherent\n");
+				/* Breadcrumb: one site covers every pcm
+				 * probe's DMA alloc. */
+				pr_emerg("[FORGE_AUDIO] s1.4 dma_alloc blk=%d len=%u\n",
+					 MemBlock, Buffer_length);
 				Audio_dma_buf[MemBlock]->area =
 				    dma_alloc_coherent(pDev, Buffer_length,
 					&Audio_dma_buf[MemBlock]->addr,
 					GFP_KERNEL | GFP_DMA);
 				if (Audio_dma_buf[MemBlock]->area)
 					Audio_dma_buf[MemBlock]->bytes = Buffer_length;
+				pr_emerg("[FORGE_AUDIO] s1.4 dma_alloc blk=%d area=%p\n",
+					 MemBlock, Audio_dma_buf[MemBlock]->area);
 			}
 			pr_debug("area = %p\n", Audio_dma_buf[MemBlock]->area);
 		}
