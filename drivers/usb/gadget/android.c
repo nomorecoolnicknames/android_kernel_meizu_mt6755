@@ -224,11 +224,12 @@ static void android_work(struct work_struct *data)
 		return;
 	}
 
-	if (usb_cable_connected())
-		is_hwconnected = true;
-	else
-		is_hwconnected = false;
-	pr_notice("[USB]%s: is_hwconnected=%d\n", __func__, is_hwconnected);
+	/* usb_cable_connected (MT6351 USB/charger detect) reads false on this
+	 * kernel even after the host's SET_CONFIGURATION, and the spurious
+	 * HWDISCONNECTED uevent tears down adb and USB at boot_completed. Trust
+	 * the gadget's own connection state. */
+	is_hwconnected = true;
+	pr_notice("[USB]%s: is_hwconnected=%d (m681 forced)\n", __func__, is_hwconnected);
 
 	spin_lock_irqsave(&cdev->lock, flags);
 	if (cdev->config)

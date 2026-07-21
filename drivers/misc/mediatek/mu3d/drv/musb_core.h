@@ -698,6 +698,13 @@ extern const char musb_driver_name[];
 
 extern void musb_start(struct musb *musb);
 extern void musb_stop(struct musb *musb);
+/* Queue suspend_work, capturing the musb_start generation so
+ * musb_suspend_work() can refuse to power down a controller that was
+ * restarted while it sat queued. Use this instead of
+ * schedule_work(&musb->suspend_work). */
+extern void forge_usb_queue_suspend_work(struct musb *musb);
+extern int forge_usb_suspend_guard;
+extern unsigned int forge_usb_suspend_saves;
 
 extern void musb_write_fifo(struct musb_hw_ep *ep, u16 len, const u8 *src);
 extern void musb_read_fifo(struct musb_hw_ep *ep, u16 len, u8 *dst);

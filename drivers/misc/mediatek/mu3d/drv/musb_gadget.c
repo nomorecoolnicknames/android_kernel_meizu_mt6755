@@ -33,6 +33,7 @@
 #include <linux/timer.h>
 #include <linux/module.h>
 #include <linux/smp.h>
+#include <linux/sched.h>	/* sched_clock for reset snapshots */
 #include <linux/spinlock.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
@@ -173,6 +174,213 @@ static inline void unmap_dma_buffer(struct musb_request *request, struct musb *m
  * @param status the status to complete the request with
  * Context: controller locked, IRQs blocked.
  */
+/* OUT endpoint request accounting.
+ *
+ * A sustained host->device transfer can stall, and adb then times out and
+ * resets the port (musb_g_reset/musb_g_disconnect follow) without a
+ * protocol error. These counters show, per endpoint, whether requests stop
+ * being queued or are queued and never completed:
+ *   queued  - musb_gadget_queue() accepted an OUT request
+ *   done    - musb_g_giveback() returned one to the function driver
+ *   qmu_rx  - the QMU RX-done interrupt fired for that endpoint
+ * plus qmu_err for the QMU RX error interrupts (CSERR/LENERR/ZLPERR).
+ *
+ * Reading them: `echo 1 > /sys/module/mu3d_hal_driver/parameters/forge_usb_epstat`
+ * (module name may differ; the dump goes to dmesg either way).
+ *
+ * Plain u32, not atomic_t: these are diagnostics, an occasional lost
+ * increment does not change a queued-vs-done divergence of hundreds, and
+ * qmu_done_rx runs in interrupt context.
+ */
+#define FORGE_USB_NEP 16
+u32 forge_usb_out_queued[FORGE_USB_NEP];
+u32 forge_usb_out_done[FORGE_USB_NEP];
+u32 forge_usb_qmu_rx[FORGE_USB_NEP];
+u32 forge_usb_qmu_err[FORGE_USB_NEP];
+u32 forge_usb_qmu_rxempty[FORGE_USB_NEP];
+
+/* mu3d_hal_qmu_drv.c: live RX-queue register + descriptor-ownership dump */
+extern void forge_usb_qmu_rxstate_dump(void);
+/* ssusb_qmu.c: arm the stalled-receive-queue poll */
+extern void forge_qmu_rxstall_kick(void);
+
+static void forge_usb_epstat_dump(const char *why)
+{
+	int i;
+
+	pr_notice("[FORGE_USB] epstat (%s): ep  queued   done    gap  qmu_rx qmu_err rx_empty\n", why);
+	for (i = 0; i < FORGE_USB_NEP; i++) {
+		if (!forge_usb_out_queued[i] && !forge_usb_qmu_rx[i])
+			continue;
+		pr_notice("[FORGE_USB] epstat: %2d %7u %7u %6d %7u %7u %8u\n",
+			  i, forge_usb_out_queued[i], forge_usb_out_done[i],
+			  (int)(forge_usb_out_queued[i] - forge_usb_out_done[i]),
+			  forge_usb_qmu_rx[i], forge_usb_qmu_err[i],
+			  forge_usb_qmu_rxempty[i]);
+	}
+}
+
+/* Reset-bracket snapshots.
+ *
+ * The counters above go blind at a bus reset: musb_g_reset ->
+ * musb_g_disconnect -> composite_disconnect -> reset_config -> f->disable
+ * -> ffs_func_eps_disable -> usb_ep_disable -> musb_gadget_disable ->
+ * nuke(), and nuke() gives back every queued request with -ESHUTDOWN while
+ * musb_g_giveback counts "done" regardless of status, so after the reset
+ * queued == done always. The state is therefore captured at the entry of
+ * musb_g_reset, before mu3d_hal_unfigured_ep() and musb_g_disconnect() run
+ * that chain, and once more at its end; the pair brackets nuke().
+ *
+ * musb_g_reset runs in hard IRQ (non-threaded request_irq) with the
+ * controller lock held and interrupts off; a 16-line dump on a live ttyMT0
+ * costs ~12 ms there, so capture is memory-only and printing happens later
+ * from a work item. Both are armed by forge_usb_epstat below, default off;
+ * with the knob off the cost is one test-and-branch per reset.
+ */
+#define FORGE_USB_SNAP_RING 16		/* 8 resets: one pre + one post each */
+#define FORGE_USB_SNAP_EP 5		/* OUT eps 1..4 (MAX_EP_NUM=8: 4Tx+4Rx) */
+
+struct forge_usb_reset_snap {
+	u32 seq;			/* reset number, shared by the pre/post pair */
+	u32 phase;			/* 0 = musb_g_reset entry, 1 = exit */
+	u64 t_ns;			/* sched_clock() at capture */
+	u32 devctl;			/* U3D_DEVICE_CONTROL, read at reset entry */
+	u32 speed;			/* musb->g.speed */
+	u32 pwr_mgmt;			/* U3D_POWER_MANAGEMENT (HS_MODE bit) */
+	u32 rqerrir0;			/* RX CS/LEN error latch */
+	u32 rqerrir1;			/* RX ZLP error latch */
+	u32 qemir;			/* queue-empty latch */
+	u32 queued[FORGE_USB_SNAP_EP];
+	u32 done[FORGE_USB_SNAP_EP];
+	u32 qmu_rx[FORGE_USB_SNAP_EP];
+	u32 qmu_err[FORGE_USB_SNAP_EP];
+	u32 rxempty[FORGE_USB_SNAP_EP];
+	u32 reqlen[FORGE_USB_SNAP_EP];	/* ep_out.req_list length */
+	u32 rqcsr[FORGE_USB_SNAP_EP];	/* USB_QMU_RQCSR(n) */
+	u32 rqcpr[FORGE_USB_SNAP_EP];	/* USB_QMU_RQCPR(n) */
+	void *gpd_last[FORGE_USB_SNAP_EP];
+	void *gpd_end[FORGE_USB_SNAP_EP];
+};
+
+static struct forge_usb_reset_snap forge_usb_snaps[FORGE_USB_SNAP_RING];
+static unsigned int forge_usb_snap_widx;	/* next slot, monotonic */
+static unsigned int forge_usb_snap_pidx;	/* next to print (work ctx) */
+static u32 forge_usb_reset_seq;
+
+static void forge_usb_snap_capture(struct musb *musb, u32 phase, u32 seq, u32 devctl)
+{
+	struct forge_usb_reset_snap *s;
+	int i;
+
+	s = &forge_usb_snaps[forge_usb_snap_widx % FORGE_USB_SNAP_RING];
+	memset(s, 0, sizeof(*s));
+	s->seq = seq;
+	s->phase = phase;
+	s->t_ns = sched_clock();
+	s->devctl = devctl;
+	s->speed = musb->g.speed;
+	s->pwr_mgmt = os_readl(U3D_POWER_MANAGEMENT);
+#ifdef USE_SSUSB_QMU
+	s->rqerrir0 = os_readl(U3D_RQERRIR0);
+	s->rqerrir1 = os_readl(U3D_RQERRIR1);
+	s->qemir = os_readl(U3D_QEMIR);
+#endif
+	for (i = 1; i < FORGE_USB_SNAP_EP; i++) {
+		struct musb_ep *mep = &musb->endpoints[i].ep_out;
+		struct list_head *pos;
+		u32 n = 0;
+
+		list_for_each(pos, &mep->req_list)
+			n++;
+		s->reqlen[i] = n;
+		s->queued[i] = forge_usb_out_queued[i];
+		s->done[i] = forge_usb_out_done[i];
+		s->qmu_rx[i] = forge_usb_qmu_rx[i];
+		s->qmu_err[i] = forge_usb_qmu_err[i];
+		s->rxempty[i] = forge_usb_qmu_rxempty[i];
+#ifdef USE_SSUSB_QMU
+		s->rqcsr[i] = os_readl(USB_QMU_RQCSR(i));
+		s->rqcpr[i] = os_readl(USB_QMU_RQCPR(i));
+		s->gpd_last[i] = Rx_gpd_last[i];
+		s->gpd_end[i] = Rx_gpd_end[i];
+#endif
+	}
+	forge_usb_snap_widx++;
+}
+
+static void forge_usb_snap_print(struct work_struct *work)
+{
+	/* Single consumer: work items are non-reentrant, and pidx is touched
+	 * only here and by the on-demand replay (which reschedules us).  A
+	 * racing capture can at worst make us print a slot that is being
+	 * rewritten -- acceptable for a diagnostic. */
+	while (forge_usb_snap_pidx != forge_usb_snap_widx) {
+		struct forge_usb_reset_snap *s;
+		int i;
+
+		if (forge_usb_snap_widx - forge_usb_snap_pidx > FORGE_USB_SNAP_RING)
+			forge_usb_snap_pidx = forge_usb_snap_widx - FORGE_USB_SNAP_RING;
+		s = &forge_usb_snaps[forge_usb_snap_pidx % FORGE_USB_SNAP_RING];
+		pr_notice("[FORGE_USB] snap seq=%u %s t=%llu devctl=%02x speed=%u hs=%d rqerrir0=%08x rqerrir1=%08x qemir=%08x\n",
+			  s->seq, s->phase ? "post" : "pre ",
+			  (unsigned long long)s->t_ns, s->devctl, s->speed,
+			  !!(s->pwr_mgmt & HS_MODE), s->rqerrir0, s->rqerrir1,
+			  s->qemir);
+		for (i = 1; i < FORGE_USB_SNAP_EP; i++) {
+			if (!s->queued[i] && !s->reqlen[i] && !s->qmu_rx[i])
+				continue;
+			pr_notice("[FORGE_USB] snap seq=%u %s ep%dout q=%u d=%u gap=%d rx=%u err=%u empty=%u reqlen=%u rqcsr=%08x rqcpr=%08x gpd_last=%p gpd_end=%p\n",
+				  s->seq, s->phase ? "post" : "pre ", i,
+				  s->queued[i], s->done[i],
+				  (int)(s->queued[i] - s->done[i]),
+				  s->qmu_rx[i], s->qmu_err[i], s->rxempty[i],
+				  s->reqlen[i], s->rqcsr[i], s->rqcpr[i],
+				  s->gpd_last[i], s->gpd_end[i]);
+		}
+		forge_usb_snap_pidx++;
+	}
+}
+static DECLARE_WORK(forge_usb_snap_work, forge_usb_snap_print);
+
+static int forge_usb_epstat_set(const char *val, const struct kernel_param *kp)
+{
+	int req = 0, ret;
+
+	ret = kstrtoint(val, 0, &req);
+	if (ret)
+		return ret;
+	if (req == 2) {
+		memset(forge_usb_out_queued, 0, sizeof(forge_usb_out_queued));
+		memset(forge_usb_out_done, 0, sizeof(forge_usb_out_done));
+		memset(forge_usb_qmu_rx, 0, sizeof(forge_usb_qmu_rx));
+		memset(forge_usb_qmu_err, 0, sizeof(forge_usb_qmu_err));
+		memset(forge_usb_qmu_rxempty, 0, sizeof(forge_usb_qmu_rxempty));
+		pr_notice("[FORGE_USB] epstat: counters cleared\n");
+	} else if (req == 3) {
+		/* replay the whole snapshot ring, oldest first, including
+		 * entries already printed once */
+		forge_usb_snap_pidx = (forge_usb_snap_widx > FORGE_USB_SNAP_RING)
+		    ? forge_usb_snap_widx - FORGE_USB_SNAP_RING : 0;
+		schedule_work(&forge_usb_snap_work);
+	} else if (req == 4) {
+		/* live QMU RX-queue state; see forge_usb_qmu_rxstate_dump()
+		 * in mu3d_hal_qmu_drv.c for what each field discriminates */
+		forge_usb_qmu_rxstate_dump();
+	} else if (req) {
+		forge_usb_epstat_dump("on demand");
+	}
+	*(int *)kp->arg = req;
+	return 0;
+}
+
+static const struct kernel_param_ops forge_usb_epstat_ops = {
+	.set = forge_usb_epstat_set,
+	.get = param_get_int,
+};
+static int forge_usb_epstat;
+module_param_cb(forge_usb_epstat, &forge_usb_epstat_ops, &forge_usb_epstat, 0644);
+MODULE_PARM_DESC(forge_usb_epstat, "m681: write 1 to dump OUT-endpoint queued/done/qmu counters to dmesg, 2 to clear them, 3 to replay the reset-snapshot ring, 4 to dump the live QMU RX-queue state (RQCSR/RQCPR + HWO census); any nonzero value also arms reset-bracket snapshots");
+
 void musb_g_giveback(struct musb_ep *ep,
 		     struct usb_request *request,
 		     int status) __releases(ep->musb->lock) __acquires(ep->musb->lock)
@@ -187,6 +395,9 @@ void musb_g_giveback(struct musb_ep *ep,
 	}
 
 	req = to_musb_request(request);
+
+	if (!ep->is_in && ep->current_epnum < FORGE_USB_NEP)
+		forge_usb_out_done[ep->current_epnum]++;
 
 	list_del(&req->list);
 	if (req->request.status == -EINPROGRESS)
@@ -824,7 +1035,7 @@ static int musb_gadget_disable(struct usb_ep *ep)
 			musb->active_ep, epnum, (musb_ep->is_in ? USB_TX : USB_RX));
 
 	if (musb->active_ep == 0 && musb->is_active == 0)
-		schedule_work(&musb->suspend_work);
+		forge_usb_queue_suspend_work(musb);	/* captures the start generation */
 
 	spin_unlock_irqrestore(&(musb->lock), flags);
 
@@ -913,6 +1124,9 @@ static int musb_gadget_queue(struct usb_ep *ep, struct usb_request *req, gfp_t g
 
 	musb_ep = to_musb_ep(ep);
 	musb = musb_ep->musb;
+
+	if (!musb_ep->is_in && musb_ep->current_epnum < FORGE_USB_NEP)
+		forge_usb_out_queued[musb_ep->current_epnum]++;
 
 	request = to_musb_request(req);
 	request->musb = musb;
@@ -1041,6 +1255,10 @@ static int musb_gadget_queue(struct usb_ep *ep, struct usb_request *req, gfp_t g
 							  USB_ENDPOINT_XFER_ISOC ? 0 : 1),
 							 ep->maxpacket);
 			mu3d_hal_resume_qmu(request->epnum, USB_RX);
+			/* Start the stalled-RX poll while there is traffic; it
+			 * stops itself when nothing is outstanding. See
+			 * forge_qmu_rxstall in ssusb_qmu.c. */
+			forge_qmu_rxstall_kick();
 		}
 	}
 #endif
@@ -1938,6 +2156,13 @@ void musb_g_disconnect(struct musb *musb)
 {
 	u32 devctl = os_readl(U3D_DEVICE_CONTROL);
 
+	/* This line is printed inside musb_g_disconnect, and the DISCONNECT
+	 * interrupt handler in musb_core.c prints its own line before calling
+	 * it; this line without that one means the bus never reported a
+	 * disconnect and software called us. Name the caller. */
+	dev_notice(musb->controller, "[FORGE_USB] g_disconnect devctl=%02x caller=%pS state=%s\n",
+		   devctl, __builtin_return_address(0),
+		   usb_otg_state_string(musb->xceiv->otg->state));
 	dev_notice(musb->controller, "devctl %02x\n", devctl);
 
 	/* clear HR */
@@ -2006,6 +2231,19 @@ void musb_conifg_ep0(struct musb *musb)
 void musb_g_reset(struct musb *musb) __releases(musb->lock) __acquires(musb->lock)
 {
 	u32 devctl = os_readl(U3D_DEVICE_CONTROL);
+	u32 forge_seq;
+
+	/* Pre-snapshot first, before mu3d_hal_unfigured_ep() and
+	 * musb_g_disconnect() below run the nuke() chain. Memory-only: hard
+	 * IRQ, lock held; the print happens from a work item at the end of
+	 * this function. */
+	forge_seq = ++forge_usb_reset_seq;
+	if (forge_usb_epstat)
+		forge_usb_snap_capture(musb, 0, forge_seq, devctl);
+
+	/* Host-issued bus reset. Declared after the locals: this file builds
+	 * with -Werror=declaration-after-statement. */
+	pr_notice("[FORGE_USB] g_reset entered devctl=%02x\n", devctl);
 
 	/* it may greater than 2.5mA , but it should meet the spec's requirement !! */
 	if (musb->test_mode == 0)
@@ -2051,4 +2289,11 @@ void musb_g_reset(struct musb *musb) __releases(musb->lock) __acquires(musb->loc
 
 	/* start with default limits on VBUS power draw */
 	(void)musb_gadget_vbus_draw(&musb->g, is_otg_enabled(musb) ? 8 : 100);
+
+	/* Post-snapshot, the other end of the nuke() bracket. schedule_work()
+	 * is IRQ-safe; the dump prints later in process context. */
+	if (forge_usb_epstat) {
+		forge_usb_snap_capture(musb, 1, forge_seq, devctl);
+		schedule_work(&forge_usb_snap_work);
+	}
 }

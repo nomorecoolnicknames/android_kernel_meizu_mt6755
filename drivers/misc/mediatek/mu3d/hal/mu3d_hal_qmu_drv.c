@@ -544,6 +544,59 @@ noinline DEV_UINT8 mu3d_hal_cal_checksum(DEV_UINT8 *data, DEV_INT32 len)
 	return 0xFF - ckSum;
 }
 
+/* Live RX queue state, on demand from userspace.
+ *
+ * The epstat counters show requests armed and never completed, but not why
+ * the queue stopped, and the reset-bracket snapshot ring does not help
+ * because no reset happens in this failure. This dump tells three cases
+ * apart in one read:
+ *   - RQCSR ACTIVE=0 while hwo > 0: the queue stopped and the RESUME write
+ *     in mu3d_hal_resume_qmu() did not restart it (`adb reconnect`, which
+ *     heals the link, re-enables the endpoint and issues QMU_Q_START
+ *     rather than QMU_Q_RESUME);
+ *   - ACTIVE=1 and hwo > 0 with RQCPR identical across two dumps: the
+ *     controller is stuck on one descriptor, not idle;
+ *   - hwo == 0, i.e. hardware consumed every descriptor, yet requests are
+ *     still queued: the done interrupt was lost, not the transfer.
+ *
+ * Read-only and off the hot path: register reads plus a CPU-side sync of
+ * each descriptor, run only on an explicit write of 4 to forge_usb_epstat,
+ * from process context.
+ */
+void forge_usb_qmu_rxstate_dump(void)
+{
+	int ep;
+
+	for (ep = 1; ep < 15; ep++) {
+		DEV_UINT8 *start = (DEV_UINT8 *) Rx_gpd_List[ep].pStart;
+		DEV_UINT8 *end = (DEV_UINT8 *) Rx_gpd_List[ep].pEnd;
+		DEV_UINT32 stride = sizeof(TGPD) + AT_GPD_EXT_LEN;
+		DEV_UINT32 total = 0, hwo = 0;
+		DEV_UINT8 *p;
+
+		if (!start || !end || end <= start)
+			continue;
+
+		for (p = start; p + sizeof(TGPD) <= end; p += stride) {
+			dma_sync_single_for_cpu(NULL,
+						mu3d_hal_gpd_virt_to_phys(p, USB_RX, ep),
+						sizeof(TGPD), DMA_BIDIRECTIONAL);
+			total++;
+			if (TGPD_IS_FLAGS_HWO((TGPD *) p))
+				hwo++;
+		}
+
+		pr_notice("[FORGE_QMU] rxstate ep%d RQCSR=%08x RQSAR=%08x RQCPR=%08x RQLDPR=%08x last=%p end=%p ring=[%p,%p) gpd=%u hwo=%u\n",
+			  ep, os_readl(USB_QMU_RQCSR(ep)), os_readl(USB_QMU_RQSAR(ep)),
+			  os_readl(USB_QMU_RQCPR(ep)), os_readl(USB_QMU_RQLDPR(ep)),
+			  Rx_gpd_last[ep], Rx_gpd_end[ep], start, end, total, hwo);
+	}
+
+	pr_notice("[FORGE_QMU] rxstate global QGCSR=%08x QEMIR=%08x QCR0=%08x QCR1=%08x QCR2=%08x QCR3=%08x\n",
+		  os_readl(U3D_QGCSR), os_readl(U3D_QEMIR), os_readl(U3D_QCR0),
+		  os_readl(U3D_QCR1), os_readl(U3D_QCR2), os_readl(U3D_QCR3));
+}
+
 /**
  * mu3d_hal_resume_qmu - resume qmu function
  * @args - arg1: ep number, arg2: dir

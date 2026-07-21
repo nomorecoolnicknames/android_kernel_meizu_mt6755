@@ -26,4 +26,5 @@ obj-y := musb_hdrc.o
 musb_hdrc-y := musb_core.o
 musb_hdrc-y += musb_gadget_ep0.o musb_gadget.o
 musb_hdrc-y += musb_init.o ssusb_qmu.o mtk_usb.o
+musb_hdrc-y += forge_usb_txwatch.o
 musb_hdrc-$(CONFIG_DEBUG_FS) += musb_debugfs.o

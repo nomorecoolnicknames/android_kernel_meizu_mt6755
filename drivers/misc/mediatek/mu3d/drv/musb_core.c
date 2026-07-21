@@ -94,6 +94,8 @@
 #include <linux/prefetch.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
+/* atomic_t for the musb_start generation counter (included explicitly). */
+#include <linux/atomic.h>
 #ifdef CONFIG_USB_C_SWITCH
 #include <typec.h>
 #endif
@@ -142,6 +144,63 @@ u32 fake_CDP;
 module_param(debug_level, int, 0644);
 MODULE_PARM_DESC(debug_level, "Debug Print Log Lvl");
 module_param(fake_CDP, int, 0644);
+
+/* musb_suspend_work must not power down a controller that was restarted
+ * while the work sat queued.
+ *
+ * musb_stop() clears is_active and then queues suspend_work asynchronously
+ * (its active_ep == 0 arm). musb_suspend_work() re-reads only
+ * `is_clk_on == 1 && !usb_cable_connected()`, so it cannot notice a
+ * musb_start() that ran in between; when it loses that race it calls
+ * set_ssusb_ip_sleep() (SSUSB_IP_SW_RST) and clears is_clk_on on a
+ * controller the gadget layer believes is up, leaving softconnect=1,
+ * is_active=1, is_clk_on=0.
+ *
+ * Nothing in the driver can leave that state:
+ *   - connection_work's dev_status is latched ON, so a "cable IN" event
+ *     takes the else-branch and never calls musb_start();
+ *   - the rescue watchdog requires !is_active, and is_active is 1;
+ *   - musb_pullup() bails "power and clk is not ready", so
+ *     usb_gadget_connect() from android_enable() is a no-op;
+ *   - forge_usb_keepalive refuses the cable-out teardown that would reset
+ *     dev_status, because g.speed != UNKNOWN && softconnect && is_active;
+ *   - with the clock off no interrupt can arrive to clear g.speed, so not
+ *     even a replug clears it.
+ * Only a reboot recovers.
+ *
+ * The fix is an ordering check: musb_start() bumps a generation counter,
+ * the two sites that queue suspend_work capture that generation at enqueue
+ * time, and the work refuses to power anything down if the generation
+ * moved while it was queued. `!musb->is_active` would be the wrong test:
+ * is_active is 0 on every host suspend (the SUSPEND_INTR /
+ * OTG_STATE_B_PERIPHERAL arm of musb_stage0_irq() assigns is_active =
+ * is_otg_enabled() && otg->gadget->b_hnp_enable).
+ *
+ * Default on, unlike stock. Cost when it fires: the USB clock stays on
+ * until the next teardown queues the work again with a fresh generation,
+ * so the guard cannot latch.
+ */
+int forge_usb_suspend_guard = 1;
+module_param(forge_usb_suspend_guard, int, 0644);
+MODULE_PARM_DESC(forge_usb_suspend_guard,
+	"m681: 1 = suspend_work must not power down a controller restarted while it was queued");
+/* Bumped once per musb_start(), at its top, so a start that is merely IN FLIGHT
+ * when the work runs is still detected. */
+static atomic_t forge_usb_start_gen = ATOMIC_INIT(0);
+/* The value of the above captured where suspend_work was queued. */
+static atomic_t forge_usb_suspend_gen = ATOMIC_INIT(0);
+/* Positive record: an invisible fix is unfalsifiable, so count and log every
+ * powerdown this refuses.  Read by mtk_usb.c's /proc/m681_usb_state. */
+unsigned int forge_usb_suspend_saves;
+
+void forge_usb_queue_suspend_work(struct musb *musb)
+{
+	/* Capture BEFORE queueing. A musb_start() slipping between the capture
+	 * and the queue makes the generations differ, so the work refuses —
+	 * conservative in the safe direction (a clock left on, not a wedge). */
+	atomic_set(&forge_usb_suspend_gen, atomic_read(&forge_usb_start_gen));
+	schedule_work(&musb->suspend_work);
+}
 
 #ifdef EP_PROFILING
 u32 is_prof = 1;
@@ -893,6 +952,10 @@ void musb_start(struct musb *musb)
 {
 	u8 devctl = (u8) os_readl(U3D_DEVICE_CONTROL);
 
+	/* Bump at the top, not the bottom, so a musb_start() still in flight
+	 * when a queued musb_suspend_work() runs is detected too. */
+	atomic_inc(&forge_usb_start_gen);
+
 	os_printk(K_INFO, "%s  <== devctl %02x\n", __func__, devctl);
 
 	if (musb->is_clk_on == 0) {
@@ -1062,7 +1125,7 @@ void musb_stop(struct musb *musb)
 	dev_dbg(musb->controller, "HDRC disabled\n");
 
 	if (musb->active_ep == 0)
-		schedule_work(&musb->suspend_work);
+		forge_usb_queue_suspend_work(musb);	/* captures the start generation */
 
 	/* Move to suspend work queue */
 #ifdef NEVER
@@ -1979,6 +2042,24 @@ static void musb_suspend_work(struct work_struct *data)
 
 	os_printk(K_INFO, "%s active_ep=%d, clk_on=%d\n", __func__, musb->active_ep,
 		  musb->is_clk_on);
+
+	/* Ordering check: if musb_start() ran (or started) after this work
+	 * was queued, powering the IP down now would wedge the controller
+	 * (softconn=1/active=1/clk=0). See the comment next to
+	 * forge_usb_suspend_guard. */
+	{
+		int qgen = atomic_read(&forge_usb_suspend_gen);
+		int cgen = atomic_read(&forge_usb_start_gen);
+
+		if (forge_usb_suspend_guard && cgen != qgen) {
+			forge_usb_suspend_saves++;
+			pr_emerg("[FORGE_M681] usb suspend-guard: REFUSED powerdown, musb_start intervened while queued (start_gen %d->%d softconn=%d active=%d clk=%d speed=%d) saves=%u\n",
+				 qgen, cgen, (int)musb->softconnect,
+				 (int)musb->is_active, (int)musb->is_clk_on,
+				 (int)musb->g.speed, forge_usb_suspend_saves);
+			return;
+		}
+	}
 
 	if (musb->is_clk_on == 1
 	    && !usb_cable_connected()) {
