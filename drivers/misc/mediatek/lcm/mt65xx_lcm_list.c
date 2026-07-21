@@ -17,6 +17,15 @@
 #include <platform/disp_drv_platform.h>
 #else
 #include <linux/delay.h>
+#if defined(ILI9881P_HD_DSI_TXD)
+extern LCM_DRIVER ili9881p_hd_dsi_txd_lcm_drv;
+#endif
+#if defined(ILI9885_FHD_DSI_VDO_TXD1)
+extern LCM_DRIVER ili9885_fhd_dsi_vdo_txd_lcm_drv1;
+#endif
+#if defined(HX8399_FHD_DSI_VDO_TXD_AUO_AL1518)
+extern LCM_DRIVER hx8399_fhd_dsi_vdo_txd_auo_al1518_lcm_drv;
+#endif
 /* #include <mach/mt_gpio.h> */
 #endif
 LCM_DSI_MODE_CON lcm_dsi_mode;
@@ -34,11 +43,14 @@ LCM_DSI_MODE_CON lcm_dsi_mode;
 #endif
 
 LCM_DRIVER *lcm_driver_list[] = {
-#if defined(TD4310_TFT60_HXGD_LFHD)
-	&td4310_tft60_hxgd_lfhd_lcm_drv,
+#if defined(ILI9881P_HD_DSI_TXD)
+	&ili9881p_hd_dsi_txd_lcm_drv,
 #endif
-#if defined(TD4310_AUO60_WCL_LFHD)
-	&td4310_auo60_wcl_lfhd_lcm_drv,
+#if defined(ILI9885_FHD_DSI_VDO_TXD1)
+	&ili9885_fhd_dsi_vdo_txd_lcm_drv1,
+#endif
+#if defined(HX8399_FHD_DSI_VDO_TXD_AUO_AL1518)
+	&hx8399_fhd_dsi_vdo_txd_auo_al1518_lcm_drv,
 #endif
 #if defined(OTM1284A_HD720_DSI_VDO_TM)
 	&otm1284a_hd720_dsi_vdo_tm_lcm_drv,
@@ -50,9 +62,24 @@ LCM_DRIVER *lcm_driver_list[] = {
 #if defined(NT35595_FHD_DSI_CMD_TRULY_8163)
 	&nt35595_fhd_dsi_cmd_truly_8163_lcm_drv,
 #endif
+#if defined(HX8394F_HD720_DSI_VDO_TRULY)
+	&hx8394f_hd720_dsi_vdo_truly_lcm_drv,
+#endif
+
+#if defined(ILI9881C_HD720_DSI_VDO_DIJING)
+	&ili9881c_hd720_dsi_vdo_dijing_lcm_drv,
+#endif
+
+#if defined(ILI9881C_HD720_DSI_VDO_HELITEC)
+	&ili9881c_hd720_dsi_vdo_helitec_lcm_drv,
+#endif
 
 #if defined(NT35523_WXGA_DSI_VDO_8163)
 	&nt35523_wxga_dsi_vdo_8163_lcm_drv,
+#endif
+
+#if defined(FT8707_FHD_DSI_VDO_LGD)
+	&ft8707_fhd_dsi_vdo_lgd_drv,
 #endif
 
 #if defined(EK79007_WSVGALNL_DSI_VDO)
@@ -187,10 +214,6 @@ LCM_DRIVER *lcm_driver_list[] = {
 
 #if defined(NT35582_RGB_6575)
 	&nt35582_rgb_6575_lcm_drv,
-#endif
-
-#if defined(ILI9881C_HD_DSI_VDO_ILITEK_NT50358)
-	&ili9881c_hd_dsi_vdo_ilitek_nt50358_lcm_drv,
 #endif
 
 #if  defined(NT51012_HD720_DSI_VDO)
@@ -457,6 +480,10 @@ LCM_DRIVER *lcm_driver_list[] = {
 
 #if defined(NT35512_WVGA_DSI_VDO_BOE)
 	&nt35512_wvga_dsi_vdo_boe_drv,
+#endif
+
+#if defined(HX8389C_DSI_VDO)
+	&hx8389c_dsi_vdo_lcm_drv,
 #endif
 
 #if defined(HX8392A_DSI_CMD)
@@ -919,10 +946,6 @@ LCM_DRIVER *lcm_driver_list[] = {
 	&nt35510_dsi_cmd_lcm_drv,
 #endif
 
-#if defined(NT35695B_FHD_DSI_CMD_TRULY_NT50358)
-	&nt35695B_fhd_dsi_cmd_truly_nt50358_lcm_drv,
-#endif
-
 #if defined(NT35695_FHD_DSI_CMD_TRULY_NT50358)
 	&nt35695_fhd_dsi_cmd_truly_nt50358_lcm_drv,
 #endif
@@ -931,6 +954,13 @@ LCM_DRIVER *lcm_driver_list[] = {
 	&nt35695_fhd_dsi_vdo_truly_nt50358_lcm_drv,
 #endif
 
+#if defined(NT35695B_FHD_DSI_VDO_AUO_NT50358_EXTERN)
+	&nt35695B_fhd_dsi_vdo_auo_nt50358_extern_lcm_drv,
+#endif
+
+#if defined(NT35695B_FHD_DSI_VDO_AUO_NT50358)
+	&nt35695B_fhd_dsi_vdo_auo_nt50358_lcm_drv,
+#endif
 #if defined(NT35695_FHD_DSI_CMD_TRULY_NT50358_720P)
 	&nt35695_fhd_dsi_cmd_truly_nt50358_720p_lcm_drv,
 #endif
@@ -938,21 +968,34 @@ LCM_DRIVER *lcm_driver_list[] = {
 #if defined(NT35695_FHD_DSI_CMD_TRULY_NT50358_QHD)
 	&nt35695_fhd_dsi_cmd_truly_nt50358_qhd_lcm_drv,
 #endif
-#if defined(NT35695_FHD_DSI_CMD_TRULY_RT5081)
-	&nt35695_fhd_dsi_cmd_truly_rt5081_lcm_drv,
+
+#if defined(NT35695_FHD_DSI_CMD_TRULY_NT50358_LANESWAP)
+	&nt35695_fhd_dsi_cmd_truly_nt50358_laneswap_lcm_drv,
 #endif
-#if defined(NT35695_FHD_DSI_VDO_TRULY_RT5081)
-	&nt35695_fhd_dsi_vdo_truly_rt5081_lcm_drv,
+
+#if defined(NT35695_FHD_DSI_VDO_TRULY_NT50358_LANESWAP)
+	&nt35695_fhd_dsi_vdo_truly_nt50358_laneswap_lcm_drv,
 #endif
-#if defined(NT35695B_FHD_DSI_CMD_TRULY_RT5081)
-	&nt35695B_fhd_dsi_cmd_truly_rt5081_lcm_drv,
-#endif
+
 #if defined(RM69032_DSI_CMD)
 	&rm69032_dsi_cmd_lcm_drv,
 #endif
 
 #if defined(ST7789H2_DBI)
 	&st7789h2_dbi_lcm_drv,
+#endif
+#if defined(NT35695_FHD_DSI_CMD_TRULY_RT5081)
+	&nt35695_fhd_dsi_cmd_truly_rt5081_lcm_drv,
+#endif
+#if defined(NT35695_FHD_DSI_VDO_TRULY_RT5081)
+	&nt35695_fhd_dsi_vdo_truly_rt5081_lcm_drv,
+#endif
+#if defined(NT35695B_FHD_DSI_CMD_AUO_RT5081)
+	&nt35695B_fhd_dsi_cmd_auo_rt5081_lcm_drv,
+#endif
+
+#if defined(NT35695B_FHD_DSI_VDO_AUO_RT5081)
+	&nt35695B_fhd_dsi_vdo_auo_rt5081_lcm_drv,
 #endif
 
 #if defined(CM_N070ICE_DSI_VDO_MT8173)
@@ -975,6 +1018,10 @@ LCM_DRIVER *lcm_driver_list[] = {
 	&nt35595_truly_fhd_dsi_vdo_lcm_drv,
 #endif
 
+#if defined(B080UAN01_2_WUXGA_DSI_VDO)
+	&b080uan01_2_wuxga_dsi_vdo_lcm_drv,
+#endif
+
 #if defined(NT36850_WQHD_DSI_2K_CMD)
 	&nt36850_wqhd_dsi_2k_cmd_lcm_drv,
 #endif
@@ -983,68 +1030,43 @@ LCM_DRIVER *lcm_driver_list[] = {
 	&s6e3ha3_wqhd_2k_cmd_lcm_drv,
 #endif
 
-#if defined(S6E3FA3_FHD_CMD)
-	&s6e3fa3_fhd_cmd_lcm_drv,
-#endif
-
 #if defined(NT35595_FHD_DSI_CMD_TRULY_NT50358_720P_EXTERN)
 	&nt35595_fhd_dsi_cmd_truly_nt50358_720p_extern_lcm_drv,
+#endif
+
+#if defined(NT35695_FHD_DSI_VDO_TRULY_NT50358_720P)
+	&nt35695_fhd_dsi_vdo_truly_nt50358_720p_lcm_drv,
 #endif
 
 #if defined(NT35695B_FHD_DSI_CMD_AUO_NT50358)
 	&nt35695B_fhd_dsi_cmd_auo_nt50358_lcm_drv,
 #endif
 
-#if defined(NT35695B_FHD_DSI_VDO_AUO_NT50358)
-	&nt35695B_fhd_dsi_vdo_auo_nt50358_lcm_drv,
+#if defined(AUO_WUXGA_DSI_VDO)
+	&auo_wuxga_dsi_vdo_lcm_drv,
 #endif
 
+#if defined(NT35695B_FHD_DSI_CMD_AUO_NT50358_EXTERN)
+	&nt35695B_fhd_dsi_cmd_auo_nt50358_extern_lcm_drv,
+#endif
 #if defined(NT35695B_FHD_DSI_CMD_AUO_NT50358_720P)
 	&nt35695B_fhd_dsi_cmd_auo_nt50358_720p_lcm_drv,
 #endif
 
-#if defined(NT35695B_FHD_DSI_CMD_AUO_NT50358_HDP)
-	&nt35695B_fhd_dsi_cmd_auo_nt50358_hdp_lcm_drv,
+#if defined(NT35695B_FHD_DSI_CMD_AUO_NT50358_720P_EXTERN)
+	&nt35695B_fhd_dsi_cmd_auo_nt50358_720p_extern_lcm_drv,
 #endif
-
-#if defined(NT35695B_FHD_DSI_CMD_AUO_NT50358_QHD)
-	&nt35695B_fhd_dsi_cmd_auo_nt50358_qhd_lcm_drv,
-#endif
-
-#if defined(NT35695B_FHD_DSI_CMD_AUO_RT5081)
-	&nt35695B_fhd_dsi_cmd_auo_rt5081_lcm_drv,
-#endif
-
-#if defined(NT35695B_FHD_DSI_VDO_AUO_RT5081)
-	&nt35695B_fhd_dsi_vdo_auo_rt5081_lcm_drv,
-#endif
-
-/* [liliwen] Add ft8716 */
-#if defined(FT8716_FHD_DSI_VDO_RT5081)
-	&ft8716_fhd_dsi_vdo_rt5081_lcm_drv,
-#endif
-
-#if defined(NT35695B_FHD_DSI_VDO_AUO_RT5081_HDP)
-	&nt35695B_fhd_dsi_vdo_auo_rt5081_hdp_lcm_drv,
-#endif
-
-#if defined(NT36672_FHDP_DSI_VDO_TIANMA_NT50358)
-	&nt36672_fhdp_dsi_vdo_tianma_nt50358_lcm_drv,
-#endif
-
-#if defined(TD4310_FHD_DSI_VDO_CHUANGWEI_MALATA)
-	&td4310_fhd_dsi_vdo_chuangwei_malata_lcm_drv,
-#endif
-#if defined(OPPO_TIANMA_TD4310_FHDP_DSI_VDO_RT5081)
-	&oppo_tianma_td4310_fhdp_dsi_vdo_rt5081_lcm_drv,
-#endif
-
-#if defined(HCT_TD4310_DSI_VDO_FHD_AUO_60_BY)
-	&hct_td4310_dsi_vdo_fhd_auo_60_by_lcm_drv,
-#endif
+#if defined(DUMMY_LCD) //add by caozhg
+  &dummy_lcd_lcm_drv,
+#endif 
 };
 
 unsigned char lcm_name_list[][128] = {
+	"ili9881p_hd_dsi_txd",
+#if defined(ILI9885_FHD_DSI_VDO_TXD1)
+	"ili9885_fhd_dsi_vdo_txd1",
+#endif
+
 #if defined(HX8392A_DSI_CMD)
 	"hx8392a_dsi_cmd",
 #endif
@@ -1091,18 +1113,19 @@ unsigned char lcm_name_list[][128] = {
 #define LCM_COMPILE_ASSERT_XX(condition, line) char assertion_failed_at_line_##line[(condition) ? 1 : -1]
 
 unsigned int lcm_count = sizeof(lcm_driver_list) / sizeof(LCM_DRIVER *);
-LCM_COMPILE_ASSERT(sizeof(lcm_driver_list) / sizeof(LCM_DRIVER *) != 0);
+LCM_COMPILE_ASSERT(0 != sizeof(lcm_driver_list) / sizeof(LCM_DRIVER *));
 #if defined(NT35520_HD720_DSI_CMD_TM) | defined(NT35520_HD720_DSI_CMD_BOE) | \
 	defined(NT35521_HD720_DSI_VDO_BOE) | defined(NT35521_HD720_DSI_VIDEO_TM)
 static unsigned char lcd_id_pins_value = 0xFF;
 
-/**/
-/* Function:       which_lcd_module_triple*/
-/* Description:    read LCD ID PIN status,could identify three status:highlowfloat*/
-/* Input:           none*/
-/* Output:         none*/
-/* Return:         LCD ID1|ID0 value*/
-/* Others: */
+/**
+ * Function:       which_lcd_module_triple
+ * Description:    read LCD ID PIN status,could identify three status:highlowfloat
+ * Input:           none
+ * Output:         none
+ * Return:         LCD ID1|ID0 value
+ * Others:
+ */
 unsigned char which_lcd_module_triple(void)
 {
 	unsigned char  high_read0 = 0;
@@ -1116,41 +1139,41 @@ unsigned char which_lcd_module_triple(void)
 	unsigned int ret = 0;
 
 	/*only recognise once*/
-	if (lcd_id_pins_value != 0xFF)
+	if (0xFF != lcd_id_pins_value)
 		return lcd_id_pins_value;
 
 	/*Solve Coverity scan warning : check return value*/
 	ret = mt_set_gpio_mode(GPIO_DISP_ID0_PIN, GPIO_MODE_00);
-	if (ret != 0)
+	if (0 != ret)
 		LCD_DEBUG("ID0 mt_set_gpio_mode fail\n");
 
 	ret = mt_set_gpio_dir(GPIO_DISP_ID0_PIN, GPIO_DIR_IN);
-	if (ret != 0)
+	if (0 != ret)
 		LCD_DEBUG("ID0 mt_set_gpio_dir fail\n");
 
 	ret = mt_set_gpio_pull_enable(GPIO_DISP_ID0_PIN, GPIO_PULL_ENABLE);
-	if (ret != 0)
+	if (0 != ret)
 		LCD_DEBUG("ID0 mt_set_gpio_pull_enable fail\n");
 
 	ret = mt_set_gpio_mode(GPIO_DISP_ID1_PIN, GPIO_MODE_00);
-	if (ret != 0)
+	if (0 != ret)
 		LCD_DEBUG("ID1 mt_set_gpio_mode fail\n");
 
 	ret = mt_set_gpio_dir(GPIO_DISP_ID1_PIN, GPIO_DIR_IN);
-	if (ret != 0)
+	if (0 != ret)
 		LCD_DEBUG("ID1 mt_set_gpio_dir fail\n");
 
 	ret = mt_set_gpio_pull_enable(GPIO_DISP_ID1_PIN, GPIO_PULL_ENABLE);
-	if (ret != 0)
+	if (0 != ret)
 		LCD_DEBUG("ID1 mt_set_gpio_pull_enable fail\n");
 
 	/*pull down ID0 ID1 PIN*/
 	ret = mt_set_gpio_pull_select(GPIO_DISP_ID0_PIN, GPIO_PULL_DOWN);
-	if (ret != 0)
+	if (0 != ret)
 		LCD_DEBUG("ID0 mt_set_gpio_pull_select->Down fail\n");
 
 	ret = mt_set_gpio_pull_select(GPIO_DISP_ID1_PIN, GPIO_PULL_DOWN);
-	if (ret != 0)
+	if (0 != ret)
 		LCD_DEBUG("ID1 mt_set_gpio_pull_select->Down fail\n");
 
 	/* delay 100ms , for discharging capacitance*/
@@ -1160,11 +1183,11 @@ unsigned char which_lcd_module_triple(void)
 	low_read1 = mt_get_gpio_in(GPIO_DISP_ID1_PIN);
 	/* pull up ID0 ID1 PIN */
 	ret = mt_set_gpio_pull_select(GPIO_DISP_ID0_PIN, GPIO_PULL_UP);
-	if (ret != 0)
+	if (0 != ret)
 		LCD_DEBUG("ID0 mt_set_gpio_pull_select->UP fail\n");
 
 	ret = mt_set_gpio_pull_select(GPIO_DISP_ID1_PIN, GPIO_PULL_UP);
-	if (ret != 0)
+	if (0 != ret)
 		LCD_DEBUG("ID1 mt_set_gpio_pull_select->UP fail\n");
 
 	/* delay 100ms , for charging capacitance */
@@ -1176,28 +1199,28 @@ unsigned char which_lcd_module_triple(void)
 	if (low_read0 != high_read0) {
 		/*float status , pull down ID0 ,to prevent electric leakage*/
 		ret = mt_set_gpio_pull_select(GPIO_DISP_ID0_PIN, GPIO_PULL_DOWN);
-		if (ret != 0)
+		if (0 != ret)
 			LCD_DEBUG("ID0 mt_set_gpio_pull_select->Down fail\n");
 
 		lcd_id0 = LCD_HW_ID_STATUS_FLOAT;
-	} else if ((low_read0 == LCD_HW_ID_STATUS_LOW) && (high_read0 == LCD_HW_ID_STATUS_LOW)) {
+	} else if ((LCD_HW_ID_STATUS_LOW == low_read0) && (LCD_HW_ID_STATUS_LOW == high_read0)) {
 		/*low status , pull down ID0 ,to prevent electric leakage*/
 		ret = mt_set_gpio_pull_select(GPIO_DISP_ID0_PIN, GPIO_PULL_DOWN);
-		if (ret != 0)
+		if (0 != ret)
 			LCD_DEBUG("ID0 mt_set_gpio_pull_select->Down fail\n");
 
 		lcd_id0 = LCD_HW_ID_STATUS_LOW;
-	} else if ((low_read0 == LCD_HW_ID_STATUS_HIGH) && (high_read0 == LCD_HW_ID_STATUS_HIGH)) {
+	} else if ((LCD_HW_ID_STATUS_HIGH == low_read0) && (LCD_HW_ID_STATUS_HIGH == high_read0)) {
 		/*high status , pull up ID0 ,to prevent electric leakage*/
 		ret = mt_set_gpio_pull_select(GPIO_DISP_ID0_PIN, GPIO_PULL_UP);
-		if (ret != 0)
+		if (0 != ret)
 			LCD_DEBUG("ID0 mt_set_gpio_pull_select->UP fail\n");
 
 		lcd_id0 = LCD_HW_ID_STATUS_HIGH;
 	} else {
 		LCD_DEBUG(" Read LCD_id0 error\n");
 		ret = mt_set_gpio_pull_select(GPIO_DISP_ID0_PIN, GPIO_PULL_DISABLE);
-		if (ret != 0)
+		if (0 != ret)
 			LCD_DEBUG("ID0 mt_set_gpio_pull_select->Disbale fail\n");
 
 		lcd_id0 = LCD_HW_ID_STATUS_ERROR;
@@ -1207,21 +1230,21 @@ unsigned char which_lcd_module_triple(void)
 	if (low_read1 != high_read1) {
 		/*float status , pull down ID1 ,to prevent electric leakage*/
 		ret = mt_set_gpio_pull_select(GPIO_DISP_ID1_PIN, GPIO_PULL_DOWN);
-		if (ret != 0)
+		if (0 != ret)
 			LCD_DEBUG("ID1 mt_set_gpio_pull_select->Down fail\n");
 
 		lcd_id1 = LCD_HW_ID_STATUS_FLOAT;
-	} else if ((low_read1 == LCD_HW_ID_STATUS_LOW) && (high_read1 == LCD_HW_ID_STATUS_LOW)) {
+	} else if ((LCD_HW_ID_STATUS_LOW == low_read1) && (LCD_HW_ID_STATUS_LOW == high_read1)) {
 		/*low status , pull down ID1 ,to prevent electric leakage*/
 		ret = mt_set_gpio_pull_select(GPIO_DISP_ID1_PIN, GPIO_PULL_DOWN);
-		if (ret != 0)
+		if (0 != ret)
 			LCD_DEBUG("ID1 mt_set_gpio_pull_select->Down fail\n");
 
 		lcd_id1 = LCD_HW_ID_STATUS_LOW;
-	} else if ((low_read1 == LCD_HW_ID_STATUS_HIGH) && (high_read1 == LCD_HW_ID_STATUS_HIGH)) {
+	} else if ((LCD_HW_ID_STATUS_HIGH == low_read1) && (LCD_HW_ID_STATUS_HIGH == high_read1)) {
 		/*high status , pull up ID1 ,to prevent electric leakage*/
 		ret = mt_set_gpio_pull_select(GPIO_DISP_ID1_PIN, GPIO_PULL_UP);
-		if (ret != 0)
+		if (0 != ret)
 			LCD_DEBUG("ID1 mt_set_gpio_pull_select->UP fail\n");
 
 		lcd_id1 = LCD_HW_ID_STATUS_HIGH;
@@ -1229,7 +1252,7 @@ unsigned char which_lcd_module_triple(void)
 
 		LCD_DEBUG(" Read LCD_id1 error\n");
 		ret = mt_set_gpio_pull_select(GPIO_DISP_ID1_PIN, GPIO_PULL_DISABLE);
-		if (ret != 0)
+		if (0 != ret)
 			LCD_DEBUG("ID1 mt_set_gpio_pull_select->Disable fail\n");
 
 		lcd_id1 = LCD_HW_ID_STATUS_ERROR;

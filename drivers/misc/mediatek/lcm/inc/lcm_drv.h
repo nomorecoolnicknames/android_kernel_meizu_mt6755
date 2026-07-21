@@ -831,6 +831,7 @@ typedef struct {
 
 	/* /////////////////////////CABC backlight related function */
 	void (*set_backlight)(unsigned int level);
+	void (*set_lcm_panel_support)(void);
 	void (*set_backlight_cmdq)(void *handle, unsigned int level);
 	void (*set_pwm)(unsigned int divider);
 	unsigned int (*get_pwm)(unsigned int divider);

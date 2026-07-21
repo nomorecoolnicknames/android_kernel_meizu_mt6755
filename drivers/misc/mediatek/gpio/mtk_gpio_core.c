@@ -13,6 +13,7 @@
 
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/sched.h>	/* current->comm for the bias pad trap */
 #include <linux/kernel.h>
 #include <generated/autoconf.h>
 #include <linux/platform_device.h>
@@ -213,6 +214,26 @@ static struct mt_gpio_obj_t *mt_gpio = &mt_gpio_obj;
 	S32 mt_set_gpio_mode(u32 pin, u32 mode)			{return RSUCCESS; }
 	S32 mt_get_gpio_mode(u32 pin)				{return GPIO_MODE_UNSUPPORTED; }
 #else
+
+/* Bias pad trap: logs and backtraces any API write that degrades the
+ * TPS65132 EN pads GPIO7/GPIO12 (panel AVEE/AVDD enables). */
+static void m681_bias_pad_trap(const char *op, unsigned long pin,
+			       unsigned long val, int bad)
+{
+	static int m681_bias_trap_hits;
+	unsigned long q = pin & 0x7fffffffUL;
+
+	if (q != 7 && q != 12)
+		return;
+	if (!bad)
+		return;
+	pr_err("[M681][BIASTRAP44] %s(pin=%lu, val=%lu) degrades TPS65132 %s pad! hit=%d comm=%s\n",
+	       op, q, val, q == 12 ? "ENP(G12)" : "ENN(G7)",
+	       ++m681_bias_trap_hits, current->comm);
+	if (m681_bias_trap_hits <= 8)
+		dump_stack();
+}
+
 int mt_set_gpio_dir(unsigned long pin, unsigned long dir)
 {
 	/* int ret=0; */
@@ -221,6 +242,7 @@ int mt_set_gpio_dir(unsigned long pin, unsigned long dir)
 		return -ERINVAL;
 	}
 
+	m681_bias_pad_trap("set_dir", pin, dir, dir == GPIO_DIR_IN);
 	return MT_GPIO_OPS_SET(pin, set_dir, dir);
 }
 EXPORT_SYMBOL(mt_set_gpio_dir);
@@ -350,6 +372,7 @@ int mt_set_gpio_out(unsigned long pin, unsigned long output)
 		GPIOERR("Parameter output error: %d\n", (int)output);
 		return -ERINVAL;
 	}
+	m681_bias_pad_trap("set_out", pin, output, output == GPIO_OUT_ZERO);
 	return MT_GPIO_OPS_SET(pin, set_out, output);
 }
 EXPORT_SYMBOL(mt_set_gpio_out);
@@ -372,6 +395,7 @@ int mt_set_gpio_mode(unsigned long pin, unsigned long mode)
 		GPIOERR("Parameter mode error: %d\n", (int)mode);
 		return -ERINVAL;
 	}
+	m681_bias_pad_trap("set_mode", pin, mode, mode != GPIO_MODE_00);
 	return MT_GPIO_OPS_SET(pin, set_mode, mode);
 }
 EXPORT_SYMBOL(mt_set_gpio_mode);
