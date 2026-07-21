@@ -251,6 +251,30 @@ static int __init hmp_cpu_mask_setup(void)
 		dc++;
 	}
 
+	/*
+	 * Make sure every possible CPU has a non-NULL hmp_cpu_domain. This
+	 * runs very early (sched_init -> init_sched_fair_class ->
+	 * cmp_cputopo_domain_setup -> arch_build_cpu_topology_domain ->
+	 * init_cpu_topology), before the CPUs are enumerated
+	 * (cpu_logical_map empty), so parse_dt_topology() fails and
+	 * init_cpu_topology() leaves every cluster_id == -1 (and latches
+	 * cpu_topology_init=1, so the later smp_prepare_cpus parse is
+	 * skipped). The hmp_domains built above then cover no CPU, and the
+	 * first idle schedule calls idle_balance() -> hmp_idle_pull() ->
+	 * hmp_cpu_is_slowest(), which dereferences the NULL per-cpu domain.
+	 * Pin any uncovered CPU to the slowest (last) domain so
+	 * hmp_cpu_is_slowest() == 1 and hmp_idle_pull() returns 0 early. HMP
+	 * is degenerate until the topology parse runs late enough.
+	 */
+	if (!list_empty(&hmp_domains)) {
+		struct hmp_domain *slowest =
+			list_entry(hmp_domains.prev, struct hmp_domain, hmp_domains);
+
+		for_each_possible_cpu(cpu)
+			if (!per_cpu(hmp_cpu_domain, cpu))
+				per_cpu(hmp_cpu_domain, cpu) = slowest;
+	}
+
 	return 1;
 }
 

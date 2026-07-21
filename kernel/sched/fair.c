@@ -8674,8 +8674,18 @@ __init void init_sched_fair_class(void)
 #endif /* SMP */
 	cmp_cputopo_domain_setup();
 
-	if (sched_feat(SCHED_HMP))
-		hmp_cpu_mask_setup();
+	/*
+	 * Set up the HMP per-cpu domains under a compile-time guard, as the
+	 * 3.18 tree and mainline MTK do. The use site
+	 * idle_balance() -> hmp_idle_pull() is built in unconditionally
+	 * (CONFIG_SCHED_HMP_PLUS=y), so gating the setup on the runtime
+	 * sched_feat(SCHED_HMP) flag left per_cpu(hmp_cpu_domain) NULL, and
+	 * the first idle schedule (ksoftirqd/0 parking at ~10 ms) crashed in
+	 * hmp_idle_pull() with a NULL dereference.
+	 */
+#ifdef CONFIG_SCHED_HMP
+	hmp_cpu_mask_setup();
+#endif
 }
 
 /* To find a CPU with max spare capacity in the same cluster with target */
