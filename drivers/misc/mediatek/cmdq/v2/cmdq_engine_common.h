@@ -82,3 +82,5 @@ enum CMDQ_ENG_ENUM {
 };
 
 #endif				/* __CMDQ_ENGINE_COMMON_H__ */
+
+typedef enum CMDQ_ENG_ENUM CMDQ_ENG_ENUM;

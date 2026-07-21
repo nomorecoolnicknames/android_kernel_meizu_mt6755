@@ -571,3 +571,4 @@ extern "C" {
 }
 #endif
 #endif				/* __CMDQ_RECORD_H__ */
+typedef struct cmdqRecStruct *cmdqRecHandle;

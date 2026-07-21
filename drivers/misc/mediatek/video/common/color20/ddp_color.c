@@ -16,18 +16,15 @@
 #include <linux/spinlock.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/m3note_board.h>
 #include <disp_drv_platform.h>
-#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
 #include <disp_helper.h>
 #endif
 
 #if defined(CONFIG_MTK_CLKMGR) || defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795)
 #include <mach/mt_clkmgr.h>
-#elif defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#elif defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
 #include "ddp_clkmgr.h"
 #endif
 
@@ -37,17 +34,38 @@
 #include "ddp_color.h"
 #include "cmdq_def.h"
 
-#if defined(CONFIG_MACH_MT6757)
-#include "mt-plat/mtk_chip.h"
-#endif
-
-#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
 #define COLOR_SUPPORT_PARTIAL_UPDATE
 #endif
 
+static int first_set_color_enhancement_mode = 0;
+static DISP_PQ_PARAM *m_pqparam;
+
+//std_image
+static DISP_PQ_PARAM pqparam_std = {
+u4SHPGain:2,
+u4SatGain:4,
+u4PartialY:0,
+u4HueAdj:{9,9,12,12},
+u4SatAdj:{0,6,10,10},
+u4Contrast:4,
+u4Brightness:4,
+u4Ccorr:0
+};
+//viv_image
+static  DISP_PQ_PARAM pqparam_viv = {
+u4SHPGain:2,
+u4SatGain:9,
+u4PartialY:0,
+u4HueAdj:{9,9,12,12},
+u4SatAdj:{16,16,16,16},
+u4Contrast:4,
+u4Brightness:4,
+u4Ccorr:0
+};
+
 /* global PQ param for kernel space */
-static struct DISP_PQ_PARAM g_Color_Param[2] = {
+static DISP_PQ_PARAM g_Color_Param[2] = {
 	{
 u4SHPGain:2,
 u4SatGain:4,
@@ -56,10 +74,7 @@ u4HueAdj:{9, 9, 9, 9},
 u4SatAdj:{0, 0, 0, 0},
 u4Contrast:4,
 u4Brightness:4,
-u4Ccorr:0,
-#if defined(COLOR_3_0)
-u4ColorLUT:0
-#endif
+u4Ccorr:0
 	 },
 	{
 u4SHPGain:2,
@@ -69,14 +84,11 @@ u4HueAdj:{9, 9, 9, 9},
 u4SatAdj:{0, 0, 0, 0},
 u4Contrast:4,
 u4Brightness:4,
-u4Ccorr:1,
-#if defined(COLOR_3_0)
-u4ColorLUT:0
-#endif
+u4Ccorr:1
 	}
 };
 
-static struct DISP_PQ_PARAM g_Color_Cam_Param = {
+static DISP_PQ_PARAM g_Color_Cam_Param = {
 u4SHPGain:0,
 u4SatGain:4,
 u4PartialY:0,
@@ -84,13 +96,10 @@ u4HueAdj:{9, 9, 9, 9},
 u4SatAdj:{0, 0, 0, 0},
 u4Contrast:4,
 u4Brightness:4,
-u4Ccorr:2,
-#if defined(COLOR_3_0)
-u4ColorLUT:0
-#endif
+u4Ccorr:2
 };
 
-static struct DISP_PQ_PARAM g_Color_Gal_Param = {
+static DISP_PQ_PARAM g_Color_Gal_Param = {
 u4SHPGain:2,
 u4SatGain:4,
 u4PartialY:0,
@@ -98,13 +107,10 @@ u4HueAdj:{9, 9, 9, 9},
 u4SatAdj:{0, 0, 0, 0},
 u4Contrast:4,
 u4Brightness:4,
-u4Ccorr:3,
-#if defined(COLOR_3_0)
-u4ColorLUT:0
-#endif
+u4Ccorr:3
 };
 
-static struct DISP_PQ_DC_PARAM g_PQ_DC_Param = {
+static DISP_PQ_DC_PARAM g_PQ_DC_Param = {
 param:
 	{
 	 1, 1, 0, 0, 0, 0, 0, 0, 0, 0x0A,
@@ -113,7 +119,7 @@ param:
 	 0x19, 0x00, 0x20, 0, 0, 1, 2, 1, 80, 1}
 };
 
-static struct DISP_PQ_DS_PARAM g_PQ_DS_Param = {
+static DISP_PQ_DS_PARAM g_PQ_DS_Param = {
 param:
 	{
 	 1, -4, 1024, -4, 1024,
@@ -123,7 +129,7 @@ param:
 	 0, 0, 0}
 };
 
-static struct MDP_TDSHP_REG g_tdshp_reg = {
+static MDP_TDSHP_REG g_tdshp_reg = {
 	TDS_GAIN_MID:0x10,
 	TDS_GAIN_HIGH:0x20,
 	TDS_COR_GAIN:0x10,
@@ -135,7 +141,7 @@ static struct MDP_TDSHP_REG g_tdshp_reg = {
 
 /* initialize index (because system default is 0, need fill with 0x80) */
 
-static struct DISPLAY_PQ_T g_Color_Index = {
+static DISPLAY_PQ_T g_Color_Index = {
 GLOBAL_SAT:
 	{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},	/* 0~9 */
 
@@ -905,7 +911,7 @@ CCORR_COEF : /* ccorr feature */
 	 {0x0, 0x0, 0x400},
 	 },
 	},
-#if defined(COLOR_2_1)
+#if defined(CONFIG_ARCH_MT6797)
 S_GAIN_BY_Y :
 {
 	{0x80, 0x80, 0x80, 0x80,
@@ -942,95 +948,802 @@ S_GAIN_BY_Y :
 
 S_GAIN_BY_Y_EN:0,
 
-LSP_EN:0,
-
-LSP :
-{0x0, 0x0, 0x7F, 0x7F, 0x7F, 0x0, 0x7F, 0x7F},
-#endif
-#if defined(COLOR_3_0)
-COLOR_3D :
-{
-	{			/* 0 */
-		/* Windows  1 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-		/* Windows  2 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-		/* Windows  3 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-	},
-	{			/* 1 */
-		/* Windows  1 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-		/* Windows  2 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-		/* Windows  3 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-	},
-	{			/* 2 */
-		/* Windows  1 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-		/* Windows  2 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-		/* Windows  3 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-	},
-	{			/* 3 */
-		/* Windows  1 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-		/* Windows  2 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-		/* Windows  3 */
-		{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF,
-		 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x3FF, 0x3FF, 0x000, 0x050, 0x100, 0x200, 0x300, 0x350, 0x3FF},
-	},
-}
+LSP_EN:0
 #endif
 };
 
+static DISPLAY_PQ_T primary_pqindex =
+{
+GLOBAL_SAT   :
+	{0x70,0x74,0x78,0x7C,0x80,0x84,0x88,0x8C,0x90,0x94}, //0~9
+
+CONTRAST   :
+	{0x70,0x74,0x78,0x7C,0x80,0x84,0x88,0x8C,0x90,0x94}, //0~9
+
+BRIGHTNESS   :
+	{0x3C0,0x3D0,0x3E0,0x3F0,0x400,0x410,0x420,0x430,0x440,0x450}, //0~9
+
+PARTIAL_Y    :
+{
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80}
+},
+PURP_TONE_S  :
+{//hue 0~10
+    {//2
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//3
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//4
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//5
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//6
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 7
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 8
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+    // 9
+    {
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 10
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 11
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 12
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 13
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 14
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 15
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 16
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 17
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 18
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 19
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {// 20
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    }
+
+},
+SKIN_TONE_S:
+{
+
+
+    {//2
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x8b, 0x8c, 0x8c, 0x8c, 0x8c, 0x8c, 0x8c, 0x80},
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//3
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x8b, 0x8e, 0x8e, 0x8e, 0x8e, 0x8e, 0x8e, 0x80},
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//4
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x8b, 0x8e, 0x8f, 0x8f, 0x8f, 0x8f, 0x8f, 0x80},
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//5
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x8b, 0x90, 0x92, 0x92, 0x92, 0x92, 0x92, 0x80},
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+    {//6
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x8b, 0x93, 0x95, 0x95, 0x95, 0x95, 0x95, 0x80},
+        {0x78, 0x76, 0x76, 0x76, 0x76, 0x76, 0x77, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//7
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x90, 0x97, 0x99, 0x99, 0x99, 0x99, 0x99, 0x80},
+        {0x75, 0x72, 0x72, 0x73, 0x73, 0x73, 0x73, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//8
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x92, 0x99, 0x9d, 0x9d, 0x9d, 0x9d, 0x9a, 0x80},
+        {0x75, 0x6f, 0x6f, 0x6f, 0x6f, 0x6f, 0x6f, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//9
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x92, 0x9b, 0xa0, 0xa0, 0xa0, 0xa0, 0x9a, 0x80},
+        {0x73, 0x6c, 0x6b, 0x6b, 0x6b, 0x6b, 0x6b, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//10
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x92, 0x9d, 0xa3, 0xa3, 0xa3, 0xa3, 0x9c, 0x80},
+        {0x71, 0x69, 0x68, 0x68, 0x68, 0x68, 0x68, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//11
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x95, 0xa0, 0xa7, 0xa7, 0xa7, 0xa7, 0x9e, 0x80},
+        {0x6f, 0x67, 0x66, 0x66, 0x66, 0x66, 0x66, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//12
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x98, 0xa6, 0xab, 0xab, 0xab, 0xab, 0xa3, 0x80},
+        {0x6c, 0x65, 0x63, 0x63, 0x63, 0x63, 0x63, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//13
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x9b, 0xa9, 0xaf, 0xaf, 0xaf, 0xaf, 0xa5, 0x80},
+        {0x69, 0x62, 0x60, 0x60, 0x60, 0x60, 0x60, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//14
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa0, 0xab, 0xb1, 0xb1, 0xb1, 0xb1, 0xa7, 0x80},
+        {0x67, 0x60, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//15
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa0, 0xb0, 0xb5, 0xb5, 0xb5, 0xb5, 0xa7, 0x80},
+        {0x66, 0x5f, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//16
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa3, 0xb3, 0xb9, 0xb9, 0xb9, 0xb9, 0xa9, 0x80},
+        {0x60, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//17
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa7, 0xb6, 0xbd, 0xbd, 0xbd, 0xbd, 0xa9, 0x80},
+        {0x5f, 0x57, 0x57, 0x57, 0x57, 0x57, 0x57, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//18
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa7, 0xb6, 0xc0, 0xc0, 0xc0, 0xc0, 0xa9, 0x80},
+        {0x5f, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//19
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa7, 0xb6, 0xc3, 0xc3, 0xc3, 0xc3, 0xa9, 0x80},
+        {0x5f, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//20
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa7, 0xb6, 0xc6, 0xc6, 0xc6, 0xc6, 0xa9, 0x80},
+        {0x5f, 0x51, 0x51, 0x51, 0x51, 0x51, 0x51, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    }
+
+
+},
+GRASS_TONE_S:
+{
+
+
+    {//2
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x8c, 0x8c, 0x8c, 0x8c, 0x8b, 0x80},
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//3
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x8e, 0x8e, 0x8e, 0x8e, 0x8b, 0x80},
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//4
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x8f, 0x8f, 0x8f, 0x8f, 0x8b, 0x80},
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//5
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x92, 0x92, 0x92, 0x92, 0x8d, 0x80},
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//6
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x95, 0x95, 0x95, 0x95, 0x8f, 0x80},
+        {0x76, 0x76, 0x77, 0x78, 0x79, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//7
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x99, 0x99, 0x99, 0x99, 0x91, 0x80},
+        {0x74, 0x72, 0x72, 0x72, 0x79, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//8
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x99, 0x9d, 0x9d, 0x9b, 0x94, 0x80},
+        {0x71, 0x6f, 0x6f, 0x71, 0x77, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//9
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x9e, 0xa0, 0xa0, 0x9d, 0x95, 0x80},
+        {0x6c, 0x6b, 0x6b, 0x70, 0x76, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//10
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0x9f, 0xa3, 0xa3, 0x9f, 0x97, 0x80},
+        {0x69, 0x68, 0x68, 0x6f, 0x74, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//11
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa0, 0xa7, 0xa7, 0xa2, 0x9b, 0x80},
+        {0x67, 0x66, 0x66, 0x6d, 0x72, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//12
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa3, 0xab, 0xab, 0xa5, 0x9b, 0x80},
+        {0x67, 0x63, 0x63, 0x6a, 0x71, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//13
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa7, 0xaf, 0xaf, 0xaa, 0x9e, 0x80},
+        {0x63, 0x60, 0x60, 0x67, 0x6e, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//14
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xa9, 0xb1, 0xb1, 0xac, 0xa0, 0x80},
+        {0x62, 0x5e, 0x5e, 0x65, 0x6c, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//15
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xad, 0xb5, 0xb5, 0xb1, 0xa4, 0x80},
+        {0x60, 0x5c, 0x5c, 0x63, 0x6c, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//16
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xb0, 0xb9, 0xb9, 0xb3, 0xa7, 0x80},
+        {0x5d, 0x5a, 0x5a, 0x61, 0x6a, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//17
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xb2, 0xbd, 0xbd, 0xb6, 0xab, 0x80},
+        {0x5c, 0x57, 0x57, 0x5f, 0x6a, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+    {//18
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xb2, 0xc0, 0xc0, 0xb9, 0xab, 0x80},
+        {0x5a, 0x55, 0x55, 0x5a, 0x6a, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+
+    {//19
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xb2, 0xc3, 0xc3, 0xbc, 0xab, 0x80},
+        {0x58, 0x53, 0x53, 0x55, 0x6a, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    },
+
+
+    {//20
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+        {0xb2, 0xc6, 0xc6, 0xbf, 0xab, 0x80},
+        {0x56, 0x51, 0x51, 0x51, 0x6a, 0x80},
+        {0x14, 0x14, 0x14, 0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c}
+    }
+
+
+},
+SKY_TONE_S:
+{
+
+    {//2
+        {0x80, 0x80, 0x80},
+        {0x8a, 0x8c, 0x8a},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//3
+        {0x80, 0x80, 0x80},
+        {0x8b, 0x8e, 0x8b},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+    {//4
+        {0x80, 0x80, 0x80},
+        {0x8b, 0x8f, 0x8b},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//5
+        {0x80, 0x80, 0x80},
+        {0x8d, 0x92, 0x8d},
+        {0x80, 0x80, 0x80},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//6
+        {0x80, 0x80, 0x80},
+        {0x8f, 0x95, 0x8f},
+        {0x7b, 0x76, 0x7c},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//7
+        {0x80, 0x80, 0x80},
+        {0x92, 0x99, 0x94},
+        {0x79, 0x73, 0x7b},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//8
+        {0x80, 0x80, 0x80},
+        {0x95, 0x9d, 0x95},
+        {0x78, 0x6f, 0x76},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//9
+        {0x80, 0x80, 0x80},
+        {0x98, 0xa0, 0x98},
+        {0x73, 0x6b, 0x73},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//10
+        {0x80, 0x80, 0x80},
+        {0x9b, 0xa3, 0x9b},
+        {0x70, 0x68, 0x70},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//11
+        {0x80, 0x80, 0x80},
+        {0x9c, 0xa7, 0x9c},
+        {0x6e, 0x66, 0x6e},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//12
+        {0x80, 0x80, 0x80},
+        {0x9d, 0xab, 0x9d},
+        {0x6c, 0x63, 0x6c},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//13
+        {0x80, 0x80, 0x80},
+        {0xa1, 0xaf, 0xa1},
+        {0x69, 0x60, 0x69},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//14
+        {0x80, 0x80, 0x80},
+        {0xa3, 0xb1, 0xa3},
+        {0x67, 0x5e, 0x67},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//15
+        {0x80, 0x80, 0x80},
+        {0xa8, 0xb5, 0xa8},
+        {0x65, 0x5c, 0x65},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//16
+        {0x80, 0x80, 0x80},
+        {0xad, 0xb9, 0xaf},
+        {0x63, 0x5a, 0x63},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//17
+        {0x80, 0x80, 0x80},
+        {0xb2, 0xbd, 0xb4},
+        {0x60, 0x57, 0x60},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//18
+        {0x80, 0x80, 0x80},
+        {0xb2, 0xc0, 0xb4},
+        {0x5f, 0x55, 0x5f},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//19
+        {0x80, 0x80, 0x80},
+        {0xb2, 0xc3, 0xb4},
+        {0x5e, 0x53, 0x5e},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    },
+
+    {//20
+        {0x80, 0x80, 0x80},
+        {0xb2, 0xc6, 0xb4},
+        {0x5d, 0x51, 0x5d},
+        {0x14, 0x14, 0x14},
+        {0x3c, 0x3c, 0x3c}
+    }
+
+
+},
+
+PURP_TONE_H :
+{
+//hue 0~2
+    {0x80, 0x80, 0x80},//0
+    {0x80, 0x80, 0x80},//1
+    {0x80, 0x80, 0x80},//2
+    {0x80, 0x80, 0x80},//3
+    {0x80, 0x80, 0x80},//4
+    {0x80, 0x80, 0x80},//5
+    {0x80, 0x80, 0x80},//6
+    {0x80, 0x80, 0x80},//7
+    {0x80, 0x80, 0x80},//8
+    {0x80, 0x80, 0x80},//9
+    {0x80, 0x80, 0x80},//10
+    {0x80, 0x80, 0x80},//11
+    {0x80, 0x80, 0x80},//12
+    {0x80, 0x80, 0x80},//13
+    {0x80, 0x80, 0x80},//14
+    {0x80, 0x80, 0x80},//15
+    {0x80, 0x80, 0x80},//16
+    {0x80, 0x80, 0x80},//17
+    {0x80, 0x80, 0x80} //18
+},
+
+SKIN_TONE_H:
+{
+//hue 3~10
+    {0x80, 0x80, 0x74, 0x68, 0x63, 0x67,  0x71, 0x80},//0  -9
+    {0x80, 0x80, 0x74, 0x69, 0x66, 0x69,  0x71, 0x80},//1  -8
+    {0x80, 0x80, 0x75, 0x6b, 0x69, 0x6b,  0x72, 0x80},//2  -7
+    {0x80, 0x80, 0x76, 0x6e, 0x6c, 0x6d,  0x73, 0x80},//3  -6
+    {0x80, 0x80, 0x77, 0x70, 0x70, 0x70,  0x76, 0x80},//4  -5
+    {0x80, 0x80, 0x79, 0x73, 0x73, 0x73,  0x77, 0x80},//5  -4
+    {0x80, 0x80, 0x7a, 0x76, 0x76, 0x76,  0x79, 0x80},//6  -3
+    {0x80, 0x80, 0x7b, 0x79, 0x79, 0x79,  0x7a, 0x80},//7  -2
+    {0x80, 0x80, 0x7c, 0x7c, 0x7c, 0x7c,  0x7d, 0x80},//8  -1
+    {0x80, 0x80, 0x80, 0x80, 0x80, 0x80,  0x80, 0x80},//9  +0
+    {0x83, 0x83, 0x83, 0x83, 0x83, 0x83,  0x83, 0x80},//10 +1
+    {0x84, 0x85, 0x86, 0x86, 0x86, 0x86,  0x86, 0x80},//11 +2
+    {0x84, 0x87, 0x8a, 0x8a, 0x8a, 0x8a,  0x8a, 0x80},//12 +3
+    {0x86, 0x8a, 0x8d, 0x8d, 0x8d, 0x8d,  0x8b, 0x80},//13 +4
+    {0x87, 0x8c, 0x90, 0x90, 0x90, 0x90,  0x8c, 0x80},//14 +5
+    {0x88, 0x90, 0x93, 0x93, 0x93, 0x93,  0x8d, 0x80},//15 +6
+    {0x89, 0x91, 0x96, 0x96, 0x96, 0x96,  0x8e, 0x80},//16 +7
+    {0x8a, 0x93, 0x99, 0x99, 0x99, 0x98,  0x8f, 0x80},//17 +8
+    {0x8b, 0x96, 0x9c, 0x9c, 0x9c, 0x99,  0x90, 0x80} //18 +9
+},
+
+GRASS_TONE_H :
+{
+    // hue 11~16
+    {0x74,0x69, 0x64, 0x68, 0x6f, 0x80},//0 -9
+    {0x76,0x6b, 0x66, 0x6b, 0x73, 0x80},//1 -8
+    {0x78,0x6d, 0x69, 0x6d, 0x75, 0x80},//2 -7
+    {0x79,0x6f, 0x6d, 0x70, 0x76, 0x80},//3 -6
+    {0x79,0x71, 0x70, 0x71, 0x77, 0x80},//4 -5
+    {0x7a,0x73, 0x73, 0x73, 0x78, 0x80},//5 -4
+    {0x7b,0x76, 0x76, 0x76, 0x7a, 0x80},//6 -3
+    {0x7c,0x7a, 0x7a, 0x7a, 0x7b, 0x80},//7 -2
+    {0x7d,0x7d, 0x7d, 0x7d, 0x7d, 0x80},//8  -1
+    {0x80,0x80, 0x80, 0x80, 0x80, 0x80},//9  +0
+    {0x83,0x83, 0x83, 0x83, 0x83, 0x80},//10 +1
+    {0x86,0x86, 0x86, 0x86, 0x85, 0x80},//11 +2
+    {0x8a,0x8a, 0x8a, 0x8a, 0x86, 0x80},//12 +3
+    {0x8b,0x8d, 0x8d, 0x8d, 0x88, 0x80},//13 +4
+    {0x8d,0x90, 0x90, 0x8f, 0x8a, 0x80},//14 +5
+    {0x8f,0x93, 0x93, 0x91, 0x8b, 0x80},//15 +6
+    {0x90,0x96, 0x96, 0x93, 0x8c, 0x80},//16 +7
+    {0x91,0x99, 0x99, 0x96, 0x8d, 0x80},//17 +8
+    {0x92,0x9c, 0x9c, 0x98, 0x8e, 0x80}//18  +9
+},
+
+SKY_TONE_H:
+{   //17 ~ 19
+    {0x70, 0x60, 0x70},//0   -9
+    {0x70, 0x63, 0x70},//1   -8
+    {0x73, 0x69, 0x72},//2   -7
+    {0x75, 0x6d, 0x74},//3   -6
+    {0x77, 0x70, 0x76},//4   -5
+    {0x7a, 0x73, 0x79},//5   -4
+    {0x7b, 0x76, 0x7b},//6   -3
+    {0x7c, 0x79, 0x7c},//7   -2
+    {0x7e, 0x7c, 0x7e},//8    -1
+    {0x80, 0x80, 0x80},//9    +0
+    {0x83, 0x83, 0x83},//10   +1
+    {0x85, 0x86, 0x85},//11   +2
+    {0x86, 0x8a, 0x86},//12   +3
+    {0x89, 0x8d, 0x89},//13   +4
+    {0x8b, 0x90, 0x8b},//14   +5
+    {0x8e, 0x93, 0x8e},//15   +6
+    {0x91, 0x96, 0x91},//16   +7
+    {0x93, 0x99, 0x93},//17   +8
+    {0x95, 0x9c, 0x95}//18    +9
+},
+
+CCORR_COEF:
+{
+    {
+        {0x400, 0x0, 0x0},
+        {0x0, 0x400, 0x0},
+        {0x0, 0x0, 0x400},
+    },
+    {
+        {0x400, 0x0, 0x0},
+        {0x0, 0x400, 0x0},
+        {0x0, 0x0, 0x400},
+    },
+    {
+        {0x400, 0x0, 0x0},
+        {0x0, 0x400, 0x0},
+        {0x0, 0x0, 0x400},
+    },
+    {
+        {0x400, 0x0, 0x0},
+        {0x0, 0x400, 0x0},
+        {0x0, 0x0, 0x400},
+    }
+}
+};
+
 static DEFINE_MUTEX(g_color_reg_lock);
-static struct DISPLAY_COLOR_REG g_color_reg;
+static DISPLAY_COLOR_REG_T g_color_reg;
 static int g_color_reg_valid;
 
-/* To enable debug log: */
-/* # echo color_dbg:1 > /sys/kernel/debug/dispsys */
-static unsigned int g_color_dbg_en;
+int color_dbg_en = 1;
 #define COLOR_ERR(fmt, arg...) pr_err("[COLOR] " fmt "\n", ##arg)
 #define COLOR_DBG(fmt, arg...) \
-	do { if (g_color_dbg_en) pr_warn("[COLOR] " fmt "\n", ##arg); } while (0)
+	do { if (color_dbg_en) pr_debug("[COLOR] " fmt "\n", ##arg); } while (0)
 #define COLOR_NLOG(fmt, arg...) pr_debug("[COLOR] " fmt "\n", ##arg)
 
 static ddp_module_notify g_color_cb;
 
-static struct DISPLAY_TDSHP_T g_TDSHP_Index;
+static DISPLAY_TDSHP_T g_TDSHP_Index;
 
 static unsigned int g_split_en;
 static unsigned int g_split_window_x = 0xFFFF0000;
 static unsigned int g_split_window_y = 0xFFFF0000;
 
-#if defined(COLOR_2_1)
+#if defined(CONFIG_ARCH_MT6797)
 	static unsigned long g_color_window = 0x40185E57;
 #else
 	static unsigned long g_color_window = 0x40106051;
@@ -1041,7 +1754,7 @@ static unsigned long g_color0_dst_h;
 static unsigned long g_color1_dst_w;
 static unsigned long g_color1_dst_h;
 
-static struct MDP_COLOR_CAP mdp_color_cap;
+static MDP_COLOR_CAP mdp_color_cap;
 
 #if defined(CONFIG_FPGA_EARLY_PORTING) || defined(DISP_COLOR_OFF)
 static int g_color_bypass = 1;
@@ -1049,23 +1762,21 @@ static int g_color_bypass = 1;
 static int g_color_bypass;
 #endif
 static int g_tdshp_flag;	/* 0: normal, 1: tuning mode */
-int ncs_tuning_mode;
-int tdshp_index_init;
+int ncs_tuning_mode = 0;
+int tdshp_index_init = 0;
 
 #if defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795)
 #define TDSHP_PA_BASE   0x14009000
 #define TDSHP1_PA_BASE  0x1400A000
 static unsigned long g_tdshp1_va;
-#elif defined(CONFIG_ARCH_MT6797) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#elif defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
 #define TDSHP_PA_BASE   0x14009000
 #else
 #define TDSHP_PA_BASE   0x14006000
 #endif
 
 #ifdef DISP_MDP_COLOR_ON
-#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
 #define MDP_COLOR_PA_BASE 0x1400A000
 #else
 #define MDP_COLOR_PA_BASE 0x14007000
@@ -1084,16 +1795,6 @@ static unsigned long g_mdp_rsz2_va;
 
 static unsigned long g_tdshp_va;
 
-/* set cboost_en = 0 for projects before 6755 to resolve contour in some special color pattern */
-#if defined(COLOR_2_1)
-static bool g_config_color21 = true;
-#else
-static bool g_config_color21;
-#endif
-#if defined(COLOR_3_0)
-static bool g_config_color30;
-#endif
-
 void disp_color_set_window(unsigned int sat_upper, unsigned int sat_lower,
 			   unsigned int hue_upper, unsigned int hue_lower)
 {
@@ -1105,17 +1806,17 @@ void disp_color_set_window(unsigned int sat_upper, unsigned int sat_lower,
 *g_Color_Param
 */
 
-struct DISP_PQ_PARAM *get_Color_config(int id)
+DISP_PQ_PARAM *get_Color_config(int id)
 {
 	return &g_Color_Param[id];
 }
 
-struct DISP_PQ_PARAM *get_Color_Cam_config(void)
+DISP_PQ_PARAM *get_Color_Cam_config(void)
 {
 	return &g_Color_Cam_Param;
 }
 
-struct DISP_PQ_PARAM *get_Color_Gal_config(void)
+DISP_PQ_PARAM *get_Color_Gal_config(void)
 {
 	return &g_Color_Gal_Param;
 }
@@ -1124,27 +1825,27 @@ struct DISP_PQ_PARAM *get_Color_Gal_config(void)
 *g_Color_Index
 */
 
-struct DISPLAY_PQ_T *get_Color_index(void)
+DISPLAY_PQ_T *get_Color_index(void)
 {
 	return &g_Color_Index;
 }
 
 
-struct DISPLAY_TDSHP_T *get_TDSHP_index(void)
+DISPLAY_TDSHP_T *get_TDSHP_index(void)
 {
 	return &g_TDSHP_Index;
 }
 
 static void _color_reg_set(void *__cmdq, unsigned long addr, unsigned int value)
 {
-	struct cmdqRecStruct *cmdq = (struct cmdqRecStruct *) __cmdq;
+	cmdqRecHandle cmdq = (cmdqRecHandle) __cmdq;
 
 	DISP_REG_SET(cmdq, addr, value);
 }
 
 static void _color_reg_mask(void *__cmdq, unsigned long addr, unsigned int value, unsigned int mask)
 {
-	struct cmdqRecStruct *cmdq = (struct cmdqRecStruct *) __cmdq;
+	cmdqRecHandle cmdq = (cmdqRecHandle) __cmdq;
 
 	DISP_REG_MASK(cmdq, addr, value, mask);
 }
@@ -1152,23 +1853,23 @@ static void _color_reg_mask(void *__cmdq, unsigned long addr, unsigned int value
 static void _color_reg_set_field(void *__cmdq, unsigned int field_mask, unsigned long addr,
 				 unsigned int value)
 {
-	struct cmdqRecStruct *cmdq = (struct cmdqRecStruct *) __cmdq;
+	cmdqRecHandle cmdq = (cmdqRecHandle) __cmdq;
 
 	DISP_REG_SET_FIELD(cmdq, field_mask, addr, value);
 }
 
-void DpEngine_COLORonInit(enum DISP_MODULE_ENUM module, void *__cmdq)
+void DpEngine_COLORonInit(DISP_MODULE_ENUM module, void *__cmdq)
 {
 	/* pr_debug("===================init COLOR =======================\n"); */
 	int offset = C0_OFFSET;
 	void *cmdq = __cmdq;
 
-	if (module == DISP_MODULE_COLOR1)
+	if (DISP_MODULE_COLOR1 == module)
 		offset = C1_OFFSET;
 
 #ifndef CONFIG_FPGA_EARLY_PORTING
 	COLOR_DBG("DpEngine_COLORonInit(), en[%d],  x[0x%x], y[0x%x]\n", g_split_en,
-		g_split_window_x, g_split_window_y);
+		  g_split_window_x, g_split_window_y);
 	_color_reg_mask(cmdq, DISP_COLOR_DBG_CFG_MAIN + offset, g_split_en << 3, 0x00000008);
 	_color_reg_set(cmdq, DISP_COLOR_WIN_X_MAIN + offset, g_split_window_x);
 	_color_reg_set(cmdq, DISP_COLOR_WIN_Y_MAIN + offset, g_split_window_y);
@@ -1190,28 +1891,26 @@ void DpEngine_COLORonInit(enum DISP_MODULE_ENUM module, void *__cmdq)
 
 }
 
-void DpEngine_COLORonConfig(enum DISP_MODULE_ENUM module, void *__cmdq)
+void DpEngine_COLORonConfig(DISP_MODULE_ENUM module, void *__cmdq)
 {
 	int index = 0;
 	unsigned int u4Temp = 0;
 	unsigned char h_series[20] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	int offset = C0_OFFSET;
-	struct DISP_PQ_PARAM *pq_param_p = &g_Color_Param[COLOR_ID_0];
+	DISP_PQ_PARAM *pq_param_p = &g_Color_Param[COLOR_ID_0];
 	void *cmdq = __cmdq;
-#if defined(COLOR_2_1) || defined(COLOR_3_0)
+#if defined(CONFIG_ARCH_MT6797)
 	int i, j, reg_index;
-#if defined(COLOR_3_0)
-	unsigned int pq_index;
 #endif
-#endif
-	int wide_gamut_en = 0;
 
-	if (module == DISP_MODULE_COLOR1) {
+	if (DISP_MODULE_COLOR1 == module) {
 		offset = C1_OFFSET;
 		pq_param_p = &g_Color_Param[COLOR_ID_1];
 	}
 
-	if (pq_param_p->u4SatGain >= COLOR_TUNING_INDEX ||
+	if (pq_param_p->u4Brightness >= BRIGHTNESS_SIZE ||
+	    pq_param_p->u4Contrast >= CONTRAST_SIZE ||
+	    pq_param_p->u4SatGain >= GLOBAL_SAT_SIZE ||
 	    pq_param_p->u4HueAdj[PURP_TONE] >= COLOR_TUNING_INDEX ||
 	    pq_param_p->u4HueAdj[SKIN_TONE] >= COLOR_TUNING_INDEX ||
 	    pq_param_p->u4HueAdj[GRASS_TONE] >= COLOR_TUNING_INDEX ||
@@ -1226,27 +1925,18 @@ void DpEngine_COLORonConfig(enum DISP_MODULE_ENUM module, void *__cmdq)
 	/* COLOR_ERR("DpEngine_COLORonConfig(%d)", module); */
 
 	if (g_color_bypass == 0) {
-#if defined(COLOR_2_1)
-		if (g_config_color21 == true) {
-			_color_reg_mask(cmdq, DISP_COLOR_CFG_MAIN + offset, (1 << 21)
+#if defined(CONFIG_ARCH_MT6797)
+		_color_reg_mask(cmdq, DISP_COLOR_CFG_MAIN + offset, (1 << 21)
 						| (g_Color_Index.LSP_EN << 20)
-						| (g_Color_Index.S_GAIN_BY_Y_EN << 15) | (wide_gamut_en << 8)
+						| (g_Color_Index.S_GAIN_BY_Y_EN << 15) | (0 << 8)
 						| (0 << 7), 0x003081FF);
-		}
-#endif
-		if (g_config_color21 == false) {
-			_color_reg_mask(cmdq, DISP_COLOR_CFG_MAIN + offset, (0 << 8) | (0 << 7)
+#else
+		_color_reg_mask(cmdq, DISP_COLOR_CFG_MAIN + offset, (0 << 8) | (0 << 7)
 						, 0x000001FF);	/* disable wide_gamut */
-		}
+#endif
 		_color_reg_mask(cmdq, DISP_COLOR_START + offset, 0x1, 0x3);	/* color start */
 		/* enable R2Y/Y2R in Color Wrapper */
-		if (g_config_color21 == true) {
-			/* RDMA & OVL will enable wide-gamut function*/
-			/* disable rgb clipping function in CM1 to keep the wide-gamut range */
-			_color_reg_mask(cmdq, DISP_COLOR_CM1_EN + offset, 0x01, 0x03);
-		} else {
-			_color_reg_mask(cmdq, DISP_COLOR_CM1_EN + offset, 0x01, 0x01);
-		}
+		_color_reg_mask(cmdq, DISP_COLOR_CM1_EN + offset, 0x01, 0x01);
 #if defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795)
 		_color_reg_mask(cmdq, DISP_COLOR_CM2_EN + offset, 0x01, 0x11);
 #else
@@ -1260,10 +1950,11 @@ void DpEngine_COLORonConfig(enum DISP_MODULE_ENUM module, void *__cmdq)
 	}
 
 	/* for partial Y contour issue */
-	if (wide_gamut_en == 0)
-		_color_reg_mask(cmdq, DISP_COLOR_LUMA_ADJ + offset, 0x40, 0x0000007F);
-	else if (wide_gamut_en == 1)
-		_color_reg_mask(cmdq, DISP_COLOR_LUMA_ADJ + offset, 0x0, 0x0000007F);
+#if defined(CONFIG_ARCH_MT6797)
+	_color_reg_mask(cmdq, DISP_COLOR_LUMA_ADJ + offset, 0x40, 0x0000007F);
+#else
+	_color_reg_mask(cmdq, DISP_COLOR_LUMA_ADJ + offset, 0x0, 0x0000007F);
+#endif
 
 	/* config parameter from customer color_index.h */
 	_color_reg_mask(cmdq, DISP_COLOR_G_PIC_ADJ_MAIN_1 + offset,
@@ -1285,10 +1976,13 @@ void DpEngine_COLORonConfig(enum DISP_MODULE_ENUM module, void *__cmdq)
 	_color_reg_mask(cmdq, DISP_COLOR_C_BOOST_MAIN + offset, 0x80 << 16, 0x00FF0000);
 #endif
 
-	if (g_config_color21 == false)
-		_color_reg_mask(cmdq, DISP_COLOR_C_BOOST_MAIN + offset, 0 << 13, 0x00002000);
-	else if (g_config_color21 == true)
-		_color_reg_mask(cmdq, DISP_COLOR_C_BOOST_MAIN_2 + offset, 0x40 << 24, 0xFF000000);
+#if !defined(CONFIG_ARCH_MT6797) /* set cboost_en = 0 for projects before 6755 */
+	_color_reg_mask(cmdq, DISP_COLOR_C_BOOST_MAIN + offset, 0 << 13, 0x00002000);
+#endif
+
+#if defined(CONFIG_ARCH_MT6797)
+	_color_reg_mask(cmdq, DISP_COLOR_C_BOOST_MAIN_2 + offset, 0x40 << 24, 0xFF000000);
+#endif
 
 	/* Partial Saturation Function */
 
@@ -1479,124 +2173,67 @@ void DpEngine_COLORonConfig(enum DISP_MODULE_ENUM module, void *__cmdq)
 		_color_reg_set(cmdq, DISP_COLOR_LOCAL_HUE_CD_0 + offset + 4 * index, u4Temp);
 	}
 
-#if defined(COLOR_2_1)
-	if (g_config_color21 == true) {
-		/* S Gain By Y */
-		u4Temp = 0;
+#if defined(CONFIG_ARCH_MT6797)
+	/* S Gain By Y */
+	u4Temp = 0;
 
-		reg_index = 0;
-		for (i = 0; i < S_GAIN_BY_Y_CONTROL_CNT; i++) {
-			for (j = 0; j < S_GAIN_BY_Y_HUE_PHASE_CNT; j += 4) {
-				u4Temp = (g_Color_Index.S_GAIN_BY_Y[i][j]) +
-					(g_Color_Index.S_GAIN_BY_Y[i][j + 1] << 8) +
-					(g_Color_Index.S_GAIN_BY_Y[i][j + 2] << 16) +
-					(g_Color_Index.S_GAIN_BY_Y[i][j + 3] << 24);
+	reg_index = 0;
+	for (i = 0; i < S_GAIN_BY_Y_CONTROL_CNT; i++) {
+		for (j = 0; j < S_GAIN_BY_Y_HUE_PHASE_CNT; j += 4) {
+			u4Temp = (g_Color_Index.S_GAIN_BY_Y[i][j]) +
+				(g_Color_Index.S_GAIN_BY_Y[i][j + 1] << 8) +
+				(g_Color_Index.S_GAIN_BY_Y[i][j + 2] << 16) +
+				(g_Color_Index.S_GAIN_BY_Y[i][j + 3] << 24);
 
-				_color_reg_set(cmdq, DISP_COLOR_S_GAIN_BY_Y0_0 + offset + reg_index, u4Temp);
-				reg_index += 4;
-			}
+			_color_reg_set(cmdq, DISP_COLOR_S_GAIN_BY_Y0_0 + offset + reg_index, u4Temp);
+			reg_index += 4;
 		}
-		/* LSP */
-		_color_reg_mask(cmdq, DISP_COLOR_LSP_1 + offset, (g_Color_Index.LSP[3] << 0) |
-			(g_Color_Index.LSP[2] << 7) | (g_Color_Index.LSP[1] << 14) | (g_Color_Index.LSP[0] << 22)
-			, 0x1FFFFFFF);
-		_color_reg_mask(cmdq, DISP_COLOR_LSP_2 + offset, (g_Color_Index.LSP[7] << 0) |
-			(g_Color_Index.LSP[6] << 8) | (g_Color_Index.LSP[5] << 16) | (g_Color_Index.LSP[4] << 23)
-			, 0x3FFF7F7F);
 	}
+	/* LSP */
+	_color_reg_mask(cmdq, DISP_COLOR_LSP_1 + offset, (0x7F << 0) | (0x7F << 7) | (0x0 << 14) | (0x0 << 22)
+				, 0x1FFFFFFF);
+	_color_reg_mask(cmdq, DISP_COLOR_LSP_2 + offset, (0x7F << 0) | (0x7F << 8) | (0x0 << 16) | (0x7F << 23)
+				, 0x3FFF7F7F);
 #endif
 
 	/* color window */
 
 	_color_reg_set(cmdq, DISP_COLOR_TWO_D_WINDOW_1 + offset, g_color_window);
-#if defined(COLOR_3_0)
-	if (g_config_color30 == true) {
-		_color_reg_mask(cmdq, DISP_COLOR_CM_CONTROL + offset,
-			0x0 |
-			(0x3 << 1) |	/* enable window 1 */
-			(0x3 << 4) |	/* enable window 2 */
-			(0x3 << 7)		/* enable window 3 */
-			, 0x1B7);
-
-		pq_index = pq_param_p->u4ColorLUT;
-		for (i = 0; i < WIN_TOTAL; i++) {
-			reg_index = i * 4 * (LUT_TOTAL * 5);
-			for (j = 0; j < LUT_TOTAL; j++) {
-				_color_reg_set(cmdq, DISP_COLOR_CM_W1_HUE_0 + offset + reg_index,
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_L]) |
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_U] << 10) |
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_POINT0] << 20));
-
-				_color_reg_set(cmdq, DISP_COLOR_CM_W1_HUE_1 + offset + reg_index,
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_POINT1]) |
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_POINT2] << 10) |
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_POINT3] << 20));
-
-				_color_reg_set(cmdq, DISP_COLOR_CM_W1_HUE_2 + offset + reg_index,
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_POINT4]) |
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_SLOPE0] << 10) |
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_SLOPE1] << 20));
-
-				_color_reg_set(cmdq, DISP_COLOR_CM_W1_HUE_3 + offset + reg_index,
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_SLOPE2]) |
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_SLOPE3] << 8) |
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_SLOPE4] << 16) |
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_SLOPE5] << 24));
-
-				_color_reg_set(cmdq, DISP_COLOR_CM_W1_HUE_4 + offset + reg_index,
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_WGT_LSLOPE]) |
-					(g_Color_Index.COLOR_3D[pq_index][i][j*LUT_REG_TOTAL+REG_WGT_USLOPE] << 16));
-
-				reg_index += (4 * 5);
-			}
-		}
-	}
-#endif
 }
 
-static void color_write_hw_reg(enum DISP_MODULE_ENUM module,
-	const struct DISPLAY_COLOR_REG *color_reg, void *cmdq)
+static void color_write_hw_reg(DISP_MODULE_ENUM module,
+	const DISPLAY_COLOR_REG_T *color_reg, void *cmdq)
 {
 	int offset = C0_OFFSET;
 	int index;
 	unsigned char h_series[20] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	unsigned int u4Temp = 0;
-#if defined(COLOR_2_1) || defined(COLOR_3_0)
+#if defined(CONFIG_ARCH_MT6797)
 	int i, j, reg_index;
 #endif
-	int wide_gamut_en = 0;
 
-	if (module == DISP_MODULE_COLOR1)
+	if (DISP_MODULE_COLOR1 == module)
 		offset = C1_OFFSET;
 
 	if (g_color_bypass == 0) {
-#if defined(COLOR_2_1)
-		if (g_config_color21 == true) {
-			_color_reg_mask(cmdq, DISP_COLOR_CFG_MAIN + offset, (1 << 21)
-							| (g_Color_Index.LSP_EN << 20)
-							| (g_Color_Index.S_GAIN_BY_Y_EN << 15) | (wide_gamut_en << 8)
-							| (0 << 7), 0x003081FF);
-		}
-#endif
-		if (g_config_color21 == false) {
-			_color_reg_mask(cmdq, DISP_COLOR_CFG_MAIN + offset, (0 << 8) | (0 << 7)
+#if defined(CONFIG_ARCH_MT6797)
+		_color_reg_mask(cmdq, DISP_COLOR_CFG_MAIN + offset, (1 << 21)
+						| (g_Color_Index.LSP_EN << 20)
+						| (g_Color_Index.S_GAIN_BY_Y_EN << 15) | (0 << 8)
+						| (0 << 7), 0x003081FF);
+#else
+		_color_reg_mask(cmdq, DISP_COLOR_CFG_MAIN + offset, (0 << 8) | (0 << 7)
 						, 0x000001FF);	/* enable wide_gamut */
-		}
+#endif
 		_color_reg_mask(cmdq, DISP_COLOR_START + offset, 0x1, 0x3);	/* color start */
 		/* enable R2Y/Y2R in Color Wrapper */
-		if (g_config_color21 == true) {
-			/* RDMA & OVL will enable wide-gamut function*/
-			/* disable rgb clipping function in CM1 to keep the wide-gamut range */
-			_color_reg_mask(cmdq, DISP_COLOR_CM1_EN + offset, 0x01, 0x03);
-		} else {
-			_color_reg_mask(cmdq, DISP_COLOR_CM1_EN + offset, 0x01, 0x01);
-		}
-
+		_color_reg_mask(cmdq, DISP_COLOR_CM1_EN + offset, 0x01, 0x01);
 #if defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795)
 		_color_reg_mask(cmdq, DISP_COLOR_CM2_EN + offset, 0x01, 0x11);
 #else
 		_color_reg_mask(cmdq, DISP_COLOR_CM2_EN + offset, 0x11, 0x11); /* also set no rounding on Y2R */
 #endif
+
 	} else {
 		_color_reg_set_field(cmdq, CFG_MAIN_FLD_COLOR_DBUF_EN, DISP_COLOR_CFG_MAIN + offset,
 					 0x1);
@@ -1605,10 +2242,11 @@ static void color_write_hw_reg(enum DISP_MODULE_ENUM module,
 	}
 
 	/* for partial Y contour issue */
-	if (wide_gamut_en == 0)
-		_color_reg_mask(cmdq, DISP_COLOR_LUMA_ADJ + offset, 0x40, 0x0000007F);
-	else if (wide_gamut_en == 1)
-		_color_reg_mask(cmdq, DISP_COLOR_LUMA_ADJ + offset, 0x0, 0x0000007F);
+#if defined(CONFIG_ARCH_MT6797)
+	_color_reg_mask(cmdq, DISP_COLOR_LUMA_ADJ + offset, 0x40, 0x0000007F);
+#else
+	_color_reg_mask(cmdq, DISP_COLOR_LUMA_ADJ + offset, 0x0, 0x0000007F);
+#endif
 
 	_color_reg_mask(cmdq, DISP_COLOR_G_PIC_ADJ_MAIN_1 + offset,
 		(color_reg->BRIGHTNESS << 16) | color_reg->CONTRAST, 0x07FF01FF);
@@ -1627,10 +2265,13 @@ static void color_write_hw_reg(enum DISP_MODULE_ENUM module,
 	_color_reg_mask(cmdq, DISP_COLOR_C_BOOST_MAIN + offset, 0x80 << 16, 0x00FF0000);
 #endif
 
-	if (g_config_color21 == false)
-		_color_reg_mask(cmdq, DISP_COLOR_C_BOOST_MAIN + offset, 0 << 13, 0x00002000);
-	else if (g_config_color21 == true)
-		_color_reg_mask(cmdq, DISP_COLOR_C_BOOST_MAIN_2 + offset, 0x40 << 24, 0xFF000000);
+#if !defined(CONFIG_ARCH_MT6797) /* set cboost_en = 0 for projects before 6755 */
+	_color_reg_mask(cmdq, DISP_COLOR_C_BOOST_MAIN + offset, 0 << 13, 0x00002000);
+#endif
+
+#if defined(CONFIG_ARCH_MT6797)
+	_color_reg_mask(cmdq, DISP_COLOR_C_BOOST_MAIN_2 + offset, 0x40 << 24, 0xFF000000);
+#endif
 
 	/* Partial Saturation Function */
 
@@ -1784,79 +2425,34 @@ static void color_write_hw_reg(enum DISP_MODULE_ENUM module,
 		_color_reg_set(cmdq, DISP_COLOR_LOCAL_HUE_CD_0 + offset + 4 * index, u4Temp);
 	}
 
-#if defined(COLOR_2_1)
-	if (g_config_color21 == true) {
-		/* S Gain By Y */
-		u4Temp = 0;
+#if defined(CONFIG_ARCH_MT6797)
+	/* S Gain By Y */
+	u4Temp = 0;
 
-		reg_index = 0;
-		for (i = 0; i < S_GAIN_BY_Y_CONTROL_CNT; i++) {
-			for (j = 0; j < S_GAIN_BY_Y_HUE_PHASE_CNT; j += 4) {
-				u4Temp = (g_Color_Index.S_GAIN_BY_Y[i][j]) +
-					(g_Color_Index.S_GAIN_BY_Y[i][j + 1] << 8) +
-					(g_Color_Index.S_GAIN_BY_Y[i][j + 2] << 16) +
-					(g_Color_Index.S_GAIN_BY_Y[i][j + 3] << 24);
+	reg_index = 0;
+	for (i = 0; i < S_GAIN_BY_Y_CONTROL_CNT; i++) {
+		for (j = 0; j < S_GAIN_BY_Y_HUE_PHASE_CNT; j += 4) {
+			u4Temp = (g_Color_Index.S_GAIN_BY_Y[i][j]) +
+				(g_Color_Index.S_GAIN_BY_Y[i][j + 1] << 8) +
+				(g_Color_Index.S_GAIN_BY_Y[i][j + 2] << 16) +
+				(g_Color_Index.S_GAIN_BY_Y[i][j + 3] << 24);
 
-				_color_reg_set(cmdq, DISP_COLOR_S_GAIN_BY_Y0_0 + offset + reg_index, u4Temp);
-				reg_index += 4;
-			}
+			_color_reg_set(cmdq, DISP_COLOR_S_GAIN_BY_Y0_0 + offset + reg_index, u4Temp);
+			reg_index += 4;
 		}
-		/* LSP */
-		_color_reg_mask(cmdq, DISP_COLOR_LSP_1 + offset, (g_Color_Index.LSP[3] << 0) |
-			(g_Color_Index.LSP[2] << 7) | (g_Color_Index.LSP[1] << 14) | (g_Color_Index.LSP[0] << 22)
-			, 0x1FFFFFFF);
-		_color_reg_mask(cmdq, DISP_COLOR_LSP_2 + offset, (g_Color_Index.LSP[7] << 0) |
-			(g_Color_Index.LSP[6] << 8) | (g_Color_Index.LSP[5] << 16) | (g_Color_Index.LSP[4] << 23)
-			, 0x3FFF7F7F);
 	}
+	/* LSP */
+	_color_reg_mask(cmdq, DISP_COLOR_LSP_1 + offset, (0x7F << 0) | (0x7F << 7) | (0x0 << 14) | (0x0 << 22)
+					, 0x1FFFFFFF);
+	_color_reg_mask(cmdq, DISP_COLOR_LSP_2 + offset, (0x7F << 0) | (0x7F << 8) | (0x50 << 16) | (0x7 << 23)
+					, 0x3FFF7F7F);
 #endif
+
 	/* color window */
 	_color_reg_set(cmdq, DISP_COLOR_TWO_D_WINDOW_1 + offset, g_color_window);
-#if defined(COLOR_3_0)
-	if (g_config_color30 == true) {
-		_color_reg_mask(cmdq, DISP_COLOR_CM_CONTROL + offset,
-			0x0 |
-			(0x3 << 1) |	/* enable window 1 */
-			(0x3 << 4) |	/* enable window 2 */
-			(0x3 << 7)		/* enable window 3 */
-			, 0x1B7);
-
-		for (i = 0; i < WIN_TOTAL; i++) {
-			reg_index = i * 4 * (LUT_TOTAL * 5);
-			for (j = 0; j < LUT_TOTAL; j++) {
-				_color_reg_set(cmdq, DISP_COLOR_CM_W1_HUE_0 + offset + reg_index,
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_L]) |
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_U] << 10) |
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_POINT0] << 20));
-
-				_color_reg_set(cmdq, DISP_COLOR_CM_W1_HUE_1 + offset + reg_index,
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_POINT1]) |
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_POINT2] << 10) |
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_POINT3] << 20));
-
-				_color_reg_set(cmdq, DISP_COLOR_CM_W1_HUE_2 + offset + reg_index,
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_POINT4]) |
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_SLOPE0] << 10) |
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_SLOPE1] << 20));
-
-				_color_reg_set(cmdq, DISP_COLOR_CM_W1_HUE_3 + offset + reg_index,
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_SLOPE2]) |
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_SLOPE3] << 8) |
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_SLOPE4] << 16) |
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_SLOPE5] << 24));
-
-				_color_reg_set(cmdq, DISP_COLOR_CM_W1_HUE_4 + offset + reg_index,
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_WGT_LSLOPE]) |
-					(color_reg->COLOR_3D[i][j*LUT_REG_TOTAL+REG_WGT_USLOPE] << 16));
-
-				reg_index += (4 * 5);
-			}
-		}
-	}
-#endif
 }
 
-static void color_trigger_refresh(enum DISP_MODULE_ENUM module)
+static void color_trigger_refresh(DISP_MODULE_ENUM module)
 {
 	if (g_color_cb != NULL)
 		g_color_cb(module, DISP_PATH_EVENT_TRIGGER);
@@ -1864,12 +2460,12 @@ static void color_trigger_refresh(enum DISP_MODULE_ENUM module)
 		COLOR_ERR("ddp listener is NULL!!\n");
 }
 
-static void ddp_color_bypass_color(enum DISP_MODULE_ENUM module, int bypass, void *__cmdq)
+static void ddp_color_bypass_color(DISP_MODULE_ENUM module, int bypass, void *__cmdq)
 {
 	int offset = C0_OFFSET;
 	void *cmdq = __cmdq;
 
-	if (module == DISP_MODULE_COLOR1)
+	if (DISP_MODULE_COLOR1 == module)
 		offset = C1_OFFSET;
 
 	if (bypass)
@@ -1878,7 +2474,7 @@ static void ddp_color_bypass_color(enum DISP_MODULE_ENUM module, int bypass, voi
 		_color_reg_mask(cmdq, DISP_COLOR_CFG_MAIN + offset, (0 << 7), 0x000000FF);	/* resume all */
 }
 
-static void ddp_color_set_window(struct DISP_PQ_WIN_PARAM *win_param, void *__cmdq)
+static void ddp_color_set_window(DISP_PQ_WIN_PARAM *win_param, void *__cmdq)
 {
 	const int offset = C0_OFFSET;
 	void *cmdq = __cmdq;
@@ -1887,9 +2483,16 @@ static void ddp_color_set_window(struct DISP_PQ_WIN_PARAM *win_param, void *__cm
 	if (win_param->split_en) {
 		g_split_en = 1;
 #ifdef LCM_PHYSICAL_ROTATION_180
-		g_split_window_x = ((g_color0_dst_w - win_param->start_x) << 16) | (g_color0_dst_w - win_param->end_x);
-		g_split_window_y = ((g_color0_dst_h - win_param->start_y) << 16) | (g_color0_dst_h - win_param->end_y);
-		COLOR_DBG("ddp_color_set_window(), LCM_PHYSICAL_ROTATION_180\n");
+		if (forge_disp_rot180()) {
+			g_split_window_x = ((g_color0_dst_w - win_param->start_x) << 16) |
+					   (g_color0_dst_w - win_param->end_x);
+			g_split_window_y = ((g_color0_dst_h - win_param->start_y) << 16) |
+					   (g_color0_dst_h - win_param->end_y);
+			COLOR_DBG("ddp_color_set_window(), LCM_PHYSICAL_ROTATION_180\n");
+		} else {
+			g_split_window_x = (win_param->end_x << 16) | win_param->start_x;
+			g_split_window_y = (win_param->end_y << 16) | win_param->start_y;
+		}
 #else
 		g_split_window_x = (win_param->end_x << 16) | win_param->start_x;
 		g_split_window_y = (win_param->end_y << 16) | win_param->start_y;
@@ -2000,8 +2603,9 @@ static unsigned int color_is_reg_addr_valid(unsigned long addr)
 	}
 
 	for (i = 0; i < DISP_REG_NUM; i++) {
-		if ((addr >= dispsys_reg[i]) && (addr < (dispsys_reg[i] + 0x1000)) && (dispsys_reg[i] != 0))
+		if ((addr >= dispsys_reg[i]) && (addr < (dispsys_reg[i] + 0x1000)) && (dispsys_reg[i] != 0)) {
 			break;
+		}
 	}
 
 	if (i < DISP_REG_NUM) {
@@ -2063,14 +2667,14 @@ static unsigned long color_pa2va(unsigned int addr)
 	}
 
 	/* TDSHP */
-	if ((addr >= TDSHP_PA_BASE) && (addr < (TDSHP_PA_BASE + 0x1000))) {
+	if ((TDSHP_PA_BASE <= addr) && (addr < (TDSHP_PA_BASE + 0x1000))) {
 		COLOR_DBG("color_pa2va(), TDSHP PA:0x%x, PABase[0x%x], VABase[0x%lx]\n", addr,
 			  TDSHP_PA_BASE, g_tdshp_va);
 		return g_tdshp_va + (addr - TDSHP_PA_BASE);
 	}
 #if defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795)
 	/* TDSHP1 */
-	if ((addr >= TDSHP1_PA_BASE) && (addr < (TDSHP1_PA_BASE + 0x1000))) {
+	if ((TDSHP1_PA_BASE <= addr) && (addr < (TDSHP1_PA_BASE + 0x1000))) {
 		COLOR_DBG("color_pa2va(), TDSHP1 PA:0x%x, PABase[0x%x], VABase[0x%lx]\n", addr,
 			  TDSHP1_PA_BASE, g_tdshp1_va);
 		return g_tdshp1_va + (addr - TDSHP1_PA_BASE);
@@ -2079,7 +2683,7 @@ static unsigned long color_pa2va(unsigned int addr)
 
 #ifdef DISP_MDP_COLOR_ON
 	/* MDP_COLOR */
-	if ((addr >= MDP_COLOR_PA_BASE) && (addr < (MDP_COLOR_PA_BASE + 0x1000))) {
+	if ((MDP_COLOR_PA_BASE <= addr) && (addr < (MDP_COLOR_PA_BASE + 0x1000))) {
 		COLOR_DBG("color_pa2va(), MDP_COLOR PA:0x%x, PABase[0x%x], VABase[0x%lx]\n", addr,
 			  MDP_COLOR_PA_BASE, g_mdp_color_va);
 		return g_mdp_color_va + (addr - MDP_COLOR_PA_BASE);
@@ -2088,15 +2692,15 @@ static unsigned long color_pa2va(unsigned int addr)
 
 #if defined(CONFIG_ARCH_MT6797)
 		/* MDP_COLOR */
-		if ((addr >= MDP_RSZ0_PA_BASE) && (addr < (MDP_RSZ0_PA_BASE + 0x1000))) {
+		if ((MDP_RSZ0_PA_BASE <= addr) && (addr < (MDP_RSZ0_PA_BASE + 0x1000))) {
 			COLOR_DBG("color_pa2va(), MDP_RSZ0 PA:0x%x, PABase[0x%x], VABase[0x%lx]\n", addr,
 				  MDP_RSZ0_PA_BASE, g_mdp_rsz0_va);
 			return g_mdp_rsz0_va + (addr - MDP_RSZ0_PA_BASE);
-		} else if ((addr >= MDP_RSZ1_PA_BASE) && (addr < (MDP_RSZ1_PA_BASE + 0x1000))) {
+		} else if ((MDP_RSZ1_PA_BASE <= addr) && (addr < (MDP_RSZ1_PA_BASE + 0x1000))) {
 			COLOR_DBG("color_pa2va(), MDP_RSZ1 PA:0x%x, PABase[0x%x], VABase[0x%lx]\n", addr,
 				  MDP_RSZ1_PA_BASE, g_mdp_rsz1_va);
 			return g_mdp_rsz1_va + (addr - MDP_RSZ1_PA_BASE);
-		} else if ((addr >= MDP_RSZ2_PA_BASE) && (addr < (MDP_RSZ2_PA_BASE + 0x1000))) {
+		} else if ((MDP_RSZ2_PA_BASE <= addr) && (addr < (MDP_RSZ2_PA_BASE + 0x1000))) {
 			COLOR_DBG("color_pa2va(), MDP_RSZ2 PA:0x%x, PABase[0x%x], VABase[0x%lx]\n", addr,
 				  MDP_RSZ2_PA_BASE, g_mdp_rsz2_va);
 			return g_mdp_rsz2_va + (addr - MDP_RSZ2_PA_BASE);
@@ -2108,15 +2712,7 @@ static unsigned long color_pa2va(unsigned int addr)
 
 	return 0;
 }
-#if defined(CONFIG_MACH_MT6757)
-static unsigned int color_get_chip_ver(void)
-{
-	if (g_config_color30 == true)
-		return MIRAVISION_HW_P_VERSION;
-	else
-		return MIRAVISION_HW_VERSION;
-}
-#endif
+
 static unsigned int color_read_sw_reg(unsigned int reg_id)
 {
 	unsigned int ret = 0;
@@ -2134,7 +2730,7 @@ static unsigned int color_read_sw_reg(unsigned int reg_id)
 	case SWREG_COLOR_BASE_ADDRESS:
 		{
 #if defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795) || defined(CONFIG_ARCH_ELBRUS) \
-	|| defined(CONFIG_MACH_MT6757)  || defined(CONFIG_MACH_KIBOPLUS) || defined(CONFIG_MACH_MT6799)
+	|| defined(CONFIG_ARCH_MT6757)
 			ret = ddp_reg_pa_base[DISP_REG_COLOR0];
 #else
 			ret = ddp_reg_pa_base[DISP_REG_COLOR];
@@ -2144,18 +2740,17 @@ static unsigned int color_read_sw_reg(unsigned int reg_id)
 
 	case SWREG_GAMMA_BASE_ADDRESS:
 		{
-#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_ARCH_MT6757)
 			ret = ddp_reg_pa_base[DISP_REG_GAMMA0];
 #else
-		/* ret = ddp_reg_pa_base[DISP_REG_GAMMA]; */
+			ret = ddp_reg_pa_base[DISP_REG_GAMMA];
 #endif
 			break;
 		}
 
 	case SWREG_AAL_BASE_ADDRESS:
 		{
-#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_ARCH_MT6757)
 			ret = ddp_reg_pa_base[DISP_REG_AAL0];
 #else
 			ret = ddp_reg_pa_base[DISP_REG_AAL];
@@ -2166,8 +2761,7 @@ static unsigned int color_read_sw_reg(unsigned int reg_id)
 #if defined(CCORR_SUPPORT)
 	case SWREG_CCORR_BASE_ADDRESS:
 		{
-#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_ARCH_MT6757)
 			ret = ddp_reg_pa_base[DISP_REG_CCORR0];
 #else
 			ret = ddp_reg_pa_base[DISP_REG_CCORR];
@@ -2310,43 +2904,38 @@ static void color_write_sw_reg(unsigned int reg_id, unsigned int value)
 }
 
 
-static int _color_clock_on(enum DISP_MODULE_ENUM module, void *cmq_handle)
+static int _color_clock_on(DISP_MODULE_ENUM module, void *cmq_handle)
 {
-#if defined(CONFIG_ARCH_MT6755)
-	/* color is DCM , do nothing */
-	return 0;
-#endif
+	int ret = 0;
+
 #ifdef ENABLE_CLK_MGR
 #ifdef CONFIG_MTK_CLKMGR
 #if defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795)
 	if (module == DISP_MODULE_COLOR0) {
-		enable_clock(MT_CG_DISP0_DISP_COLOR0, "DDP");
+		ret = enable_clock(MT_CG_DISP0_DISP_COLOR0, "DDP");
 		COLOR_DBG("color[0]_clock_on CG 0x%x\n",
 			  DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
 	} else {
-		enable_clock(MT_CG_DISP0_DISP_COLOR1, "DDP");
+		ret = enable_clock(MT_CG_DISP0_DISP_COLOR1, "DDP");
 		COLOR_DBG("color[1]_clock_on CG 0x%x\n",
 			  DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
 	}
 #else
-	enable_clock(MT_CG_DISP0_DISP_COLOR, "DDP");
-	COLOR_DBG("color[0]_clock_on CG 0x%x\n", DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
+	ret = enable_clock(MT_CG_DISP0_DISP_COLOR, "DDP");
 #endif
 #else
-	ddp_clk_enable(DISP0_DISP_COLOR);
-	COLOR_DBG("color[0]_clock_on CG 0x%x\n", DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
+	ret = ddp_clk_enable(DISP0_DISP_COLOR);
 #endif
+	pr_notice("M6 DDP clk: color on ret=%d CG=0x%x\n", ret,
+		DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
 #endif
-
-	return 0;
+	return ret;
 }
 
-static int _color_clock_off(enum DISP_MODULE_ENUM module, void *cmq_handle)
+static int _color_clock_off(DISP_MODULE_ENUM module, void *cmq_handle)
 {
-#if defined(CONFIG_ARCH_MT6755)
-	/* color is DCM , do nothing */
-	return 0;
-#endif
+	int ret = 0;
+
 #ifdef ENABLE_CLK_MGR
 #ifdef CONFIG_MTK_CLKMGR
 #if defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795)
@@ -2362,13 +2951,15 @@ static int _color_clock_off(enum DISP_MODULE_ENUM module, void *cmq_handle)
 	disable_clock(MT_CG_DISP0_DISP_COLOR, "DDP");
 #endif
 #else
-	ddp_clk_disable(DISP0_DISP_COLOR);
+	ret = ddp_clk_disable(DISP0_DISP_COLOR);
 #endif
+	pr_notice("M6 DDP clk: color off ret=%d CG=0x%x\n", ret,
+		DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
 #endif
-	return 0;
+	return ret;
 }
 
-static int _color_init(enum DISP_MODULE_ENUM module, void *cmq_handle)
+static int _color_init(DISP_MODULE_ENUM module, void *cmq_handle)
 {
 	_color_clock_on(module, cmq_handle);
 
@@ -2384,23 +2975,17 @@ static int _color_init(enum DISP_MODULE_ENUM module, void *cmq_handle)
 	g_mdp_rsz1_va = color_get_MDP_RSZ1_VA();
 	g_mdp_rsz2_va = color_get_MDP_RSZ2_VA();
 #endif
-#if defined(CONFIG_MACH_MT6757)
-	if (mt_get_chip_hw_ver() >= 0xCB00)
-		g_config_color30 = true;
-	else
-		g_config_color21 = false;
-#endif
 
 	return 0;
 }
 
-static int _color_deinit(enum DISP_MODULE_ENUM module, void *cmq_handle)
+static int _color_deinit(DISP_MODULE_ENUM module, void *cmq_handle)
 {
 	_color_clock_off(module, cmq_handle);
 	return 0;
 }
 
-static int _color_config(enum DISP_MODULE_ENUM module, struct disp_ddp_path_config *pConfig, void *cmq_handle)
+static int _color_config(DISP_MODULE_ENUM module, disp_ddp_path_config *pConfig, void *cmq_handle)
 {
 	int offset = C0_OFFSET;
 	void *cmdq = cmq_handle;
@@ -2418,33 +3003,17 @@ static int _color_config(enum DISP_MODULE_ENUM module, struct disp_ddp_path_conf
 #ifndef CONFIG_FOR_SOURCE_PQ
 		offset = C1_OFFSET;
 		_color_reg_mask(cmdq, DISP_COLOR_INTERNAL_IP_WIDTH + offset, pConfig->dst_w
-			, 0x00003FFF);  /* wrapper width */
+				, 0x00003FFF);  /* wrapper width */
 		_color_reg_mask(cmdq, DISP_COLOR_INTERNAL_IP_HEIGHT + offset, pConfig->dst_h
-			, 0x00003FFF);  /* wrapper height */
+				, 0x00003FFF);  /* wrapper height */
 		return 0;
 #endif
 #endif
 	}
-
-	_color_reg_mask(cmdq, DISP_COLOR_INTERNAL_IP_WIDTH + offset, pConfig->dst_w
-		, 0x00003FFF);  /* wrapper width */
-	_color_reg_mask(cmdq, DISP_COLOR_INTERNAL_IP_HEIGHT + offset, pConfig->dst_h
-		, 0x00003FFF);  /* wrapper height */
-
-#ifdef DISP_PLATFORM_HAS_SHADOW_REG
-	if (disp_helper_get_option(DISP_OPT_SHADOW_REGISTER)) {
-		if (disp_helper_get_option(DISP_OPT_SHADOW_MODE) == 0) {
-			/* full shadow mode*/
-			_color_reg_set(cmdq, DISP_COLOR_SHADOW_CTRL, 0);
-		} else if (disp_helper_get_option(DISP_OPT_SHADOW_MODE) == 1) {
-			/* force commit */
-			_color_reg_set(cmdq, DISP_COLOR_SHADOW_CTRL, 2);
-		} else if (disp_helper_get_option(DISP_OPT_SHADOW_MODE) == 2) {
-			/* bypass shadow */
-			_color_reg_set(cmdq, DISP_COLOR_SHADOW_CTRL, 1);
-		}
-	}
-#endif
+		_color_reg_mask(cmdq, DISP_COLOR_INTERNAL_IP_WIDTH + offset, pConfig->dst_w
+				, 0x00003FFF);  /* wrapper width */
+		_color_reg_mask(cmdq, DISP_COLOR_INTERNAL_IP_HEIGHT + offset, pConfig->dst_h
+				, 0x00003FFF);  /* wrapper height */
 
 #ifdef DISP_PLATFORM_HAS_SHADOW_REG
 	if (disp_helper_get_option(DISP_OPT_SHADOW_REGISTER)) {
@@ -2464,7 +3033,7 @@ static int _color_config(enum DISP_MODULE_ENUM module, struct disp_ddp_path_conf
 	return 0;
 }
 
-static int _color_start(enum DISP_MODULE_ENUM module, void *cmdq)
+static int _color_start(DISP_MODULE_ENUM module, void *cmdq)
 {
 	if (module == DISP_MODULE_COLOR1) {
 #if defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795)
@@ -2497,14 +3066,14 @@ static int _color_start(enum DISP_MODULE_ENUM module, void *cmdq)
 	return 0;
 }
 
-static int _color_set_listener(enum DISP_MODULE_ENUM module, ddp_module_notify notify)
+static int _color_set_listener(DISP_MODULE_ENUM module, ddp_module_notify notify)
 {
 	g_color_cb = notify;
 	return 0;
 }
 
 #if defined(COLOR_SUPPORT_PARTIAL_UPDATE)
-static int _color_partial_update(enum DISP_MODULE_ENUM module, void *arg, void *cmdq)
+static int _color_partial_update(DISP_MODULE_ENUM module, void *arg, void *cmdq)
 {
 	struct disp_rect *roi = (struct disp_rect *) arg;
 	int width = roi->width;
@@ -2529,6 +3098,7 @@ static int _color_partial_update(enum DISP_MODULE_ENUM module, void *arg, void *
 #endif
 #endif
 	}
+
 	_color_reg_mask(cmdq, DISP_COLOR_INTERNAL_IP_WIDTH + offset, width
 		, 0x00003FFF);  /* wrapper width */
 	_color_reg_mask(cmdq, DISP_COLOR_INTERNAL_IP_HEIGHT + offset, height
@@ -2537,8 +3107,8 @@ static int _color_partial_update(enum DISP_MODULE_ENUM module, void *arg, void *
 	return 0;
 }
 
-static int color_ioctl(enum DISP_MODULE_ENUM module, void *handle,
-		enum DDP_IOCTL_NAME ioctl_cmd, void *params)
+static int color_ioctl(DISP_MODULE_ENUM module, void *handle,
+		DDP_IOCTL_NAME ioctl_cmd, void *params)
 {
 	int ret = -1;
 
@@ -2551,13 +3121,13 @@ static int color_ioctl(enum DISP_MODULE_ENUM module, void *handle,
 }
 #endif
 
-static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, void *cmdq)
+static int _color_io(DISP_MODULE_ENUM module, int msg, unsigned long arg, void *cmdq)
 {
 	int ret = 0;
 	int value = 0;
-	struct DISP_PQ_PARAM *pq_param;
-	struct DISPLAY_PQ_T *pq_index;
-	struct DISPLAY_TDSHP_T *tdshp_index;
+	DISP_PQ_PARAM *pq_param;
+	DISPLAY_PQ_T *pq_index;
+	DISPLAY_TDSHP_T *tdshp_index;
 
 	COLOR_DBG("_color_io: msg %x", msg);
 	/* COLOR_ERR("_color_io: GET_PQPARAM %lx\n", DISP_IOCTL_GET_PQPARAM); */
@@ -2570,7 +3140,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 		/* case DISP_IOCTL_SET_C0_PQPARAM: */
 
 		pq_param = get_Color_config(COLOR_ID_0);
-		if (copy_from_user(pq_param, (void *)arg, sizeof(struct DISP_PQ_PARAM))) {
+		if (copy_from_user(pq_param, (void *)arg, sizeof(DISP_PQ_PARAM))) {
 			COLOR_ERR("DISP_IOCTL_SET_PQPARAM Copy from user failed\n");
 
 			return -EFAULT;
@@ -2595,7 +3165,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 		/* case DISP_IOCTL_GET_C0_PQPARAM: */
 
 		pq_param = get_Color_config(COLOR_ID_0);
-		if (copy_to_user((void *)arg, pq_param, sizeof(struct DISP_PQ_PARAM))) {
+		if (copy_to_user((void *)arg, pq_param, sizeof(DISP_PQ_PARAM))) {
 			COLOR_ERR("DISP_IOCTL_GET_PQPARAM Copy to user failed\n");
 			return -EFAULT;
 		}
@@ -2606,7 +3176,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 		COLOR_DBG("DISP_IOCTL_SET_PQINDEX!\n");
 
 		pq_index = get_Color_index();
-		if (copy_from_user(pq_index, (void *)arg, sizeof(struct DISPLAY_PQ_T))) {
+		if (copy_from_user(pq_index, (void *)arg, sizeof(DISPLAY_PQ_T))) {
 			COLOR_ERR("DISP_IOCTL_SET_PQINDEX Copy from user failed\n");
 			return -EFAULT;
 		}
@@ -2616,7 +3186,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 	case DISP_IOCTL_GET_PQINDEX:
 
 		pq_index = get_Color_index();
-		if (copy_to_user((void *)arg, pq_index, sizeof(struct DISPLAY_PQ_T))) {
+		if (copy_to_user((void *)arg, pq_index, sizeof(DISPLAY_PQ_T))) {
 			COLOR_ERR("DISP_IOCTL_GET_PQPARAM Copy to user failed\n");
 			return -EFAULT;
 		}
@@ -2627,7 +3197,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 		COLOR_DBG("DISP_IOCTL_SET_COLOR_REG\n");
 
 		mutex_lock(&g_color_reg_lock);
-		if (copy_from_user(&g_color_reg, (void *)arg, sizeof(struct DISPLAY_COLOR_REG))) {
+		if (copy_from_user(&g_color_reg, (void *)arg, sizeof(DISPLAY_COLOR_REG_T))) {
 			mutex_unlock(&g_color_reg_lock);
 			COLOR_ERR("DISP_IOCTL_SET_COLOR_REG Copy from user failed\n");
 			return -EFAULT;
@@ -2646,7 +3216,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 		COLOR_DBG("DISP_IOCTL_SET_TDSHPINDEX!\n");
 
 		tdshp_index = get_TDSHP_index();
-		if (copy_from_user(tdshp_index, (void *)arg, sizeof(struct DISPLAY_TDSHP_T))) {
+		if (copy_from_user(tdshp_index, (void *)arg, sizeof(DISPLAY_TDSHP_T))) {
 			COLOR_ERR("DISP_IOCTL_SET_TDSHPINDEX Copy from user failed\n");
 			return -EFAULT;
 		}
@@ -2660,7 +3230,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 			return -EFAULT;
 		}
 		tdshp_index = get_TDSHP_index();
-		if (copy_to_user((void *)arg, tdshp_index, sizeof(struct DISPLAY_TDSHP_T))) {
+		if (copy_to_user((void *)arg, tdshp_index, sizeof(DISPLAY_TDSHP_T))) {
 			COLOR_ERR("DISP_IOCTL_GET_TDSHPINDEX Copy to user failed\n");
 			return -EFAULT;
 		}
@@ -2670,7 +3240,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 	case DISP_IOCTL_SET_PQ_CAM_PARAM:
 
 		pq_param = get_Color_Cam_config();
-		if (copy_from_user(pq_param, (void *)arg, sizeof(struct DISP_PQ_PARAM))) {
+		if (copy_from_user(pq_param, (void *)arg, sizeof(DISP_PQ_PARAM))) {
 			COLOR_ERR("DISP_IOCTL_SET_PQ_CAM_PARAM Copy from user failed\n");
 			return -EFAULT;
 		}
@@ -2680,7 +3250,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 	case DISP_IOCTL_GET_PQ_CAM_PARAM:
 
 		pq_param = get_Color_Cam_config();
-		if (copy_to_user((void *)arg, pq_param, sizeof(struct DISP_PQ_PARAM))) {
+		if (copy_to_user((void *)arg, pq_param, sizeof(DISP_PQ_PARAM))) {
 			COLOR_ERR("DISP_IOCTL_GET_PQ_CAM_PARAM Copy to user failed\n");
 			return -EFAULT;
 		}
@@ -2690,7 +3260,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 	case DISP_IOCTL_SET_PQ_GAL_PARAM:
 
 		pq_param = get_Color_Gal_config();
-		if (copy_from_user(pq_param, (void *)arg, sizeof(struct DISP_PQ_PARAM))) {
+		if (copy_from_user(pq_param, (void *)arg, sizeof(DISP_PQ_PARAM))) {
 			COLOR_ERR("DISP_IOCTL_SET_PQ_GAL_PARAM Copy from user failed\n");
 			return -EFAULT;
 		}
@@ -2700,7 +3270,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 	case DISP_IOCTL_GET_PQ_GAL_PARAM:
 
 		pq_param = get_Color_Gal_config();
-		if (copy_to_user((void *)arg, pq_param, sizeof(struct DISP_PQ_PARAM))) {
+		if (copy_to_user((void *)arg, pq_param, sizeof(DISP_PQ_PARAM))) {
 			COLOR_ERR("DISP_IOCTL_GET_PQ_GAL_PARAM Copy to user failed\n");
 			return -EFAULT;
 		}
@@ -2732,11 +3302,11 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 
 	case DISP_IOCTL_READ_REG:
 		{
-			struct DISP_READ_REG rParams;
+			DISP_READ_REG rParams;
 			unsigned long va;
 			unsigned int pa;
 
-			if (copy_from_user(&rParams, (void *)arg, sizeof(struct DISP_READ_REG))) {
+			if (copy_from_user(&rParams, (void *)arg, sizeof(DISP_READ_REG))) {
 				COLOR_ERR("DISP_IOCTL_READ_REG, copy_from_user failed\n");
 				return -EFAULT;
 			}
@@ -2744,7 +3314,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 			pa = (unsigned int)rParams.reg;
 			va = color_pa2va(pa);
 
-			if (color_is_reg_addr_valid(va) == 0) {
+			if (0 == color_is_reg_addr_valid(va)) {
 				COLOR_ERR("reg read, addr invalid, pa:0x%x(va:0x%lx)\n", pa, va);
 				return -EFAULT;
 			}
@@ -2754,7 +3324,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 			COLOR_NLOG("read pa:0x%x(va:0x%lx) = 0x%x (0x%x)\n", pa, va, rParams.val,
 				   rParams.mask);
 
-			if (copy_to_user((void *)arg, &rParams, sizeof(struct DISP_READ_REG))) {
+			if (copy_to_user((void *)arg, &rParams, sizeof(DISP_READ_REG))) {
 				COLOR_ERR("DISP_IOCTL_READ_REG, copy_to_user failed\n");
 				return -EFAULT;
 			}
@@ -2763,12 +3333,12 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 
 	case DISP_IOCTL_WRITE_REG:
 		{
-			struct DISP_WRITE_REG wParams;
+			DISP_WRITE_REG wParams;
 			unsigned int ret;
 			unsigned long va;
 			unsigned int pa;
 
-			if (copy_from_user(&wParams, (void *)arg, sizeof(struct DISP_WRITE_REG))) {
+			if (copy_from_user(&wParams, (void *)arg, sizeof(DISP_WRITE_REG))) {
 				COLOR_ERR("DISP_IOCTL_WRITE_REG, copy_from_user failed\n");
 				return -EFAULT;
 			}
@@ -2790,9 +3360,9 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 									    mask)) | (wParams.val),
 							   (unsigned long *)(va));
 				} else {
+					/* cmdqRecWrite(cmdq, TDSHP_PA_BASE + (wParams.reg - g_tdshp_va),
+					wParams.val, wParams.mask); */
 					cmdqRecWrite(cmdq, pa, wParams.val, wParams.mask);
-					/* cmdqRecWrite(cmdq, TDSHP_PA_BASE + (wParams.reg - g_tdshp_va),*/
-					/*wParams.val, wParams.mask);*/
 				}
 			} else {
 				_color_reg_mask(cmdq, va, wParams.val, wParams.mask);
@@ -2807,9 +3377,9 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 
 	case DISP_IOCTL_READ_SW_REG:
 		{
-			struct DISP_READ_REG rParams;
+			DISP_READ_REG rParams;
 
-			if (copy_from_user(&rParams, (void *)arg, sizeof(struct DISP_READ_REG))) {
+			if (copy_from_user(&rParams, (void *)arg, sizeof(DISP_READ_REG))) {
 				COLOR_ERR("DISP_IOCTL_READ_SW_REG, copy_from_user failed\n");
 				return -EFAULT;
 			}
@@ -2825,7 +3395,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 
 			COLOR_NLOG("read sw reg 0x%x = 0x%x\n", rParams.reg, rParams.val);
 
-			if (copy_to_user((void *)arg, &rParams, sizeof(struct DISP_READ_REG))) {
+			if (copy_to_user((void *)arg, &rParams, sizeof(DISP_READ_REG))) {
 				COLOR_ERR("DISP_IOCTL_READ_SW_REG, copy_to_user failed\n");
 				return -EFAULT;
 			}
@@ -2834,9 +3404,9 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 
 	case DISP_IOCTL_WRITE_SW_REG:
 		{
-			struct DISP_WRITE_REG wParams;
+			DISP_WRITE_REG wParams;
 
-			if (copy_from_user(&wParams, (void *)arg, sizeof(struct DISP_WRITE_REG))) {
+			if (copy_from_user(&wParams, (void *)arg, sizeof(DISP_WRITE_REG))) {
 				COLOR_ERR("DISP_IOCTL_WRITE_SW_REG, copy_from_user failed\n");
 				return -EFAULT;
 			}
@@ -2871,9 +3441,9 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 
 	case DISP_IOCTL_PQ_SET_WINDOW:
 		{
-			struct DISP_PQ_WIN_PARAM win_param;
+			DISP_PQ_WIN_PARAM win_param;
 
-			if (copy_from_user(&win_param, (void *)arg, sizeof(struct DISP_PQ_WIN_PARAM))) {
+			if (copy_from_user(&win_param, (void *)arg, sizeof(DISP_PQ_WIN_PARAM))) {
 				COLOR_ERR("DISP_IOCTL_PQ_SET_WINDOW Copy from user failed\n");
 				return -EFAULT;
 			}
@@ -2903,7 +3473,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 
 
 	case DISP_IOCTL_PQ_GET_DC_PARAM:
-		if (copy_to_user((void *)arg, &g_PQ_DC_Param, sizeof(struct DISP_PQ_DC_PARAM))) {
+		if (copy_to_user((void *)arg, &g_PQ_DC_Param, sizeof(DISP_PQ_DC_PARAM))) {
 			COLOR_ERR("DISP_IOCTL_PQ_GET_DC_PARAM Copy to user failed\n");
 			return -EFAULT;
 		}
@@ -2911,7 +3481,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 		break;
 
 	case DISP_IOCTL_PQ_SET_DC_PARAM:
-		if (copy_from_user(&g_PQ_DC_Param, (void *)arg, sizeof(struct DISP_PQ_DC_PARAM))) {
+		if (copy_from_user(&g_PQ_DC_Param, (void *)arg, sizeof(DISP_PQ_DC_PARAM))) {
 			COLOR_ERR("DISP_IOCTL_PQ_SET_DC_PARAM Copy from user failed\n");
 			return -EFAULT;
 		}
@@ -2919,7 +3489,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 		break;
 
 	case DISP_IOCTL_PQ_GET_DS_PARAM:
-			if (copy_to_user((void *)arg, &g_PQ_DS_Param, sizeof(struct DISP_PQ_DS_PARAM))) {
+			if (copy_to_user((void *)arg, &g_PQ_DS_Param, sizeof(DISP_PQ_DS_PARAM))) {
 				COLOR_ERR("DISP_IOCTL_PQ_GET_DS_PARAM Copy to user failed\n");
 				return -EFAULT;
 			}
@@ -2927,7 +3497,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 		break;
 
 	case DISP_IOCTL_PQ_GET_MDP_TDSHP_REG:
-			if (copy_to_user((void *)arg, &g_tdshp_reg, sizeof(struct MDP_TDSHP_REG))) {
+			if (copy_to_user((void *)arg, &g_tdshp_reg, sizeof(MDP_TDSHP_REG))) {
 				COLOR_ERR("DISP_IOCTL_PQ_GET_MDP_TDSHP_REG Copy to user failed\n");
 				return -EFAULT;
 			}
@@ -2936,7 +3506,7 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 
 #ifdef DISP_MDP_COLOR_ON
 	case DISP_IOCTL_PQ_GET_MDP_COLOR_CAP:
-			if (copy_to_user((void *)arg, &mdp_color_cap, sizeof(struct MDP_COLOR_CAP))) {
+			if (copy_to_user((void *)arg, &mdp_color_cap, sizeof(MDP_COLOR_CAP))) {
 				COLOR_ERR("DISP_IOCTL_PQ_GET_MDP_COLOR_CAP Copy to user failed\n");
 				return -EFAULT;
 			}
@@ -2953,8 +3523,55 @@ static int _color_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, v
 	return ret;
 }
 
+DISPLAY_COLOR_REG_T composeColorRegisters(DISP_PQ_PARAM *pqparam)
+{
+	DISPLAY_COLOR_REG_T colorReg = {0};
+	DISPLAY_PQ_T *pqTable = &primary_pqindex;
+
+	colorReg.GLOBAL_SAT = pqTable->GLOBAL_SAT[pqparam->u4SatGain];
+	colorReg.CONTRAST = pqTable->CONTRAST[pqparam->u4Contrast];
+	colorReg.BRIGHTNESS = pqTable->BRIGHTNESS[pqparam->u4Brightness];
+
+	memcpy(colorReg.PARTIAL_Y, pqTable->PARTIAL_Y[pqparam->u4PartialY], sizeof(colorReg.PARTIAL_Y));
+	memcpy(colorReg.PURP_TONE_S, pqTable->PURP_TONE_S[pqparam->u4SatAdj[PURP_TONE]], sizeof(colorReg.PURP_TONE_S));
+	memcpy(colorReg.SKIN_TONE_S, pqTable->SKIN_TONE_S[pqparam->u4SatAdj[SKIN_TONE]], sizeof(colorReg.SKIN_TONE_S));
+	memcpy(colorReg.GRASS_TONE_S, pqTable->GRASS_TONE_S[pqparam->u4SatAdj[GRASS_TONE]], sizeof(colorReg.GRASS_TONE_S));
+	memcpy(colorReg.SKY_TONE_S, pqTable->SKY_TONE_S[pqparam->u4SatAdj[SKY_TONE]], sizeof(colorReg.SKY_TONE_S));
+	memcpy(colorReg.PURP_TONE_H, pqTable->PURP_TONE_H[pqparam->u4HueAdj[PURP_TONE]], sizeof(colorReg.PURP_TONE_H));
+	memcpy(colorReg.SKIN_TONE_H, pqTable->SKIN_TONE_H[pqparam->u4HueAdj[SKIN_TONE]], sizeof(colorReg.SKIN_TONE_H));
+	memcpy(colorReg.GRASS_TONE_H, pqTable->GRASS_TONE_H[pqparam->u4HueAdj[GRASS_TONE]], sizeof(colorReg.GRASS_TONE_H));
+	memcpy(colorReg.SKY_TONE_H, pqTable->SKY_TONE_H[pqparam->u4HueAdj[SKY_TONE]], sizeof(colorReg.SKY_TONE_H));
+
+	return colorReg;
+}
+
+void set_pq_param(DISP_PQ_PARAM *pq_param)
+{
+	DISPLAY_COLOR_REG_T colorReg;
+
+	colorReg = composeColorRegisters(pq_param);
+	color_write_hw_reg(DISP_MODULE_COLOR0, &colorReg, NULL);
+	color_trigger_refresh(DISP_MODULE_COLOR0);
+}
+
+void set_lcd_ic_color_enhancement_mode(int mode)
+{
+	if(first_set_color_enhancement_mode == 0)
+	{
+		first_set_color_enhancement_mode = 1;
+		m_pqparam = get_Color_config(COLOR_ID_0);
+	}
+	if(mode == 0)
+		set_pq_param(&pqparam_std);
+	else if(mode == 1)
+		set_pq_param(&pqparam_viv);
+	else if(mode == 2)
+		set_pq_param(m_pqparam);
+}
+EXPORT_SYMBOL(set_lcd_ic_color_enhancement_mode);
+
 #ifdef CONFIG_FOR_SOURCE_PQ
-void set_color_bypass(enum DISP_MODULE_ENUM module, int bypass, void *cmdq_handle)
+void set_color_bypass(DISP_MODULE_ENUM module, int bypass, void *cmdq_handle)
 {
 	int offset = C0_OFFSET;
 
@@ -2965,7 +3582,7 @@ void set_color_bypass(enum DISP_MODULE_ENUM module, int bypass, void *cmdq_handl
 
 	g_color_bypass = bypass;
 
-	if (module == DISP_MODULE_COLOR1)
+	if (DISP_MODULE_COLOR1 == module)
 		offset = C1_OFFSET;
 
 	/* DISP_REG_SET(NULL, DISP_COLOR_INTERNAL_IP_WIDTH + offset, srcWidth);  //wrapper width */
@@ -2984,21 +3601,14 @@ void set_color_bypass(enum DISP_MODULE_ENUM module, int bypass, void *cmdq_handl
 		_color_reg_mask(cmdq_handle, DISP_COLOR_START + offset, 0x00000001, 0x3);	/* color start */
 
 		/* enable R2Y/Y2R in Color Wrapper */
-		if (g_config_color21 == true) {
-			/* RDMA & OVL will enable wide-gamut function*/
-			/* disable rgb clipping function in CM1 to keep the wide-gamut range */
-			_color_reg_mask(cmdq_handle, DISP_COLOR_CM1_EN + offset, 0x01, 0x03);
-		} else {
-			_color_reg_mask(cmdq_handle, DISP_COLOR_CM1_EN + offset, 0x01, 0x01);
-		}
+		_color_reg_mask(cmdq_handle, DISP_COLOR_CM1_EN + offset, 0x01, 0x01);
 		/* also set no rounding on Y2R */
 		_color_reg_mask(cmdq_handle, DISP_COLOR_CM2_EN + offset, 0x11, 0x11);
-	}
 
 }
 #endif
 
-static int _color_bypass(enum DISP_MODULE_ENUM module, int bypass)
+static int _color_bypass(DISP_MODULE_ENUM module, int bypass)
 {
 	int offset = C0_OFFSET;
 
@@ -3009,7 +3619,7 @@ static int _color_bypass(enum DISP_MODULE_ENUM module, int bypass)
 
 	g_color_bypass = bypass;
 
-	if (module == DISP_MODULE_COLOR1)
+	if (DISP_MODULE_COLOR1 == module)
 		offset = C1_OFFSET;
 
 	/* _color_reg_set(NULL, DISP_COLOR_INTERNAL_IP_WIDTH + offset, srcWidth);  //wrapper width */
@@ -3028,14 +3638,7 @@ static int _color_bypass(enum DISP_MODULE_ENUM module, int bypass)
 		_color_reg_mask(NULL, DISP_COLOR_START + offset, 0x00000001, 0x3);	/* color start */
 
 		/* enable R2Y/Y2R in Color Wrapper */
-		if (g_config_color21 == true) {
-			/* RDMA & OVL will enable wide-gamut function*/
-			/* disable rgb clipping function in CM1 to keep the wide-gamut range */
-			_color_reg_mask(NULL, DISP_COLOR_CM1_EN + offset, 0x01, 0x03);
-		} else {
-			_color_reg_mask(NULL, DISP_COLOR_CM1_EN + offset, 0x01, 0x01);
-		}
-
+		_color_reg_mask(NULL, DISP_COLOR_CM1_EN + offset, 0x01, 0x01);
 #if defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795)
 		_color_reg_mask(NULL, DISP_COLOR_CM2_EN + offset, 0x01, 0x11);	/* also set no rounding on Y2R */
 #else
@@ -3046,7 +3649,7 @@ static int _color_bypass(enum DISP_MODULE_ENUM module, int bypass)
 	return 0;
 }
 
-static int _color_build_cmdq(enum DISP_MODULE_ENUM module, void *cmdq_trigger_handle, enum CMDQ_STATE state)
+static int _color_build_cmdq(DISP_MODULE_ENUM module, void *cmdq_trigger_handle, CMDQ_STATE state)
 {
 	int ret = 0;
 
@@ -3058,7 +3661,7 @@ static int _color_build_cmdq(enum DISP_MODULE_ENUM module, void *cmdq_trigger_ha
 	/* only get COLOR HIST on primary display */
 	if ((module == DISP_MODULE_COLOR0) && (state == CMDQ_AFTER_STREAM_EOF)) {
 #if defined(CONFIG_ARCH_MT6595) || defined(CONFIG_ARCH_MT6795) || defined(CONFIG_ARCH_ELBRUS) \
-	|| defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || defined(CONFIG_MACH_MT6799)
+	|| defined(CONFIG_ARCH_MT6757)
 		ret =
 		    cmdqRecReadToDataRegister(cmdq_trigger_handle,
 					      ddp_reg_pa_base[DISP_REG_COLOR0] +
@@ -3076,12 +3679,7 @@ static int _color_build_cmdq(enum DISP_MODULE_ENUM module, void *cmdq_trigger_ha
 	return ret;
 }
 
-void disp_color_dbg_log_level(unsigned int debug_level)
-{
-	g_color_dbg_en = debug_level;
-}
-
-struct DDP_MODULE_DRIVER ddp_driver_color = {
+DDP_MODULE_DRIVER ddp_driver_color = {
 	.init = _color_init,
 	.deinit = _color_deinit,
 	.config = _color_config,

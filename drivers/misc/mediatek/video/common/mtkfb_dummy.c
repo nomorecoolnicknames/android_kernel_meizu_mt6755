@@ -72,13 +72,13 @@ static u32 fb_yres_update;
 /* local variables */
 /* --------------------------------------------------------------------------- */
 
-unsigned int fb_pa;
+unsigned int fb_pa = 0;
 struct fb_info *mtkfb_fbi;
 unsigned int lcd_fps = 6000;
 char mtkfb_lcm_name[256] = { 0 };
 
-bool is_ipoh_bootup;
-bool is_early_suspended;
+bool is_ipoh_bootup = false;
+bool is_early_suspended = false;
 
 
 /* --------------------------------------------------------------------------- */
@@ -111,8 +111,8 @@ static int mtkfb_open(struct fb_info *info, int user)
 	return 0;
 }
 
-/* Called when the mtkfb device is closed. We make sure that any pending*/
-/* gfx DMA operations are ended, before we return. */
+/* Called when the mtkfb device is closed. We make sure that any pending
+ * gfx DMA operations are ended, before we return. */
 static int mtkfb_release(struct fb_info *info, int user)
 {
 	return 0;
@@ -152,7 +152,7 @@ static int mtkfb_setcolreg(u_int regno, u_int red, u_int green,
 		/* TODO: RGB888, BGR888, ABGR8888 */
 
 	default:
-		pr_err("set color info fail, bpp=%d\n", bpp);
+		BUG();
 	}
 
 exit:
@@ -186,8 +186,7 @@ static void set_fb_fix(struct mtkfb_device *fbdev)
 		fix->visual = FB_VISUAL_PSEUDOCOLOR;
 		break;
 	default:
-		pr_err("set fb fix error, bit per pixel=%d\n", var->bits_per_pixel);
-		return;
+		BUG();
 	}
 
 	fix->accel = FB_ACCEL_NONE;
@@ -294,7 +293,7 @@ static int mtkfb_check_var(struct fb_var_screeninfo *var, struct fb_info *fbi)
 	       var->xres, var->yres, var->xres_virtual, var->yres_virtual,
 	       var->xoffset, var->yoffset, var->bits_per_pixel);
 
-	if (bpp == 16) {
+	if (16 == bpp) {
 		var->red.offset = 11;
 		var->red.length = 5;
 		var->green.offset = 5;
@@ -303,23 +302,23 @@ static int mtkfb_check_var(struct fb_var_screeninfo *var, struct fb_info *fbi)
 		var->blue.length = 5;
 		var->transp.offset = 0;
 		var->transp.length = 0;
-	} else if (bpp == 24) {
+	} else if (24 == bpp) {
 		var->red.length = var->green.length = var->blue.length = 8;
 		var->transp.length = 0;
 
 		/* Check if format is RGB565 or BGR565 */
 
-		ASSERT(var->green.offset == 8);
-		ASSERT((var->red.offset + var->blue.offset == 16));
-		ASSERT((var->red.offset == 16 || var->red.offset == 0));
-	} else if (bpp == 32) {
+		BUG_ON(!(8 == var->green.offset));
+		BUG_ON(!(16 == var->red.offset + var->blue.offset));
+		BUG_ON(!(16 == var->red.offset || 0 == var->red.offset));
+	} else if (32 == bpp) {
 		var->red.length = var->green.length = var->blue.length = var->transp.length = 8;
 
 		/* Check if format is ARGB565 or ABGR565 */
 
-		ASSERT((var->green.offset && 24 == var->transp.offset == 24));
-		ASSERT((var->red.offset + var->blue.offset == 16));
-		ASSERT((var->red.offset == 16 || var->red.offset == 0));
+		BUG_ON(!(8 == var->green.offset && 24 == var->transp.offset));
+		BUG_ON(!(16 == var->red.offset + var->blue.offset));
+		BUG_ON(!(16 == var->red.offset || 0 == var->red.offset));
 	}
 
 	var->red.msb_right = var->green.msb_right = var->blue.msb_right = var->transp.msb_right = 0;
@@ -384,7 +383,7 @@ static int mtkfb_fbinfo_init(struct fb_info *info)
 	struct fb_var_screeninfo var;
 	int r = 0;
 
-	ASSERT(fbdev->fb_va_base);
+	BUG_ON(!fbdev->fb_va_base);
 	info->fbops = &mtkfb_ops;
 	info->flags = FBINFO_FLAG_DEFAULT;
 	info->screen_base = (char *)fbdev->fb_va_base;
@@ -457,7 +456,7 @@ static void mtkfb_free_resources(struct mtkfb_device *fbdev, int state)
 	switch (state) {
 	case MTKFB_ACTIVE:
 		r = unregister_framebuffer(fbdev->fb_info);
-		ASSERT(r = 0);
+		BUG_ON(!(0 == r));
 		/* lint -fallthrough */
 	case 4:
 		mtkfb_fbinfo_cleanup(fbdev);
@@ -475,11 +474,11 @@ static void mtkfb_free_resources(struct mtkfb_device *fbdev, int state)
 		/* nothing to free */
 		break;
 	default:
-		pr_err("free resources fail,state=%d\n", state);
+		BUG();
 	}
 }
 
-unsigned int vramsize;
+unsigned int vramsize = 0;
 #ifdef CONFIG_OF
 struct tag_videolfb {
 	u64 fb_base;
@@ -488,8 +487,8 @@ struct tag_videolfb {
 	u32 vram;
 	char lcmname[1];	/* this is the minimum size */
 };
-unsigned int islcmconnected;
-phys_addr_t fb_base;
+unsigned int islcmconnected = 0;
+phys_addr_t fb_base = 0;
 static int is_videofb_parse_done;
 static unsigned long video_node;
 
@@ -521,7 +520,7 @@ int _parse_tag_videolfb(void)
 			mtkfb_lcm_name[strlen(videolfb_tag->lcmname)] = '\0';
 
 			lcd_fps = videolfb_tag->fps;
-			if (lcd_fps == 0)
+			if (0 == lcd_fps)
 				lcd_fps = 6000;
 
 			islcmconnected = videolfb_tag->islcmfound;
@@ -555,7 +554,7 @@ int _parse_tag_videolfb(void)
 				return -1;
 			}
 			lcd_fps = of_read_number(prop, 1);
-			if (lcd_fps == 0)
+			if (0 == lcd_fps)
 				lcd_fps = 6000;
 
 			prop = of_get_flat_dt_prop(video_node, "atag,videolfb-vramSize", NULL);

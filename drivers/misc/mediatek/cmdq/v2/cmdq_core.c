@@ -5502,6 +5502,16 @@ static void cmdq_core_attach_error_task(const struct TaskStruct *pTask, int32_t 
 		return;
 	}
 
+	/* Log the first GCE task errors/timeouts. */
+	{
+		static int _ae125;
+
+		if (_ae125 < 8) {
+			_ae125++;
+			pr_emerg("[FORGE_DISP] #125 cmdq attach_error #%d thread=%d\n", _ae125, thread);
+		}
+	}
+
 	pThread = &(gCmdqContext.thread[thread]);
 	pEngine = gCmdqContext.engine;
 
@@ -6172,6 +6182,18 @@ static int32_t cmdq_core_wait_task_done_with_timeout_impl(struct TaskStruct *pTa
 				    && pTask->taskState != TASK_STATE_WAITING),
 				   /* timeout_jiffies); */
 				   msecs_to_jiffies(CMDQ_PREDUMP_TIMEOUT_MS));
+
+	/* Log the first CMDQ software timeouts (waitQ == 0 after
+	 * CMDQ_PREDUMP_TIMEOUT_MS). */
+	if (waitQ == 0) {
+		static int _st125;
+
+		if (_st125 < 8) {
+			_st125++;
+			pr_emerg("[FORGE_DISP] #125 cmdq SW-timeout #%d thread=%d taskState=%d\n",
+				 _st125, thread, pTask->taskState);
+		}
+	}
 
 	/* if SW-timeout, pre-dump hang instructions */
 	while (waitQ == 0 && retryCount < CMDQ_PREDUMP_RETRY_COUNT) {

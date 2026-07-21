@@ -34,11 +34,12 @@
 # Common Source files for all chips
 ifneq (y, $(filter y, $(CONFIG_MACH_MT6799)))
 obj-$(CONFIG_MTK_FB) += 			\
-			mtkfb_fence.o \
-			fbconfig_kdebug.o
+			mtkfb_fence.o
+obj-$(CONFIG_MTK_FB) += mtkfb_debug.o \
+			# # fbconfig_kdebug.o
 endif
 
-ifeq (y, $(filter y, $(CONFIG_MACH_MT6799) $(CONFIG_MACH_MT6757) $(CONFIG_MACH_KIBOPLUS) $(CONFIG_ARCH_MT6797) $(CONFIG_MACH_MT8167)))
+ifeq (y, $(filter y, $(CONFIG_MACH_MT6799) $(CONFIG_MACH_MT6757) $(CONFIG_MACH_KIBOPLUS) $(CONFIG_ARCH_MT6797) $(CONFIG_MACH_MT8167) $(CONFIG_ARCH_MT6755)))
 obj-y += aal20/
 obj-y += corr10/
 endif
@@ -48,9 +49,9 @@ obj-y += od10/
 endif
 
 # Todo: newer chip
-ifeq (y, $(filter y, $(CONFIG_MACH_MT6757) $(CONFIG_MACH_KIBOPLUS) $(CONFIG_ARCH_MT6797) $(CONFIG_ARCH_MT6795) $(CONFIG_MACH_MT8167)))
-obj-y += rdma10/
-obj-y += wdma10/
+ifeq (y, $(filter y, $(CONFIG_MACH_MT6757) $(CONFIG_MACH_KIBOPLUS) $(CONFIG_ARCH_MT6797) $(CONFIG_ARCH_MT6795) $(CONFIG_MACH_MT8167) $(CONFIG_ARCH_MT6755)))
+# obj-y += rdma10/
+# obj-y += wdma10/
 endif
 # Todo: newer chip
 
@@ -61,6 +62,8 @@ endif
 
 ccflags-y += \
 				-I$(srctree)/drivers/misc/mediatek/video/include     \
+			-I$(srctree)/drivers/misc/mediatek/video/common/wdma10/ \
+			-I$(srctree)/drivers/misc/mediatek/video/common/rdma10/ \
 				-I$(srctree)/drivers/misc/mediatek/video/common/IPv1     \
 				-I$(srctree)/drivers/misc/mediatek/video/$(MTK_PLATFORM)/dispsys \
 				-I$(srctree)/drivers/misc/mediatek/video/$(MTK_PLATFORM)/videox \

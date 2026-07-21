@@ -22,4 +22,4 @@ ccflags-y += \
 				-I$(srctree)/drivers/misc/mediatek/cmdq/v2/ \
 				-I$(srctree)/drivers/misc/mediatek/cmdq/v2/$(MTK_PLATFORM)/ \
 				-I$(srctree)/drivers/misc/mediatek/lcm/inc/ \
-				-I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM)/
+				-I$(srctree)/drivers/misc/mediatek/m4u/mt6757/

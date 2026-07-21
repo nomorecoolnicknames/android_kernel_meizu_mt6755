@@ -181,6 +181,7 @@ struct disp_session_config {
 	enum DISP_MODE mode;
 	unsigned int session_id;
 	enum DISP_SESSION_USER user;
+
 	unsigned int present_fence_idx;
 	enum DISP_DC_TYPE dc_type;
 	int need_merge;
@@ -189,6 +190,7 @@ struct disp_session_config {
 
 struct disp_session_vsync_config {
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 	unsigned int vsync_cnt;
 	unsigned long long vsync_ts;
 	int lcm_fps;
@@ -202,47 +204,39 @@ struct layer_dirty_roi {
 };
 
 struct disp_input_config {
+	__u32 layer_id;
+	__u32 layer_enable;
+	enum DISP_BUFFER_SOURCE buffer_source;
 	void *src_base_addr;
 	void *src_phy_addr;
-	enum DISP_BUFFER_SOURCE buffer_source;
-	enum DISP_BUFFER_TYPE security;
+	__u32 src_direct_link;
 	enum DISP_FORMAT src_fmt;
-	enum DISP_ALPHA_TYPE src_alpha;
-	enum DISP_ALPHA_TYPE dst_alpha;
-	enum DISP_YUV_RANGE_ENUM yuv_range;
-
-	enum DISP_ORIENTATION layer_rotation;
-	enum DISP_LAYER_TYPE layer_type;
-	enum DISP_ORIENTATION video_rotation;
-
-	__u32 next_buff_idx;
-	int src_fence_fd;	/* fence to be waited before using this buffer. -1 if invalid */
-	void *src_fence_struct;	/* fence struct of src_fence_fd, used in kernel */
-
+	__u32 src_use_color_key;
 	__u32 src_color_key;
-	__u32 frm_sequence;
-
-	void *dirty_roi_addr;
-	__u16 dirty_roi_num;
-
-	__u16 src_pitch;
+	__u32 src_pitch;
 	__u16 src_offset_x, src_offset_y;
 	__u16 src_width, src_height;
 	__u16 tgt_offset_x, tgt_offset_y;
 	__u16 tgt_width, tgt_height;
-
-	__u8 alpha_enable;
-	__u8 alpha;
-	__u8 sur_aen;
-	__u8 src_use_color_key;
-	__u8 layer_id;
-	__u8 layer_enable;
-	__u8 src_direct_link;
-
-	__u8 isTdshp;
-	__u8 identity;
-	__u8 connected_type;
-	__s8 ext_sel_layer;
+	enum DISP_ORIENTATION layer_rotation;
+	enum DISP_LAYER_TYPE layer_type;
+	enum DISP_ORIENTATION video_rotation;
+	__u32 isTdshp;
+	__u32 next_buff_idx;
+	int identity;
+	int connected_type;
+	enum DISP_BUFFER_TYPE security;
+	__u32 alpha_enable;
+	__u32 alpha;
+	__u32 sur_aen;
+	enum DISP_ALPHA_TYPE src_alpha;
+	enum DISP_ALPHA_TYPE dst_alpha;
+	__u32 frm_sequence;
+	enum DISP_YUV_RANGE_ENUM yuv_range;
+	int src_fence_fd;
+	void *src_fence_struct;
+	void *dirty_roi_addr;
+	__u16 dirty_roi_num;
 };
 
 struct disp_output_config {
@@ -258,35 +252,37 @@ struct disp_output_config {
 	enum DISP_BUFFER_TYPE security;
 	unsigned int buff_idx;
 	unsigned int interface_idx;
-	int src_fence_fd;	/* fence to be waited before using this buffer. -1 if invalid */
-	void *src_fence_struct;		/* fence struct of src_fence_fd, used in kernel */
 	unsigned int frm_sequence;
 };
 
 struct disp_session_input_config {
 	enum DISP_SESSION_USER setter;
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 	unsigned int config_layer_num;
-	struct disp_input_config config[12];
+	struct disp_input_config config[8];
 };
 
 struct disp_session_output_config {
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 	struct disp_output_config config;
 };
 
 struct disp_session_layer_num_config {
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 	unsigned int max_layer_num;
 };
 
 struct disp_frame_cfg_t {
 	enum DISP_SESSION_USER setter;
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 
 	/* input config */
 	unsigned int input_layer_num;
-	struct disp_input_config input_cfg[12];
+	struct disp_input_config input_cfg[8];
 	unsigned int overlap_layer_num;
 
 	/* constant layer */
@@ -300,14 +296,15 @@ struct disp_frame_cfg_t {
 	/* trigger config */
 	enum DISP_MODE mode;
 	unsigned int present_fence_idx;
-	int prev_present_fence_fd;
-	void *prev_present_fence_struct;
+
+
 	enum EXTD_TRIGGER_MODE tigger_mode;
-	enum DISP_SESSION_USER user;
+
 };
 
 struct disp_session_info {
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 	unsigned int maxLayerNum;
 	unsigned int isHwVsyncAvailable;
 	enum DISP_IF_TYPE displayType;
@@ -334,6 +331,7 @@ struct disp_session_info {
 struct disp_buffer_info {
 	/* Session */
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 	/* Input */
 	unsigned int layer_id;
 	unsigned int layer_en;
@@ -349,6 +347,7 @@ struct disp_buffer_info {
 struct disp_present_fence {
 	/* input */
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 	/* output */
 	int present_fence_fd;
 	unsigned int present_fence_index;
@@ -357,6 +356,7 @@ struct disp_present_fence {
 struct disp_present_fence_info {
 	/* Session */
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 
 	/* Output */
 	unsigned int index;
@@ -395,6 +395,7 @@ struct disp_caps_info {
 
 struct disp_session_buf_info {
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 	unsigned int buf_hnd[3];
 };
 
@@ -421,6 +422,7 @@ enum DISP_SCENARIO {
 };
 struct disp_scenario_config_t {
 	unsigned int session_id;
+	enum DISP_SESSION_USER user;
 	unsigned int scenario;
 };
 
@@ -467,3 +469,30 @@ int disp_mgr_get_session_info(struct disp_session_info *info);
 
 
 #endif				/* __DISP_SESSION_H */
+
+typedef enum DISP_IF_TYPE DISP_IF_TYPE;
+typedef enum DISP_IF_FORMAT DISP_IF_FORMAT;
+typedef enum DISP_IF_MODE DISP_IF_MODE;
+typedef enum DISP_ORIENTATION DISP_ORIENTATION;
+typedef enum DISP_FORMAT DISP_FORMAT;
+typedef enum DISP_LAYER_TYPE DISP_LAYER_TYPE;
+typedef enum DISP_BUFFER_TYPE DISP_BUFFER_TYPE;
+typedef enum DISP_BUFFER_SOURCE DISP_BUFFER_SOURCE;
+typedef enum DISP_ALPHA_TYPE DISP_ALPHA_TYPE;
+typedef enum DISP_YUV_RANGE_ENUM DISP_YUV_RANGE_ENUM;
+typedef enum DISP_MODE DISP_MODE;
+
+typedef struct disp_session_config disp_session_config;
+typedef struct disp_session_vsync_config disp_session_vsync_config;
+typedef struct disp_session_input_config disp_session_input_config;
+typedef struct disp_session_output_config disp_session_output_config;
+typedef struct disp_session_layer_num_config disp_session_layer_num_config;
+typedef struct disp_session_info disp_session_info;
+typedef struct disp_session_buf_info disp_session_buf_info;
+typedef struct disp_buffer_info disp_buffer_info;
+typedef struct disp_output_config disp_output_config;
+typedef struct disp_input_config disp_input_config;
+typedef struct disp_frame_cfg_t disp_frame_cfg_t;
+typedef struct disp_present_fence disp_present_fence;
+typedef struct disp_caps_info disp_caps_info;
+#define DISP_IOCTL_SCREEN_FREEZE 0

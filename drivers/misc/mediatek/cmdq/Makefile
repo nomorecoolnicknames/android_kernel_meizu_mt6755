@@ -12,7 +12,7 @@
 #
 
 # common driver code for CMDQ
-ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "mt6757" "mt8167" "kiboplus"))
+ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "mt6757" "mt8167" "kiboplus" "mt6755"))
 	obj-y += v2/
 else
 	obj-y += v3/

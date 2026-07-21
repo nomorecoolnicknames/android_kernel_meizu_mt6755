@@ -819,6 +819,18 @@ int32_t cmdq_sec_submit_to_secure_world_async_unlocked(uint32_t iwcCommand,
 	int32_t msgMAXSize;
 	char *dispatch_mod = "CMDQ";
 
+	/* Log the first 4 secure-world CMDQ SMCs, before the submission, so a
+	 * call that never returns still leaves a trace. */
+	{
+		static int _fs;
+
+		if (_fs < 4) {
+			_fs++;
+			pr_emerg("[FORGE_M681] #120 cmdq_sec submit#%d iwc=0x%x comm=%s\n",
+				 _fs, iwcCommand, current->comm);
+		}
+	}
+
 	CMDQ_TIME tEntrySec;
 	CMDQ_TIME tExitSec;
 

@@ -17,6 +17,7 @@
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/file.h>
+#include <linux/fdtable.h>
 #include <linux/freezer.h>
 #include <linux/fs.h>
 #include <linux/anon_inodes.h>
@@ -25,6 +26,7 @@
 #include <linux/memblock.h>
 #include <linux/miscdevice.h>
 #include <linux/export.h>
+#include <linux/moduleparam.h>
 #include <linux/mm.h>
 #include <linux/mm_types.h>
 #include <linux/rbtree.h>
@@ -1269,6 +1271,85 @@ static struct dma_buf_ops dma_buf_ops = {
 	.kunmap = ion_dma_buf_kunmap,
 };
 
+/*
+ * forge_ion_fdowners: attribute every live dma_buf fd on an ION buffer to
+ * the process holding it.  Diagnostic only: no alloc/free path is touched,
+ * and the fd-table walk runs only when /sys/kernel/debug/ion/fd_owners is
+ * read while the knob is 1.  Limitation: a buffer pinned solely by an mmap
+ * whose fd was already closed is invisible here (it still shows in the
+ * heap's orphaned list).
+ */
+static bool forge_ion_fdowners;
+module_param(forge_ion_fdowners, bool, 0644);
+
+struct forge_fdowner_ctx {
+	struct seq_file *s;
+	struct task_struct *task;
+	size_t total;
+	int count;
+};
+
+static int forge_fdowner_cb(const void *p, struct file *file, unsigned int fd)
+{
+	struct forge_fdowner_ctx *ctx = (struct forge_fdowner_ctx *)p;
+	struct dma_buf *db;
+	struct ion_buffer *buffer;
+
+	if (!file->f_path.dentry ||
+	    strcmp(file->f_path.dentry->d_name.name, "dmabuf"))
+		return 0;
+	db = file->private_data;
+	if (!db || db->ops != &dma_buf_ops)
+		return 0;
+	buffer = db->priv;
+	/* runs under files->file_lock + task_lock: seq_printf does not sleep */
+	seq_printf(ctx->s, "%16s %6d fd=%-4u buf=0x%p heap=%2d size=%9zu hdl=%d ref=%d\n",
+		   ctx->task->comm, task_pid_nr(ctx->task), fd, buffer,
+		   buffer->heap->id, buffer->size, buffer->handle_count,
+		   atomic_read(&buffer->ref.refcount));
+	ctx->total += buffer->size;
+	ctx->count++;
+	return 0;
+}
+
+static int forge_ion_fdowners_show(struct seq_file *s, void *unused)
+{
+	struct task_struct *p;
+
+	if (!forge_ion_fdowners) {
+		seq_puts(s, "disabled: echo 1 > /sys/module/ion/parameters/forge_ion_fdowners\n");
+		return 0;
+	}
+
+	seq_puts(s, "one line per dma_buf fd on an ION buffer; hdl = ion handle_count, ref = buffer kref\n");
+	rcu_read_lock();
+	for_each_process(p) {
+		struct forge_fdowner_ctx ctx = { .s = s, .task = p };
+
+		task_lock(p);
+		if (p->files)
+			iterate_fd(p->files, 0, forge_fdowner_cb, &ctx);
+		task_unlock(p);
+		if (ctx.count)
+			seq_printf(s, "%16s %6d TOTAL %d fds %zu bytes\n",
+				   p->comm, task_pid_nr(p), ctx.count, ctx.total);
+	}
+	rcu_read_unlock();
+	return 0;
+}
+
+static int forge_ion_fdowners_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, forge_ion_fdowners_show, NULL);
+}
+
+static const struct file_operations forge_ion_fdowners_fops = {
+	.open = forge_ion_fdowners_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
 struct dma_buf *ion_share_dma_buf(struct ion_client *client,
 						struct ion_handle *handle)
 {
@@ -1900,6 +1981,10 @@ struct ion_device *ion_device_create(long (*custom_ioctl)
 						idev->debug_root);
 	if (!idev->clients_debug_root)
 		pr_err("ion: failed to create debugfs clients directory.\n");
+
+	if (!debugfs_create_file("fd_owners", 0444, idev->debug_root, NULL,
+				 &forge_ion_fdowners_fops))
+		pr_err("ion: failed to create debugfs fd_owners file.\n");
 
 debugfs_done:
 

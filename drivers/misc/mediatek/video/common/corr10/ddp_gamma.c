@@ -12,15 +12,14 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/slab.h>
 #include <linux/mutex.h>
 #ifdef CONFIG_MTK_CLKMGR
 #include <mach/mt_clkmgr.h>
 #else
 #if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_MACH_MT6799)
+	defined(CONFIG_ARCH_MT6757) || defined(CONFIG_ARCH_ELBRUS)
 #include <ddp_clkmgr.h>
 #endif
 #endif
@@ -30,16 +29,14 @@
 #include <ddp_path.h>
 #include <ddp_gamma.h>
 #include <disp_drv_platform.h>
-#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
 #include <disp_helper.h>
 #endif
 
 /* To enable debug log: */
 /* # echo corr_dbg:1 > /sys/kernel/debug/dispsys */
-int corr_dbg_en;
-int ccorr_scenario;
+int corr_dbg_en = 0;
+int ccorr_scenario = 0;
 #define GAMMA_ERR(fmt, arg...) pr_err("[GAMMA] " fmt "\n", ##arg)
 #define GAMMA_NOTICE(fmt, arg...) do { if (corr_dbg_en) pr_debug("[GAMMA] " fmt "\n", ##arg); } while (0)
 #define GAMMA_DBG(fmt, arg...) do { if (corr_dbg_en) pr_debug("[GAMMA] " fmt "\n", ##arg); } while (0)
@@ -54,26 +51,45 @@ static DEFINE_MUTEX(g_gamma_global_lock);
 /*  GAMMA                                                                   */
 /* ======================================================================== */
 
-#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_ARCH_MT6757)
 #define GAMMA0_MODULE_NAMING (DISP_MODULE_GAMMA0)
 #else
 #define GAMMA0_MODULE_NAMING (DISP_MODULE_GAMMA)
 #endif
 
-#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
 #define GAMMA_SUPPORT_PARTIAL_UPDATE
 #endif
 
 static DISP_GAMMA_LUT_T *g_disp_gamma_lut[DISP_GAMMA_TOTAL] = { NULL };
+static DISP_GAMMA_LUT_T g_disp_gamma_identity_lut;
+static int g_disp_gamma_identity_lut_ready;
 
 static ddp_module_notify g_gamma_ddp_notify;
 
 
-static int disp_gamma_write_lut_reg(struct cmdqRecStruct *cmdq, disp_gamma_id_t id, int lock);
+static int disp_gamma_write_lut_reg(cmdqRecHandle cmdq, disp_gamma_id_t id, int lock);
 
-static int disp_gamma_start(enum DISP_MODULE_ENUM module, void *cmdq)
+static DISP_GAMMA_LUT_T *disp_gamma_get_identity_lut(disp_gamma_id_t id)
+{
+	int i;
+
+	if (!g_disp_gamma_identity_lut_ready) {
+		g_disp_gamma_identity_lut.hw_id = id;
+		for (i = 0; i < DISP_GAMMA_LUT_SIZE; i++) {
+			unsigned int v = i << 1;
+
+			if (v > 0x3ff)
+				v = 0x3ff;
+			g_disp_gamma_identity_lut.lut[i] = GAMMA_ENTRY(v, v, v);
+		}
+		g_disp_gamma_identity_lut_ready = 1;
+	}
+
+	return &g_disp_gamma_identity_lut;
+}
+
+static int disp_gamma_start(DISP_MODULE_ENUM module, void *cmdq)
 {
 	disp_gamma_write_lut_reg(cmdq, DISP_GAMMA0, 1);
 
@@ -83,8 +99,7 @@ static int disp_gamma_start(enum DISP_MODULE_ENUM module, void *cmdq)
 static void disp_gamma_init(disp_gamma_id_t id, unsigned int width, unsigned int height, void *cmdq)
 {
 	DISP_REG_SET(cmdq, DISP_REG_GAMMA_SIZE, (width << 16) | height);
-#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS)
-	/* disable stall cg for avoid display path hang */
+#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757) /* disable stall cg for avoid display path hang */
 	DISP_REG_MASK(cmdq, DISP_REG_GAMMA_CFG, 0x0 << 8, 0x1 << 8);
 #endif
 
@@ -95,17 +110,17 @@ static void disp_gamma_init(disp_gamma_id_t id, unsigned int width, unsigned int
 			DISP_REG_MASK(cmdq, DISP_REG_GAMMA_DEBUG, 0x0, 0x7);
 		} else if (disp_helper_get_option(DISP_OPT_SHADOW_MODE) == 1) {
 			/* force commit */
-			DISP_REG_MASK(cmdq, DISP_REG_GAMMA_DEBUG, 0x1, 0x7);
+			DISP_REG_MASK(cmdq, DISP_REG_GAMMA_DEBUG, 0x1 << 1, 0x7);
 		} else if (disp_helper_get_option(DISP_OPT_SHADOW_MODE) == 2) {
 			/* bypass shadow */
-			DISP_REG_MASK(cmdq, DISP_REG_GAMMA_DEBUG, 0x1 << 1, 0x7);
+			DISP_REG_MASK(cmdq, DISP_REG_GAMMA_DEBUG, 0x1, 0x7);
 		}
 	}
 #endif
 
 }
 
-static int disp_gamma_config(enum DISP_MODULE_ENUM module, struct disp_ddp_path_config *pConfig, void *cmdq)
+static int disp_gamma_config(DISP_MODULE_ENUM module, disp_ddp_path_config *pConfig, void *cmdq)
 {
 	if (pConfig->dst_dirty)
 		disp_gamma_init(DISP_GAMMA0, pConfig->dst_w, pConfig->dst_h, cmdq);
@@ -120,7 +135,7 @@ static void disp_gamma_trigger_refresh(disp_gamma_id_t id)
 }
 
 
-static int disp_gamma_write_lut_reg(struct cmdqRecStruct *cmdq, disp_gamma_id_t id, int lock)
+static int disp_gamma_write_lut_reg(cmdqRecHandle cmdq, disp_gamma_id_t id, int lock)
 {
 	unsigned long lut_base = 0;
 	DISP_GAMMA_LUT_T *gamma_lut;
@@ -137,10 +152,12 @@ static int disp_gamma_write_lut_reg(struct cmdqRecStruct *cmdq, disp_gamma_id_t 
 
 	gamma_lut = g_disp_gamma_lut[id];
 	if (gamma_lut == NULL) {
-		GAMMA_ERR(
-		       "disp_gamma_write_lut_reg: gamma table [%d] not initialized\n", id);
-		ret = -EFAULT;
-		goto gamma_write_lut_unlock;
+		if (id == DISP_GAMMA0)
+			gamma_lut = disp_gamma_get_identity_lut(id);
+		else
+			ret = -EFAULT;
+		if (ret)
+			goto gamma_write_lut_unlock;
 	}
 
 	if (id == DISP_GAMMA0) {
@@ -192,7 +209,7 @@ static int disp_gamma_set_lut(const DISP_GAMMA_LUT_T __user *user_gamma_lut, voi
 		kfree(gamma_lut);
 	} else {
 		id = gamma_lut->hw_id;
-		if (id >= 0 && id < DISP_GAMMA_TOTAL) {
+		if (0 <= id && id < DISP_GAMMA_TOTAL) {
 			mutex_lock(&g_gamma_global_lock);
 
 			old_lut = g_disp_gamma_lut[id];
@@ -216,7 +233,7 @@ static int disp_gamma_set_lut(const DISP_GAMMA_LUT_T __user *user_gamma_lut, voi
 }
 
 #ifdef GAMMA_SUPPORT_PARTIAL_UPDATE
-static int _gamma_partial_update(enum DISP_MODULE_ENUM module, void *arg, void *cmdq)
+static int _gamma_partial_update(DISP_MODULE_ENUM module, void *arg, void *cmdq)
 {
 	struct disp_rect *roi = (struct disp_rect *) arg;
 	int width = roi->width;
@@ -226,8 +243,8 @@ static int _gamma_partial_update(enum DISP_MODULE_ENUM module, void *arg, void *
 	return 0;
 }
 
-static int gamma_ioctl(enum DISP_MODULE_ENUM module, void *handle,
-		enum DDP_IOCTL_NAME ioctl_cmd, void *params)
+static int gamma_ioctl(DISP_MODULE_ENUM module, void *handle,
+		DDP_IOCTL_NAME ioctl_cmd, void *params)
 {
 	int ret = -1;
 
@@ -239,7 +256,7 @@ static int gamma_ioctl(enum DISP_MODULE_ENUM module, void *handle,
 }
 #endif
 
-static int disp_gamma_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, void *cmdq)
+static int disp_gamma_io(DISP_MODULE_ENUM module, int msg, unsigned long arg, void *cmdq)
 {
 	switch (msg) {
 	case DISP_IOCTL_SET_GAMMALUT:
@@ -254,14 +271,14 @@ static int disp_gamma_io(enum DISP_MODULE_ENUM module, int msg, unsigned long ar
 }
 
 
-static int disp_gamma_set_listener(enum DISP_MODULE_ENUM module, ddp_module_notify notify)
+static int disp_gamma_set_listener(DISP_MODULE_ENUM module, ddp_module_notify notify)
 {
 	g_gamma_ddp_notify = notify;
 	return 0;
 }
 
 
-static int disp_gamma_bypass(enum DISP_MODULE_ENUM module, int bypass)
+static int disp_gamma_bypass(DISP_MODULE_ENUM module, int bypass)
 {
 	int relay = 0;
 
@@ -276,48 +293,44 @@ static int disp_gamma_bypass(enum DISP_MODULE_ENUM module, int bypass)
 }
 
 
-static int disp_gamma_power_on(enum DISP_MODULE_ENUM module, void *handle)
+static int disp_gamma_power_on(DISP_MODULE_ENUM module, void *handle)
 {
-#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_ELBRUS) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
-	/* gamma is DCM , do nothing */
-#else
+	int ret = 0;
+
 #ifdef ENABLE_CLK_MGR
 	if (module == DISP_MODULE_GAMMA) {
 #ifdef CONFIG_MTK_CLKMGR
-		enable_clock(MT_CG_DISP0_DISP_GAMMA, "GAMMA");
+		ret = enable_clock(MT_CG_DISP0_DISP_GAMMA, "GAMMA");
 #else
-		ddp_clk_enable(DISP0_DISP_GAMMA);
+		ret = ddp_clk_enable(DISP0_DISP_GAMMA);
 #endif
 	}
+	pr_notice("M6 DDP clk: gamma on ret=%d CG=0x%x\n", ret,
+		DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
 #endif
-#endif
-	return 0;
+	return ret;
 }
 
-static int disp_gamma_power_off(enum DISP_MODULE_ENUM module, void *handle)
+static int disp_gamma_power_off(DISP_MODULE_ENUM module, void *handle)
 {
-#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_ELBRUS) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
-	/* gamma is DCM , do nothing */
-#else
+	int ret = 0;
+
 #ifdef ENABLE_CLK_MGR
 	if (module == DISP_MODULE_GAMMA) {
 #ifdef CONFIG_MTK_CLKMGR
 		disable_clock(MT_CG_DISP0_DISP_GAMMA, "GAMMA");
 #else
-		ddp_clk_disable(DISP0_DISP_GAMMA);
+		ret = ddp_clk_disable(DISP0_DISP_GAMMA);
 #endif
 	}
+	pr_notice("M6 DDP clk: gamma off ret=%d CG=0x%x\n", ret,
+		DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
 #endif
-#endif
-	return 0;
+	return ret;
 }
 
 
-struct DDP_MODULE_DRIVER ddp_driver_gamma = {
+DDP_MODULE_DRIVER ddp_driver_gamma = {
 	.start = disp_gamma_start,
 	.config = disp_gamma_config,
 	.bypass = disp_gamma_bypass,
@@ -338,8 +351,7 @@ struct DDP_MODULE_DRIVER ddp_driver_gamma = {
 /*  COLOR CORRECTION                                                        */
 /* ======================================================================== */
 
-#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_ARCH_MT6757)
 #define CCORR0_BASE_NAMING (DISPSYS_CCORR0_BASE)
 #define CCORR0_MODULE_NAMING (DISP_MODULE_CCORR0)
 #else
@@ -347,49 +359,27 @@ struct DDP_MODULE_DRIVER ddp_driver_gamma = {
 #define CCORR0_MODULE_NAMING (DISP_MODULE_CCORR)
 #endif
 
-#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
 #define CCORR_SUPPORT_PARTIAL_UPDATE
 #endif
 
 static DISP_CCORR_COEF_T *g_disp_ccorr_coef[DISP_CCORR_TOTAL] = { NULL };
 
-static DECLARE_WAIT_QUEUE_HEAD(g_ccorr_get_irq_wq);
-static DEFINE_SPINLOCK(g_ccorr_get_irq_lock);
-static volatile int g_ccorr_get_irq;
-
 static ddp_module_notify g_ccorr_ddp_notify;
 
-static int disp_ccorr_write_coef_reg(struct cmdqRecStruct *cmdq, disp_ccorr_id_t id, int lock);
+static int disp_ccorr_write_coef_reg(cmdqRecHandle cmdq, disp_ccorr_id_t id, int lock);
 static void ccorr_dump_reg(void);
 
 
 static void disp_ccorr_init(disp_ccorr_id_t id, unsigned int width, unsigned int height, void *cmdq)
 {
 	DISP_REG_SET(cmdq, DISP_REG_CCORR_SIZE, (width << 16) | height);
-#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS)
-	/* disable stall cg for avoid display path hang */
+#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757) /* disable stall cg for avoid display path hang */
 	DISP_REG_MASK(cmdq, DISP_REG_CCORR_CFG, 0x0 << 8, 0x1 << 8);
 #endif
-
-#ifdef DISP_PLATFORM_HAS_SHADOW_REG
-	if (disp_helper_get_option(DISP_OPT_SHADOW_REGISTER)) {
-		if (disp_helper_get_option(DISP_OPT_SHADOW_MODE) == 0) {
-			/* full shadow mode*/
-			DISP_REG_MASK(cmdq, DISP_REG_CCORR_SHADOW, 0x0, 0x7);
-		} else if (disp_helper_get_option(DISP_OPT_SHADOW_MODE) == 1) {
-			/* force commit */
-			DISP_REG_MASK(cmdq, DISP_REG_CCORR_SHADOW, 0x1 << 1, 0x7);
-		} else if (disp_helper_get_option(DISP_OPT_SHADOW_MODE) == 2) {
-			/* bypass shadow */
-			DISP_REG_MASK(cmdq, DISP_REG_CCORR_SHADOW, 0x1 << 2, 0x7);
-		}
-	}
-#endif
-
 }
 
-static int disp_ccorr_start(enum DISP_MODULE_ENUM module, void *cmdq)
+static int disp_ccorr_start(DISP_MODULE_ENUM module, void *cmdq)
 {
 #ifndef CONFIG_FPGA_EARLY_PORTING
 		disp_ccorr_write_coef_reg(cmdq, 0, 1);
@@ -402,7 +392,7 @@ static int disp_ccorr_start(enum DISP_MODULE_ENUM module, void *cmdq)
 
 #define CCORR_REG(base, idx) (base + (idx) * 4 + 0x80)
 
-static int disp_ccorr_write_coef_reg(struct cmdqRecStruct *cmdq, disp_ccorr_id_t id, int lock)
+static int disp_ccorr_write_coef_reg(cmdqRecHandle cmdq, disp_ccorr_id_t id, int lock)
 {
 	const unsigned long ccorr_base = CCORR0_BASE_NAMING;
 	int ret = 0;
@@ -413,8 +403,16 @@ static int disp_ccorr_write_coef_reg(struct cmdqRecStruct *cmdq, disp_ccorr_id_t
 
 	ccorr = g_disp_ccorr_coef[id];
 	if (ccorr == NULL) {
-		CCORR_DBG("disp_ccorr_write_coef_reg: [%d] not initialized\n", id);
-		ret = -EFAULT;
+		CCORR_DBG("disp_ccorr_write_coef_reg: [%d] not initialized, bypass\n", id);
+		if (id == DISP_CCORR0) {
+			/*
+			 * Match gamma fallback: do not fail display path start
+			 * before color-correction coefficients are supplied.
+			 */
+			DISP_REG_SET(cmdq, DISP_REG_CCORR_EN, 0x0);
+			ret = 0;
+		} else
+			ret = -EFAULT;
 		goto ccorr_write_coef_unlock;
 	}
 
@@ -447,110 +445,6 @@ static void disp_ccorr_trigger_refresh(disp_ccorr_id_t id)
 		g_ccorr_ddp_notify(CCORR0_MODULE_NAMING, DISP_PATH_EVENT_TRIGGER);
 }
 
-void disp_ccorr_on_end_of_frame(void)
-{
-	unsigned int intsta;
-	unsigned long flags;
-
-	intsta = DISP_REG_GET(DISP_REG_CCORR_INTSTA);
-
-	CCORR_DBG("disp_ccorr_on_end_of_frame: intsta: 0x%x", intsta);
-	if (intsta & 0x2) {	/* End of frame */
-		if (spin_trylock_irqsave(&g_ccorr_get_irq_lock, flags)) {
-			DISP_CPU_REG_SET(DISP_REG_CCORR_INTSTA, (intsta & ~0x3));
-
-			g_ccorr_get_irq = 1;
-
-			spin_unlock_irqrestore(&g_ccorr_get_irq_lock, flags);
-
-			wake_up_interruptible(&g_ccorr_get_irq_wq);
-		}
-	}
-}
-
-#ifdef CCORR_TRANSITION
-static DEFINE_SPINLOCK(g_pq_bl_change_lock);
-static int g_pq_backlight;
-static int g_pq_backlight_db;
-
-static void disp_ccorr_set_interrupt(int enabled)
-{
-	if (enabled) {
-		if (DISP_REG_GET(DISP_REG_CCORR_EN) == 0) {
-			/* Print error message */
-			CCORR_DBG("[WARNING] DISP_REG_CCORR_EN not enabled!");
-		}
-
-		/* Enable output frame end interrupt */
-		DISP_CPU_REG_SET(DISP_REG_CCORR_INTEN, 0x2);
-		CCORR_DBG("Interrupt enabled");
-	} else {
-		/* Disable output frame end interrupt */
-		DISP_CPU_REG_SET(DISP_REG_CCORR_INTEN, 0x0);
-		CCORR_DBG("Interrupt disabled");
-	}
-}
-
-static int disp_ccorr_wait_irq(unsigned long timeout)
-{
-	unsigned long flags;
-	int ret = 0;
-
-	CCORR_DBG("disp_ccorr_wait_irq: get_irq = %d", g_ccorr_get_irq);
-
-	if (!g_ccorr_get_irq) {
-		ret = wait_event_interruptible(g_ccorr_get_irq_wq, (g_ccorr_get_irq != 0));
-		CCORR_DBG("disp_ccorr_wait_irq: waken up, ret = %d", ret);
-	} else {
-		/* If g_ccorr_get_irq is already set, means PQService was delayed */
-	}
-
-	spin_lock_irqsave(&g_ccorr_get_irq_lock, flags);
-	g_ccorr_get_irq = 0;
-	spin_unlock_irqrestore(&g_ccorr_get_irq_lock, flags);
-
-	return ret;
-}
-
-static int disp_pq_copy_backlight_to_user(int __user *backlight)
-{
-	unsigned long flags;
-	int ret = -EFAULT;
-
-	/* We assume only one thread will call this function */
-	spin_lock_irqsave(&g_pq_bl_change_lock, flags);
-	g_pq_backlight_db = g_pq_backlight;
-	spin_unlock_irqrestore(&g_pq_bl_change_lock, flags);
-
-	if (copy_to_user(backlight, &g_pq_backlight_db, sizeof(int)) == 0)
-		ret = 0;
-
-	CCORR_DBG("disp_pq_copy_backlight_to_user: %d", ret);
-
-	return ret;
-}
-#endif
-
-void disp_pq_notify_backlight_changed(int bl_1024)
-{
-#ifdef CCORR_TRANSITION
-	unsigned long flags;
-	int old_bl;
-
-	spin_lock_irqsave(&g_pq_bl_change_lock, flags);
-	old_bl = g_pq_backlight;
-	g_pq_backlight = bl_1024;
-	spin_unlock_irqrestore(&g_pq_bl_change_lock, flags);
-
-	CCORR_DBG("disp_pq_notify_backlight_changed %d", bl_1024);
-
-	if (old_bl == 0 || bl_1024 == 0) {
-		disp_ccorr_set_interrupt(1);
-		disp_ccorr_trigger_refresh(DISP_CCORR0);
-		CCORR_DBG("trigger refresh when backlight ON/Off");
-	}
-#endif
-}
 
 static int disp_ccorr_set_coef(const DISP_CCORR_COEF_T __user *user_color_corr, void *cmdq)
 {
@@ -569,7 +463,7 @@ static int disp_ccorr_set_coef(const DISP_CCORR_COEF_T __user *user_color_corr, 
 		kfree(ccorr);
 	} else {
 		id = ccorr->hw_id;
-		if (id >= 0 && id < DISP_CCORR_TOTAL) {
+		if (0 <= id && id < DISP_CCORR_TOTAL) {
 			mutex_lock(&g_gamma_global_lock);
 
 			old_ccorr = g_disp_ccorr_coef[id];
@@ -593,7 +487,7 @@ static int disp_ccorr_set_coef(const DISP_CCORR_COEF_T __user *user_color_corr, 
 }
 
 
-static int disp_ccorr_config(enum DISP_MODULE_ENUM module, struct disp_ddp_path_config *pConfig, void *cmdq)
+static int disp_ccorr_config(DISP_MODULE_ENUM module, disp_ddp_path_config *pConfig, void *cmdq)
 {
 	if (pConfig->dst_dirty)
 		disp_ccorr_init(DISP_CCORR0, pConfig->dst_w, pConfig->dst_h, cmdq);
@@ -602,7 +496,7 @@ static int disp_ccorr_config(enum DISP_MODULE_ENUM module, struct disp_ddp_path_
 }
 
 #ifdef CCORR_SUPPORT_PARTIAL_UPDATE
-static int _ccorr_partial_update(enum DISP_MODULE_ENUM module, void *arg, void *cmdq)
+static int _ccorr_partial_update(DISP_MODULE_ENUM module, void *arg, void *cmdq)
 {
 	struct disp_rect *roi = (struct disp_rect *) arg;
 	int width = roi->width;
@@ -612,8 +506,8 @@ static int _ccorr_partial_update(enum DISP_MODULE_ENUM module, void *arg, void *
 	return 0;
 }
 
-static int ccorr_ioctl(enum DISP_MODULE_ENUM module, void *handle,
-		enum DDP_IOCTL_NAME ioctl_cmd, void *params)
+static int ccorr_ioctl(DISP_MODULE_ENUM module, void *handle,
+		DDP_IOCTL_NAME ioctl_cmd, void *params)
 {
 	int ret = -1;
 
@@ -625,7 +519,7 @@ static int ccorr_ioctl(enum DISP_MODULE_ENUM module, void *handle,
 }
 #endif
 
-static int disp_ccorr_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, void *cmdq)
+static int disp_ccorr_io(DISP_MODULE_ENUM module, int msg, unsigned long arg, void *cmdq)
 {
 	switch (msg) {
 	case DISP_IOCTL_SET_CCORR:
@@ -634,48 +528,20 @@ static int disp_ccorr_io(enum DISP_MODULE_ENUM module, int msg, unsigned long ar
 			return -EFAULT;
 		}
 		break;
-#ifdef CCORR_TRANSITION
-	case DISP_IOCTL_CCORR_EVENTCTL:
-		{
-			int enabled;
-
-			if (copy_from_user(&enabled, (void *)arg, sizeof(enabled))) {
-				CCORR_ERR("DISP_IOCTL_CCORR_EVENTCTL: copy_from_user() failed");
-				return -EFAULT;
-			}
-
-			disp_ccorr_set_interrupt(enabled);
-
-			if (enabled)
-				disp_ccorr_trigger_refresh(DISP_CCORR0);
-
-			break;
-		}
-		break;
-	case DISP_IOCTL_CCORR_GET_IRQ:
-		{
-			disp_ccorr_wait_irq(60);
-			if (disp_pq_copy_backlight_to_user((int *) arg) < 0) {
-				CCORR_ERR("DISP_IOCTL_CCORR_GET_IRQ: copy_to_user() failed");
-				return -EFAULT;
-			}
-		}
-		break;
-#endif
 	}
 
 	return 0;
 }
 
 
-static int disp_ccorr_set_listener(enum DISP_MODULE_ENUM module, ddp_module_notify notify)
+static int disp_ccorr_set_listener(DISP_MODULE_ENUM module, ddp_module_notify notify)
 {
 	g_ccorr_ddp_notify = notify;
 	return 0;
 }
 
 
-static int disp_ccorr_bypass(enum DISP_MODULE_ENUM module, int bypass)
+static int disp_ccorr_bypass(DISP_MODULE_ENUM module, int bypass)
 {
 	int relay = 0;
 
@@ -689,12 +555,12 @@ static int disp_ccorr_bypass(enum DISP_MODULE_ENUM module, int bypass)
 	return 0;
 }
 
-static int disp_ccorr_power_on(enum DISP_MODULE_ENUM module, void *handle)
+static int disp_ccorr_power_on(DISP_MODULE_ENUM module, void *handle)
 {
 #ifdef ENABLE_CLK_MGR
 	if (module == CCORR0_MODULE_NAMING) {
 #ifdef CONFIG_MTK_CLKMGR
-#if !defined(CONFIG_ARCH_MT6580)
+#if !defined(CONFIG_ARCH_MT6570) && !defined(CONFIG_ARCH_MT6580)
 		enable_clock(MT_CG_DISP0_DISP_CCORR, "CCORR");
 #endif
 #else
@@ -705,12 +571,12 @@ static int disp_ccorr_power_on(enum DISP_MODULE_ENUM module, void *handle)
 	return 0;
 }
 
-static int disp_ccorr_power_off(enum DISP_MODULE_ENUM module, void *handle)
+static int disp_ccorr_power_off(DISP_MODULE_ENUM module, void *handle)
 {
 #ifdef ENABLE_CLK_MGR
 	if (module == CCORR0_MODULE_NAMING) {
 #ifdef CONFIG_MTK_CLKMGR
-#if !defined(CONFIG_ARCH_MT6580)
+#if !defined(CONFIG_ARCH_MT6570) && !defined(CONFIG_ARCH_MT6580)
 		disable_clock(MT_CG_DISP0_DISP_CCORR, "CCORR");
 #endif
 #else
@@ -722,7 +588,7 @@ static int disp_ccorr_power_off(enum DISP_MODULE_ENUM module, void *handle)
 }
 
 
-struct DDP_MODULE_DRIVER ddp_driver_ccorr = {
+DDP_MODULE_DRIVER ddp_driver_ccorr = {
 	.config = disp_ccorr_config,
 	.start = disp_ccorr_start,
 	.bypass = disp_ccorr_bypass,
@@ -798,7 +664,7 @@ static int ccorr_parse_coef(const char *cmd, void *handle)
 	int i, j, end;
 	bool stop = false;
 	int count = 0;
-	unsigned long temp;
+	unsigned long temp = 1024;
 	unsigned int ccorr_coef[3][3];
 	char *next = (char *)cmd;
 
@@ -939,3 +805,9 @@ void ccorr_test(const char *cmd, char *debug_output)
 	disp_ccorr_trigger_refresh(DISP_CCORR0);
 }
 
+void set_color_temp_interface(unsigned int ccorr_coef_ref[3][3], void *handle)
+{
+    ccorr_coef_interface(ccorr_coef_ref, handle);
+    disp_ccorr_trigger_refresh(DISP_CCORR0);
+}
+EXPORT_SYMBOL(set_color_temp_interface);

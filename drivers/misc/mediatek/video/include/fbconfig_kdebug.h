@@ -210,3 +210,6 @@ struct compat_esd_para {
 
 #endif
 /* __FBCONFIG_KDEBUG_H */
+
+typedef enum MIPI_SETTING_TYPE MIPI_SETTING_TYPE;
+typedef struct MIPI_TIMING MIPI_TIMING;

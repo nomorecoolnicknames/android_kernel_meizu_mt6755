@@ -12,7 +12,13 @@
  */
 
 #define LOG_TAG "WDMA"
+#if defined(COMMON_DISP_LOG)
+#include "disp_debug.h"
+#include "disp_log.h"
+#else
+#include "disp_log.h"
 #include "ddp_log.h"
+#endif
 #include <linux/delay.h>
 #include "ddp_reg.h"
 #include "ddp_matrix_para.h"
@@ -20,14 +26,12 @@
 #include "ddp_wdma.h"
 #include "ddp_wdma_ex.h"
 #include "primary_display.h"
-#ifdef CONFIG_MTK_M4U
 #include "m4u.h"
-#endif
 
 #define ALIGN_TO(x, n)  \
 	(((x) + ((n) - 1)) & ~((n) - 1))
 
-unsigned int wdma_index(enum DISP_MODULE_ENUM module)
+unsigned int wdma_index(DISP_MODULE_ENUM module)
 {
 	int idx = 0;
 
@@ -39,13 +43,13 @@ unsigned int wdma_index(enum DISP_MODULE_ENUM module)
 		idx = 1;
 		break;
 	default:
-		DDPERR("[DDP] error: invalid wdma module=%d\n", module);	/* invalid module */
+		DISPERR("[DDP] error: invalid wdma module=%d\n", module);	/* invalid module */
 		ASSERT(0);
 	}
 	return idx;
 }
 
-int wdma_stop(enum DISP_MODULE_ENUM module, void *handle)
+int wdma_stop(DISP_MODULE_ENUM module, void *handle)
 {
 	unsigned int idx = wdma_index(module);
 
@@ -56,7 +60,7 @@ int wdma_stop(enum DISP_MODULE_ENUM module, void *handle)
 	return 0;
 }
 
-int wdma_reset(enum DISP_MODULE_ENUM module, void *handle)
+int wdma_reset(DISP_MODULE_ENUM module, void *handle)
 {
 	unsigned int delay_cnt = 0;
 	unsigned int idx = wdma_index(module);
@@ -68,7 +72,7 @@ int wdma_reset(enum DISP_MODULE_ENUM module, void *handle)
 			delay_cnt++;
 			udelay(10);
 			if (delay_cnt > 2000) {
-				DDPERR("wdma%d reset timeout!\n", idx);
+				DISPERR("wdma%d reset timeout!\n", idx);
 				break;
 			}
 		}

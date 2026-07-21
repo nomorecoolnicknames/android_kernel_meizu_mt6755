@@ -419,3 +419,5 @@ struct cmdqSecCancelTaskResultStruct {
 };
 
 #endif				/* __CMDQ_DEF_H__ */
+
+typedef enum CMDQ_EVENT_ENUM CMDQ_EVENT_ENUM;

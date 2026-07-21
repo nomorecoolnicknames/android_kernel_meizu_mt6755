@@ -65,39 +65,6 @@ enum {
 #define SP1 3
 #define SP2 4
 
-enum WINDOW_SETTING {
-	WIN1 = 0,
-	WIN2,
-	WIN3,
-	WIN_TOTAL
-};
-
-enum LUT_YHS {
-	LUT_H = 0,
-	LUT_Y,
-	LUT_S,
-	LUT_TOTAL
-};
-
-enum LUT_REG {
-	REG_SLOPE0 = 0,
-	REG_SLOPE1,
-	REG_SLOPE2,
-	REG_SLOPE3,
-	REG_SLOPE4,
-	REG_SLOPE5,
-	REG_WGT_LSLOPE,
-	REG_WGT_USLOPE,
-	REG_L,
-	REG_POINT0,
-	REG_POINT1,
-	REG_POINT2,
-	REG_POINT3,
-	REG_POINT4,
-	REG_U,
-	LUT_REG_TOTAL
-};
-
 #define MIRAVISION_HW_VERSION_MASK  (0xFF000000)
 #define MIRAVISION_SW_VERSION_MASK  (0x00FF0000)
 #define MIRAVISION_SW_FEATURE_MASK  (0x0000FFFF)
@@ -111,45 +78,32 @@ enum LUT_REG {
 #define MIRAVISION_HW_VERSION       (2)
 #elif defined(CONFIG_ARCH_MT6795)
 #define MIRAVISION_HW_VERSION       (3)
-#elif defined(CONFIG_ARCH_MT6735) || defined(CONFIG_MACH_MT8167)
+#elif defined(CONFIG_ARCH_MT6735) || defined(CONFIG_ARCH_MT8167)
 #define MIRAVISION_HW_VERSION       (4)
 #elif defined(CONFIG_ARCH_MT6735M)
 #define MIRAVISION_HW_VERSION       (5)
 #elif defined(CONFIG_ARCH_MT6753)
 #define MIRAVISION_HW_VERSION       (6)
-#elif defined(CONFIG_ARCH_MT6580)
+#elif defined(CONFIG_ARCH_MT6570) || defined(CONFIG_ARCH_MT6580)
 #define MIRAVISION_HW_VERSION       (7)
 #elif defined(CONFIG_ARCH_MT6755)
 #define MIRAVISION_HW_VERSION       (8)
 #elif defined(CONFIG_ARCH_MT6797)
 #define MIRAVISION_HW_VERSION       (9)
-#elif defined(CONFIG_ARCH_MT6750)
-#define MIRAVISION_HW_VERSION       (10)
-#elif defined(CONFIG_MACH_MT6757)
-#define MIRAVISION_HW_VERSION       (11)
-#define MIRAVISION_HW_P_VERSION     (13)
 #else
 #define MIRAVISION_HW_VERSION       (0)
 #endif
 
-#define MIRAVISION_SW_VERSION       (3)	/* 3:Android N*/
+#define MIRAVISION_SW_VERSION       (3)	/* 3:Android N */
 #define MIRAVISION_SW_FEATURE_VIDEO_DC  (0x1)
 #define MIRAVISION_SW_FEATURE_AAL       (0x2)
 #define MIRAVISION_SW_FEATURE_PQDS       (0x4)
 
-#if defined(CONFIG_MACH_MT6757)
-#define MIRAVISION_VERSION          ((color_get_chip_ver() << MIRAVISION_HW_VERSION_SHIFT) |   \
-				     (MIRAVISION_SW_VERSION << MIRAVISION_SW_VERSION_SHIFT) |   \
-				     MIRAVISION_SW_FEATURE_VIDEO_DC |   \
-				     MIRAVISION_SW_FEATURE_AAL |   \
-				     MIRAVISION_SW_FEATURE_PQDS)
-#else
 #define MIRAVISION_VERSION          ((MIRAVISION_HW_VERSION << MIRAVISION_HW_VERSION_SHIFT) |   \
 				     (MIRAVISION_SW_VERSION << MIRAVISION_SW_VERSION_SHIFT) |   \
 				     MIRAVISION_SW_FEATURE_VIDEO_DC |   \
 				     MIRAVISION_SW_FEATURE_AAL |   \
 				     MIRAVISION_SW_FEATURE_PQDS)
-#endif
 
 #define SW_VERSION_VIDEO_DC         (1)
 #define SW_VERSION_AAL              (1)
@@ -274,13 +228,12 @@ enum LUT_REG {
 /* --------------------------------------------------------------------------- */
 
 
-struct DISP_PQ_PARAM *get_Color_config(int id);
-struct DISP_PQ_PARAM *get_Color_Cam_config(void);
-struct DISP_PQ_PARAM *get_Color_Gal_config(void);
-struct DISPLAY_PQ_T *get_Color_index(void);
-extern struct DISPLAY_TDSHP_T *get_TDSHP_index(void);
+DISP_PQ_PARAM *get_Color_config(int id);
+DISP_PQ_PARAM *get_Color_Cam_config(void);
+DISP_PQ_PARAM *get_Color_Gal_config(void);
+DISPLAY_PQ_T *get_Color_index(void);
+extern DISPLAY_TDSHP_T *get_TDSHP_index(void);
 
 void disp_color_set_window(unsigned int sat_upper, unsigned int sat_lower,
 			   unsigned int hue_upper, unsigned int hue_lower);
-void disp_color_dbg_log_level(unsigned int debug_level);
 #endif

@@ -99,3 +99,4 @@ enum MTK_FB_FORMAT {
 }
 #endif
 #endif				/* __DISP_DRV_H__ */
+typedef struct mtk_dispif_info mtk_dispif_info_t;

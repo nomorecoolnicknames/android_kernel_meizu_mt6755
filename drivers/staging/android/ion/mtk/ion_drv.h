@@ -194,7 +194,7 @@ struct ion_mm_data {
 };
 
 #ifdef __KERNEL__
-#include <aee.h>
+#include <mt-plat/aee.h>
 #define ION_LOG_TAG "ion_dbg"
 #define IONMSG(string, args...)	pr_err("[ION]"string, ##args)
 #define IONDBG(string, args...)	pr_debug("[ION]"string, ##args)

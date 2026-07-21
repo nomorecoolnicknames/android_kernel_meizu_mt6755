@@ -20,77 +20,62 @@
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/uaccess.h>
-#include <linux/atomic.h>
-#include <mtk_leds_drv.h>
+#include <asm/uaccess.h>
+#include <asm/atomic.h>
+#include <leds_drv.h>
+#include <leds_sw.h>
 #include <cmdq_record.h>
 #include <ddp_reg.h>
 #include <ddp_drv.h>
 #include <ddp_path.h>
 #include <primary_display.h>
 #include <disp_drv_platform.h>
-#ifdef CONFIG_MTK_SMI_EXT
-#include <mtk_smi.h>
+#include <mt_smi.h>
 #include <smi_public.h>
-#endif
 #ifdef CONFIG_MTK_CLKMGR
 #include <mach/mt_clkmgr.h>
 #else
 #if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_MACH_MT6799)
+	defined(CONFIG_ARCH_MT6757) || defined(CONFIG_ARCH_ELBRUS)
 #include <ddp_clkmgr.h>
 #endif
 #endif
-#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS)
+#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
 #include <disp_lowpower.h>
 #include <disp_helper.h>
 #endif
 #include <ddp_aal.h>
 #include <ddp_pwm.h>
 
-#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
+#if defined(CONFIG_ARCH_ELBRUS) || defined(CONFIG_ARCH_MT6757)
 #define AAL0_MODULE_NAMING (DISP_MODULE_AAL0)
 #else
 #define AAL0_MODULE_NAMING (DISP_MODULE_AAL)
 #endif
 
-#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS)
+#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
 #define AAL_SUPPORT_PARTIAL_UPDATE
 #endif
 
 /* To enable debug log: */
 /* # echo aal_dbg:1 > /sys/kernel/debug/dispsys */
-int aal_dbg_en;
+int aal_dbg_en = 0;
 
 #define AAL_ERR(fmt, arg...) pr_err("[AAL] " fmt "\n", ##arg)
 #define AAL_NOTICE(fmt, arg...) pr_warn("[AAL] " fmt "\n", ##arg)
 #define AAL_DBG(fmt, arg...) \
 	do { if (aal_dbg_en) pr_debug("[AAL] " fmt "\n", ##arg); } while (0)
 
-/* [yanlin start] Change TP908 Min backlight PWM to 9/1023(0.88%) 10/1023(0.978%) */
-#ifdef CONFIG_TPLINK_PRODUCT_TP908
-#define TP908_MIN_BL_LEVEL_255	2
-#define TP908_MIN_BL_LEVEL_1023	9
-#define TP908_MIN_BL_LEVEL_AAL	((((1 << MT_LED_INTERNAL_LEVEL_BIT_CNT) - 1) * TP908_MIN_BL_LEVEL_255 + 127) / 255)
-#define DEFAULT_LEVEL_255 60
-#define MTK_ULTRA_DIMMING_SUPPORT
-#else
-#define DEFAULT_LEVEL_255 60
-#endif
-
-#define DEFAULT_LEVEL_1023 ((((1 << MT_LED_INTERNAL_LEVEL_BIT_CNT) - 1) * DEFAULT_LEVEL_255 + 127) / 255)
-/* [yanlin end] */
-
 #ifdef CONFIG_MTK_AAL_SUPPORT
 static int disp_aal_write_init_regs(void *cmdq);
 #endif
-static int disp_aal_write_param_to_reg(struct cmdqRecStruct *cmdq, const DISP_AAL_PARAM *param);
+static int disp_aal_write_param_to_reg(cmdqRecHandle cmdq, const DISP_AAL_PARAM *param);
+
 
 static DECLARE_WAIT_QUEUE_HEAD(g_aal_hist_wq);
 static DEFINE_SPINLOCK(g_aal_hist_lock);
+static DEFINE_SPINLOCK(g_aal_irq_en_lock);
+
 static DISP_AAL_HIST g_aal_hist = {
 	.serviceFlags = 0,
 	.backlight = -1
@@ -104,12 +89,8 @@ static volatile int g_aal_backlight_notified = 1023;
 static volatile int g_aal_initialed;
 static atomic_t g_aal_allowPartial = ATOMIC_INIT(0);
 static volatile int g_led_mode = MT65XX_LED_MODE_NONE;
-
-/* [yanlin start] Fix #26068: Set backlight error when reboot in manual mode */
-static bool is_first_backlight_changed = false;
-static bool is_first_backlight_changed_over = false;
-static int first_backlight_changed_target = 0;
-/* [yanlin end] */
+static volatile int g_aal_need_lock;
+static atomic_t g_aal_force_enable_irq = ATOMIC_INIT(0);
 
 static int disp_aal_get_cust_led(void)
 {
@@ -140,6 +121,19 @@ static int disp_aal_get_cust_led(void)
 	return ret;
 }
 
+static int disp_aal_exit_idle(const char *caller, int need_kick)
+{
+#ifdef MTK_DISP_IDLE_LP
+	disp_exit_idle_ex(caller);
+#endif
+#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757)
+	if (need_kick == 1)
+		if (disp_helper_get_option(DISP_OPT_IDLEMGR_ENTER_ULPS))
+			primary_display_idlemgr_kick(__func__, 1);
+#endif
+	return 0;
+}
+
 static void backlight_brightness_set_with_lock(int bl_1024)
 {
 	_primary_path_switch_dst_lock();
@@ -151,21 +145,7 @@ static void backlight_brightness_set_with_lock(int bl_1024)
 	_primary_path_switch_dst_unlock();
 }
 
-static int disp_aal_exit_idle(const char *caller, int need_kick)
-{
-#ifdef MTK_DISP_IDLE_LP
-	disp_exit_idle_ex(caller);
-#endif
-#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_MT6797) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS)
-	if (need_kick == 1)
-		if (disp_helper_get_option(DISP_OPT_IDLEMGR_ENTER_ULPS))
-			primary_display_idlemgr_kick(__func__, 1);
-#endif
-	return 0;
-}
-
-static int disp_aal_init(enum DISP_MODULE_ENUM module, int width, int height, void *cmdq)
+static int disp_aal_init(DISP_MODULE_ENUM module, int width, int height, void *cmdq)
 {
 #ifdef CONFIG_MTK_AAL_SUPPORT
 	/* Enable AAL histogram, engine */
@@ -173,8 +153,7 @@ static int disp_aal_init(enum DISP_MODULE_ENUM module, int width, int height, vo
 
 	disp_aal_write_init_regs(cmdq);
 #endif
-#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS)
-	/* disable stall cg for avoid display path hang */
+#if defined(CONFIG_ARCH_MT6797) || defined(CONFIG_ARCH_MT6757) /* disable stall cg for avoid display path hang */
 	DISP_REG_MASK(cmdq, DISP_AAL_CFG, 0x1 << 4, 0x1 << 4);
 #endif
 	/* get lcd-backlight mode from dts */
@@ -189,21 +168,15 @@ static int disp_aal_init(enum DISP_MODULE_ENUM module, int width, int height, vo
 #ifdef DISP_PATH_DELAYED_TRIGGER_33ms_SUPPORT
 static int disp_aal_get_latency_lowerbound(void)
 {
-	int aalrefresh;
-#ifdef	CONFIG_MTK_SMI_EXT
 	MTK_SMI_BWC_SCEN bwc_scen;
+	int aalrefresh;
 
 	bwc_scen = smi_get_current_profile();
-	if (bwc_scen == SMI_BWC_SCEN_VR || bwc_scen == SMI_BWC_SCEN_SWDEC_VP ||
-		bwc_scen == SMI_BWC_SCEN_SWDEC_VP || bwc_scen == SMI_BWC_SCEN_VP ||
+	if (bwc_scen == SMI_BWC_SCEN_VR || bwc_scen == SMI_BWC_SCEN_SWDEC_VP || bwc_scen == SMI_BWC_SCEN_VP ||
 		bwc_scen == SMI_BWC_SCEN_VR_SLOW)
-
 		aalrefresh = AAL_REFRESH_33MS;
 	else
 		aalrefresh = AAL_REFRESH_17MS;
-#else
-	aalrefresh = AAL_REFRESH_17MS;
-#endif
 
 	return aalrefresh;
 }
@@ -217,19 +190,20 @@ static void disp_aal_trigger_refresh(int latency)
 #endif
 
 	if (g_ddp_notify != NULL) {
-		enum DISP_PATH_EVENT trigger_method = DISP_PATH_EVENT_TRIGGER;
+		DISP_PATH_EVENT trigger_method = DISP_PATH_EVENT_TRIGGER;
 
 #ifdef DISP_PATH_DELAYED_TRIGGER_33ms_SUPPORT
-		/* Allow 33ms latency only under VP & VR scenario for avoid */
-		/* longer animation reduce available time of SODI which cause. */
-		/* less power saving ratio when screen idle. */
+		/*
+		Allow 33ms latency only under VP & VR scenario for avoid
+		longer animation reduce available time of SODI which cause.
+		less power saving ratio when screen idle.
+		*/
 		if (scenario_latency < latency)
 			latency = scenario_latency;
 
 		if (latency == AAL_REFRESH_33MS)
 			trigger_method = DISP_PATH_EVENT_DELAYED_TRIGGER_33ms;
 #endif
-		trigger_method = DISP_PATH_EVENT_DELAYED_TRIGGER_33ms;
 		g_ddp_notify(AAL0_MODULE_NAMING, trigger_method);
 		AAL_DBG("disp_aal_trigger_refresh: %d", trigger_method);
 	}
@@ -251,10 +225,11 @@ static void disp_aal_set_interrupt(int enabled)
 			DISP_CPU_REG_SET(DISP_AAL_INTEN, 0x0);
 			AAL_DBG("Interrupt disabled");
 		} else {	/* Dirty histogram was not retrieved */
-			/* Only if the dirty hist was retrieved, interrupt can be disabled. */
-			/* Continue interrupt until AALService can get the latest histogram. */
+			/* Only if the dirty hist was retrieved, interrupt can be disabled.
+			   Continue interrupt until AALService can get the latest histogram. */
 		}
 	}
+
 #else
 	AAL_ERR("AAL driver is not enabled");
 #endif
@@ -275,7 +250,9 @@ static void disp_aal_notify_frame_dirty(void)
 	g_aal_dirty_frame_retrieved = 0;
 	spin_unlock_irqrestore(&g_aal_hist_lock, flags);
 
+	spin_lock_irqsave(&g_aal_irq_en_lock, flags);
 	disp_aal_set_interrupt(1);
+	spin_unlock_irqrestore(&g_aal_irq_en_lock, flags);
 #endif
 }
 
@@ -422,31 +399,20 @@ void disp_aal_notify_backlight_changed(int bl_1024)
 	if (bl_1024 > max_backlight)
 		bl_1024 = max_backlight;
 
-	/* [yanlin start] Fix #26068: Set backlight error when reboot in manual mode */
-	if (is_first_backlight_changed == false) {
-		pr_err("first_backlight_changed from kernel:%d\n", bl_1024);
-		is_first_backlight_changed = true;
-#ifdef MTK_ULTRA_DIMMING_SUPPORT
-		first_backlight_changed_target = DEFAULT_LEVEL_1023;
-#else
-		first_backlight_changed_target = bl_1024;
-#endif
-	}
-	/* [yanlin end] */
-
 	g_aal_backlight_notified = bl_1024;
 
 	service_flags = 0;
 	if (bl_1024 == 0) {
+		/* set backlight under LCM_CABC mode with cpu : need lock */
 		if (g_led_mode == MT65XX_LED_MODE_CUST_LCM)
 			backlight_brightness_set_with_lock(0);
 		else
 			backlight_brightness_set(0);
 
-		/* set backlight = 0 may be not from AAL, */
-		/* we have to let AALService can turn on backlight on phone resumption */
+		/* set backlight = 0 may be not from AAL, we have to let AALService
+		   can turn on backlight on phone resumption */
 		service_flags = AAL_SERVICE_FORCE_UPDATE;
-		/* using CPU to set backlight = 0, */
+		/* using CPU to set backlight = 0,  */
 		/* we have to set backlight = 0 through CMDQ again to avoid timimg issue */
 		disp_pwm_set_force_update_flag();
 	} else if (!g_aal_is_init_regs_valid) {
@@ -456,7 +422,7 @@ void disp_aal_notify_backlight_changed(int bl_1024)
 		else
 			backlight_brightness_set(bl_1024);
 	}
-	AAL_NOTICE("led_mode=%d", g_led_mode);
+	//AAL_NOTICE("led_mode=%d , aal_need_lock=%d", g_led_mode, g_aal_need_lock);
 
 	spin_lock_irqsave(&g_aal_hist_lock, flags);
 	g_aal_hist.backlight = bl_1024;
@@ -464,7 +430,12 @@ void disp_aal_notify_backlight_changed(int bl_1024)
 	spin_unlock_irqrestore(&g_aal_hist_lock, flags);
 
 	if (g_aal_is_init_regs_valid) {
+		spin_lock_irqsave(&g_aal_irq_en_lock, flags);
+		/* backlight change : irq can;t be disabled by user command  */
+		atomic_set(&g_aal_force_enable_irq, 1);
 		disp_aal_set_interrupt(1);
+		spin_unlock_irqrestore(&g_aal_irq_en_lock, flags);
+
 		/* Backlight latency should be as smaller as possible */
 		disp_aal_trigger_refresh(AAL_REFRESH_17MS);
 	}
@@ -486,6 +457,8 @@ static int disp_aal_copy_hist_to_user(DISP_AAL_HIST __user *hist)
 
 	if (copy_to_user(hist, &g_aal_hist_db, sizeof(DISP_AAL_HIST)) == 0)
 		ret = 0;
+
+	atomic_set(&g_aal_force_enable_irq, 0);
 
 	AAL_DBG("disp_aal_copy_hist_to_user: %d", ret);
 
@@ -561,8 +534,8 @@ int disp_aal_set_param(DISP_AAL_PARAM __user *param, void *cmdq)
 	int ret = -EFAULT;
 	int backlight_value = 0;
 
-	/* Not need to protect g_aal_param, */
-	/* since only AALService can set AAL parameters. */
+	/* Not need to protect g_aal_param, since only AALService
+	   can set AAL parameters. */
 	if (copy_from_user(&g_aal_param, param, sizeof(DISP_AAL_PARAM)) == 0) {
 		backlight_value = g_aal_param.FinalBacklight;
 #ifdef CONFIG_MTK_AAL_SUPPORT
@@ -576,26 +549,6 @@ int disp_aal_set_param(DISP_AAL_PARAM __user *param, void *cmdq)
 
 	if (g_aal_backlight_notified == 0)
 		backlight_value = 0;
-
-	/* [yanlin start] Change TP908 Min backlight PWM to 10/1023 */
-#ifdef CONFIG_TPLINK_PRODUCT_TP908
-	if ((backlight_value < TP908_MIN_BL_LEVEL_1023) && (backlight_value >= 1)) {
-		backlight_value = TP908_MIN_BL_LEVEL_1023;
-	}
-#endif
-	/* [yanlin end] */
-
-	/* [yanlin start] Fix #26068: Set backlight error when reboot in manual mode */
-	if (is_first_backlight_changed_over == false) {
-		if (backlight_value > first_backlight_changed_target) {
-			//pr_err("disp_aal_set_param return:%d\n", backlight_value);
-			return ret;
-		} else if (backlight_value <= first_backlight_changed_target) {
-			pr_err("disp_aal_set_param first allow to set:%d\n", backlight_value);
-			is_first_backlight_changed_over = true;
-		}
-	}
-	/* [yanlin end] */
 
 	if (ret == 0)
 		ret |= disp_pwm_set_backlight_cmdq(DISP_PWM0, backlight_value, cmdq);
@@ -615,7 +568,7 @@ int disp_aal_set_param(DISP_AAL_PARAM __user *param, void *cmdq)
 #define DRE_REG_2(v0, off0, v1, off1)           (((v1) << (off1)) | ((v0) << (off0)))
 #define DRE_REG_3(v0, off0, v1, off1, v2, off2) (((v2) << (off2)) | (v1 << (off1)) | ((v0) << (off0)))
 
-static int disp_aal_write_param_to_reg(struct cmdqRecStruct *cmdq, const DISP_AAL_PARAM *param)
+static int disp_aal_write_param_to_reg(cmdqRecHandle cmdq, const DISP_AAL_PARAM *param)
 {
 	int i;
 	const int *gain;
@@ -655,7 +608,7 @@ static int disp_aal_write_param_to_reg(struct cmdqRecStruct *cmdq, const DISP_AA
 }
 
 
-static int aal_config(enum DISP_MODULE_ENUM module, struct disp_ddp_path_config *pConfig, void *cmdq)
+static int aal_config(DISP_MODULE_ENUM module, disp_ddp_path_config *pConfig, void *cmdq)
 {
 	if (pConfig->dst_dirty) {
 		int width, height;
@@ -743,65 +696,60 @@ static void ddp_aal_restore(void *cmq_handle)
 }
 
 
-static int aal_clock_on(enum DISP_MODULE_ENUM module, void *cmq_handle)
+static int aal_clock_on(DISP_MODULE_ENUM module, void *cmq_handle)
 {
-#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_ELBRUS) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
-	/* aal is DCM , do nothing */
-#else
+	int ret = 0;
+
 #ifdef ENABLE_CLK_MGR
 #ifdef CONFIG_MTK_CLKMGR
-	enable_clock(MT_CG_DISP0_DISP_AAL, "aal");
+	ret = enable_clock(MT_CG_DISP0_DISP_AAL, "aal");
 #else
-	ddp_clk_enable(DISP0_DISP_AAL);
+	ret = ddp_clk_enable(DISP0_DISP_AAL);
 #endif
-	AAL_DBG("aal_clock_on CG 0x%x", DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
-#endif
+	pr_notice("M6 DDP clk: aal on ret=%d CG=0x%x\n", ret,
+		DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
 #endif
 	ddp_aal_restore(cmq_handle);
-	return 0;
+	return ret;
 }
 
-static int aal_clock_off(enum DISP_MODULE_ENUM module, void *cmq_handle)
+static int aal_clock_off(DISP_MODULE_ENUM module, void *cmq_handle)
 {
+	int ret = 0;
+
 	ddp_aal_backup();
-#if defined(CONFIG_ARCH_MT6755) || defined(CONFIG_ARCH_ELBRUS) || \
-	defined(CONFIG_MACH_MT6757) || defined(CONFIG_MACH_KIBOPLUS) || \
-	defined(CONFIG_MACH_MT6799)
-	/* aal is DCM , do nothing */
-#else
 #ifdef ENABLE_CLK_MGR
 	AAL_DBG("aal_clock_off");
 #ifdef CONFIG_MTK_CLKMGR
 	disable_clock(MT_CG_DISP0_DISP_AAL, "aal");
 #else
-	ddp_clk_disable(DISP0_DISP_AAL);
+	ret = ddp_clk_disable(DISP0_DISP_AAL);
 #endif
+	pr_notice("M6 DDP clk: aal off ret=%d CG=0x%x\n", ret,
+		DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
 #endif
-#endif
-	return 0;
+	return ret;
 }
 
-static int aal_init(enum DISP_MODULE_ENUM module, void *cmq_handle)
+static int aal_init(DISP_MODULE_ENUM module, void *cmq_handle)
 {
 	aal_clock_on(module, cmq_handle);
 	return 0;
 }
 
-static int aal_deinit(enum DISP_MODULE_ENUM module, void *cmq_handle)
+static int aal_deinit(DISP_MODULE_ENUM module, void *cmq_handle)
 {
 	aal_clock_off(module, cmq_handle);
 	return 0;
 }
 
-static int aal_set_listener(enum DISP_MODULE_ENUM module, ddp_module_notify notify)
+static int aal_set_listener(DISP_MODULE_ENUM module, ddp_module_notify notify)
 {
 	g_ddp_notify = notify;
 	return 0;
 }
 
-int aal_bypass(enum DISP_MODULE_ENUM module, int bypass)
+int aal_bypass(DISP_MODULE_ENUM module, int bypass)
 {
 	int relay = 0;
 
@@ -841,8 +789,9 @@ int aal_request_partial_support(int partial)
 	return 0;
 }
 
+
 #ifdef AAL_SUPPORT_PARTIAL_UPDATE
-static int _aal_partial_update(enum DISP_MODULE_ENUM module, void *arg, void *cmdq)
+static int _aal_partial_update(DISP_MODULE_ENUM module, void *arg, void *cmdq)
 {
 	struct disp_rect *roi = (struct disp_rect *) arg;
 	int width = roi->width;
@@ -853,8 +802,8 @@ static int _aal_partial_update(enum DISP_MODULE_ENUM module, void *arg, void *cm
 	return 0;
 }
 
-static int aal_ioctl(enum DISP_MODULE_ENUM module, void *handle,
-		enum DDP_IOCTL_NAME ioctl_cmd, void *params)
+static int aal_ioctl(DISP_MODULE_ENUM module, void *handle,
+		DDP_IOCTL_NAME ioctl_cmd, void *params)
 {
 	int ret = -1;
 
@@ -867,9 +816,10 @@ static int aal_ioctl(enum DISP_MODULE_ENUM module, void *handle,
 }
 #endif
 
-static int aal_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, void *cmdq)
+static int aal_io(DISP_MODULE_ENUM module, int msg, unsigned long arg, void *cmdq)
 {
 	int ret = 0;
+	unsigned long flags;
 
 	if (g_aal_io_mask != 0) {
 		AAL_DBG("aal_ioctl masked");
@@ -886,7 +836,13 @@ static int aal_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, void
 				return -EFAULT;
 			}
 
+			spin_lock_irqsave(&g_aal_irq_en_lock, flags);
+			if (atomic_read(&g_aal_force_enable_irq) == 1) {
+				enabled = 1;
+				AAL_NOTICE("force enable aal irq");
+			}
 			disp_aal_set_interrupt(enabled);
+			spin_unlock_irqrestore(&g_aal_irq_en_lock, flags);
 
 			if (enabled)
 				disp_aal_trigger_refresh(AAL_REFRESH_33MS);
@@ -924,7 +880,7 @@ static int aal_io(enum DISP_MODULE_ENUM module, int msg, unsigned long arg, void
 	return ret;
 }
 
-struct DDP_MODULE_DRIVER ddp_driver_aal = {
+DDP_MODULE_DRIVER ddp_driver_aal = {
 	.init = aal_init,
 	.deinit = aal_deinit,
 	.config = aal_config,
