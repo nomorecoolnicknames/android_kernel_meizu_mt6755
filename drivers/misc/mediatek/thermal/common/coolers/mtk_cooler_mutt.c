@@ -29,6 +29,15 @@
 #include <mt-plat/mtk_battery.h>
 /* [lidebiao end] */
 
+/* Battery driver (provider) not built: 0 = protect mode off, so the MD
+ * throttle SIGIO notify path stays dormant. Weak: the real battery driver
+ * overrides it. */
+int __attribute__ ((weak))
+get_Batt_Temp_Protect_Mode(void)
+{
+	return 0;
+}
+
 /* extern unsigned long ccci_get_md_boot_count(int md_id); */
 
 #if FEATURE_THERMAL_DIAG

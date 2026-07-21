@@ -616,6 +616,13 @@ static int __init mtktspmic_init(void)
 
 	struct proc_dir_entry *entry = NULL;
 	struct proc_dir_entry *mtktspmic_dir = NULL;
+	(void)entry; (void)mtktspmic_dir;
+
+	/* The zone is skipped (as on 3.18): tspmic would read the PMIC AUXADC
+	 * calibration/temperatures over pwrap with MT6353-labelled registers on
+	 * MT6351 silicon, i.e. garbage temperatures into the trip logic. */
+	{ extern void forge_m681_mark(unsigned char); forge_m681_mark(0xE8); }
+	return 0;
 
 	mtktspmic_info("[mtktspmic_init]\n");
 

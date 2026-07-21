@@ -14,6 +14,7 @@
 #include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/m3note_board.h>
 #include <linux/thermal.h>
 #include <linux/platform_device.h>
 #include <linux/types.h>
@@ -1057,6 +1058,7 @@ static int decide_ttj(void)
 	int active_cooler_id = -1;
 	int ret = 117000;	/* highest allowable TJ */
 	int temp_cl_dev_adp_cpu_state_active = 0;
+	int ttj;
 
 	for (; i < MAX_CPT_ADAPTIVE_COOLERS; i++) {
 		if (cl_dev_adp_cpu_state[i]) {
@@ -1068,25 +1070,55 @@ static int decide_ttj(void)
 		}
 	}
 	cl_dev_adp_cpu_state_active = temp_cl_dev_adp_cpu_state_active;
-	TARGET_TJ = ret;
+	/* the target is computed here and stored once below: krtatm reads
+	 * TARGET_TJ without a lock and must never see an intermediate value */
+	ttj = ret;
 #if CONTINUOUS_TM
 	if (ctm_on) {
 		int curr_tpcb = mtk_thermal_get_temp(MTK_THERMAL_SENSOR_AP);
 
 		if (ctm_on == 1) {
-			TARGET_TJ =
+			ttj =
 			MIN(MAX_TARGET_TJ,
 			MAX(STEADY_TARGET_TJ, (COEF_AE - COEF_BE * curr_tpcb / 1000)));
 		} else if (ctm_on == 2) {
 			/* +++ cATM+ +++ */
-			TARGET_TJ = ta_get_ttj();
+			ttj = ta_get_ttj();
 			/* --- cATM+ --- */
+			/*
+			 * The cATM+ target comes only from the userspace TA
+			 * daemon (thermalloadalgod, mtk_ta.c
+			 * TA_DAEMON_CMD_SET_TTJ); until one sets it,
+			 * ta_get_ttj() is 0 and ATM drives Tj towards 0 C, i.e.
+			 * the minimum budget as soon as the cooler trips (the
+			 * Android 9 profile runs no TA daemon). Without a daemon
+			 * value, take the cATMv1 target from the same clctm terms
+			 * (ctm_on 1 above): MAX_TARGET_TJ with a cool board, down
+			 * to STEADY_TARGET_TJ as Tpcb rises. No valid board
+			 * temperature (mtktsAP missing: -127000) is the hot case:
+			 * STEADY_TARGET_TJ. A daemon value never goes above
+			 * MAX_TARGET_TJ.
+			 */
+			if (ttj <= 0 && curr_tpcb <= -40000) {
+				ttj = STEADY_TARGET_TJ;
+				pr_warn_once("[FORGE_THERMAL] cATM+ without a TA daemon target and no Tpcb (%d mC): steady target %d mC\n",
+					     curr_tpcb, ttj);
+			} else if (ttj <= 0) {
+				ttj =
+				MIN(MAX_TARGET_TJ,
+				MAX(STEADY_TARGET_TJ, (COEF_AE - COEF_BE * curr_tpcb / 1000)));
+				pr_info_once("[FORGE_THERMAL] cATM+ without a TA daemon target: cATMv1 target from Tpcb (%d mC -> %d mC)\n",
+					     curr_tpcb, ttj);
+			} else if (MAX_TARGET_TJ > 0) {
+				ttj = MIN(ttj, MAX_TARGET_TJ);
+			}
 		}
 		current_ETJ = MIN(MAX_EXIT_TJ, MAX(STEADY_EXIT_TJ, (COEF_AX - COEF_BX * curr_tpcb / 1000)));
 		/* tscpu_printk("cttj %d cetj %d tpcb %d\n", TARGET_TJ, current_ETJ, curr_tpcb); */
 	}
 #endif
-	cpu_target_tj = TARGET_TJ;
+	WRITE_ONCE(TARGET_TJ, ttj);
+	cpu_target_tj = ttj;
 #if CONTINUOUS_TM
 	cpu_target_offset = TARGET_TJ - current_ETJ;
 #endif
@@ -2131,6 +2163,58 @@ static int krtatm_thread(void *arg)
 }
 #endif	/* FAST_RESPONSE_ATM */
 
+#if CPT_ADAPTIVE_AP_COOLER
+/*
+ * stage 4 (the port notes item 4, as 4.9 3c999cd47 /
+ * 3fc2ea7a8): the stock Flyme 6 ATM/CTM policy as the kernel default, since
+ * the A9 profile has no MTK thermal_manager. Values from
+ * system/etc/.tp/thermal.conf ("normal" profile), decoded with
+ * a thermal.conf decoder
+ * (stock data):
+ *   clatm_setting  0 2500 10 15 10 600 3000 550 1600        (both boards)
+ *   cpu_adaptive_0 EXIT 6000                                (both boards)
+ *   clctm M681H    2 85000 67000 45000 48000 75000 61000 355000 6000 285016 4667 500 500 10000
+ *   clctm L681H    2 85000 55000 40000 43000 75000 49000 485000 10000 421681 8667 500 500 10000
+ * Other boards keep clatm_initcfg.h. A write to the same /proc nodes later
+ * still wins.
+ */
+static void __init forge_atm_stock_policy(void)
+{
+	bool l681 = m3note_board_known_is(M3NOTE_BOARD_L681);
+
+	if (!l681 && !m3note_board_known_is(M3NOTE_BOARD_M681))
+		return;
+	FIRST_STEP_TOTAL_POWER_BUDGETS[0] = 2500;
+	PACKAGE_THETA_JA_RISES[0] = 10;
+	PACKAGE_THETA_JA_FALLS[0] = 15;
+	MINIMUM_BUDGET_CHANGES[0] = 10;
+	MINIMUM_CPU_POWERS[0] = 600;
+	MAXIMUM_CPU_POWERS[0] = 3000;
+	MINIMUM_GPU_POWERS[0] = 550;
+	MAXIMUM_GPU_POWERS[0] = 1600;
+#if CONTINUOUS_TM
+	ctm_on = 2;
+	MAX_TARGET_TJ = 85000;
+	STEADY_TARGET_TJ = l681 ? 55000 : 67000;
+	TRIP_TPCB = l681 ? 40000 : 45000;
+	STEADY_TARGET_TPCB = l681 ? 43000 : 48000;
+	MAX_EXIT_TJ = 75000;
+	STEADY_EXIT_TJ = l681 ? 49000 : 61000;
+	COEF_AE = l681 ? 485000 : 355000;
+	COEF_BE = l681 ? 10000 : 6000;
+	COEF_AX = l681 ? 421681 : 285016;
+	COEF_BX = l681 ? 8667 : 4667;
+	K_SUM_TT_HIGH = 500;
+	K_SUM_TT_LOW = 500;
+	CATMP_STEADY_TTJ_DELTA = 10000;
+	catmplus_update_params();
+#endif
+	mtk_thermal_cooling_device_add_exit_point(cl_dev_adp_cpu[0], 6000);
+	pr_info("[FORGE_THERMAL] %s: stock ATM/CTM policy (budget 2500 mW, CPU 600-3000, GPU 550-1600 mW, CTM target 85/%d C)\n",
+		l681 ? "l681" : "m681", l681 ? 55 : 67);
+}
+#endif
+
 static int __init mtk_cooler_atm_init(void)
 {
 	int err = 0;
@@ -2161,6 +2245,7 @@ static int __init mtk_cooler_atm_init(void)
 	mtk_thermal_cooling_device_add_exit_point(cl_dev_adp_cpu[1], CLATM_INIT_CFG_1_EXIT_POINT);
 	mtk_thermal_cooling_device_add_exit_point(cl_dev_adp_cpu[2], CLATM_INIT_CFG_2_EXIT_POINT);
 #endif
+	forge_atm_stock_policy();
 
 #endif
 	if (err) {

@@ -53,6 +53,7 @@
 
 #ifdef CONFIG_OF
 #include <linux/of.h>
+#include <linux/m3note_board.h>
 #include <linux/of_irq.h>
 #include <linux/of_address.h>
 #endif
@@ -137,6 +138,11 @@ int thermal_5A_limit_L = 83000; /*83C*/
 int enter_hpm_temp = 10000;
 int leave_hpm_temp = 15000;
 int enable_hpm_temp = 1;
+/* LT-HPM ladder opt-in: 0 (default) skips the vcorefs calls while vcorefs
+ * is not built; mtk_ts_cpu.forge_therm_lt_hpm=1 or
+ * /sys/module/mtk_ts_cpu/parameters/forge_therm_lt_hpm restores stock. */
+int forge_therm_lt_hpm;
+module_param(forge_therm_lt_hpm, int, 0644);
 #endif
 static int tc_mid_trip = -275000;
 /* trip_temp[0] must be initialized to the thermal HW protection point. */
@@ -289,16 +295,18 @@ mtk_get_gpu_loading(unsigned int *pLoading)
 	return 0;
 }
 
+/* EEM/PTP is not built, so these weak stubs are the runtime path, under
+ * every 40 ms bank-switch poll (mtk_tc.c read paths); log once. */
 void __attribute__ ((weak))
 mt_ptp_lock(unsigned long *flags)
 {
-	pr_err("E_WF: %s doesn't exist\n", __func__);
+	pr_err_once("E_WF: %s doesn't exist\n", __func__);
 }
 
 void __attribute__ ((weak))
 mt_ptp_unlock(unsigned long *flags)
 {
-	pr_err("E_WF: %s doesn't exist\n", __func__);
+	pr_err_once("E_WF: %s doesn't exist\n", __func__);
 }
 
 void __attribute__ ((weak))
@@ -319,6 +327,14 @@ mt_ppm_thermal_get_max_power(void)
 {
 	pr_err("E_WF: %s doesn't exist\n", __func__);
 	return 0;
+}
+
+/* The provider (ppm_v2) is MT6757 only; the caller below is
+ * edge-triggered, so the print cannot spam. */
+void __attribute__ ((weak))
+mt_ppm_set_5A_limit_throttle(bool enable)
+{
+	pr_err("E_WF: %s doesn't exist\n", __func__);
 }
 
 /*=============================================================*/
@@ -594,6 +610,45 @@ static int tscpu_get_crit_temp(struct thermal_zone_device *thermal, int *tempera
 	return 0;
 }
 
+static int forge_tz_last_temp;	/* last used sample */
+static unsigned int forge_tz_jumps;	/* 40 C jumps in a row */
+static unsigned int forge_tz_rejected;
+module_param_named(forge_tz_rejected, forge_tz_rejected, uint, 0444);
+
+/* Dead sensor: a sensor stuck out of range never reaches the 117 C trip
+ * through the filter below. After FORGE_TZ_DEAD_RUN samples in a row not
+ * used or 0 (7.5 s to 2 min at the default polling: 50 ms hot, 200 ms,
+ * 800 ms cold - mtk_tc.c interval 200, fast_polling_factor 4 from 60 C,
+ * tscpu_polling_factor2 4 below 20 C; interval and fast_polling_trip_temp
+ * are writable through proc, and the poll stops in deep idle, so the window
+ * is counted in samples; a dropped sample returns before the period is set
+ * and keeps the last one) it is taken as dead: one pr_emerg, forge_tz_dead
+ * = 1 until FORGE_TZ_BACK_RUN used samples in a row, and forge_therm_guard
+ * holds 1196 big / 689 LL (1.0 V). No poweroff: a dead sensor must not make
+ * the phone unusable. */
+#define FORGE_TZ_DEAD_RUN	150
+#define FORGE_TZ_BACK_RUN	5
+static unsigned int forge_tz_bad_run;	/* samples in a row not used or 0 */
+static unsigned int forge_tz_good_run;	/* used samples in a row */
+static int forge_tz_dead;
+module_param_named(forge_tz_bad_run, forge_tz_bad_run, uint, 0444);
+module_param_named(forge_tz_dead, forge_tz_dead, int, 0444);
+
+bool forge_tz_sensor_dead(void)
+{
+	return READ_ONCE(forge_tz_dead);
+}
+
+static void forge_tz_bad_sample(int curr_temp)
+{
+	forge_tz_good_run = 0;
+	if (++forge_tz_bad_run < FORGE_TZ_DEAD_RUN || forge_tz_dead)
+		return;
+	WRITE_ONCE(forge_tz_dead, 1);
+	pr_emerg("[FORGE_THERMAL] CPU sensor dead: %u samples in a row not used (last T=%d) - no 117 C poweroff possible, guard holds 1196/689 MHz until valid samples\n",
+		 forge_tz_bad_run, curr_temp);
+}
+
 static int tscpu_get_temp(struct thermal_zone_device *thermal, int *t)
 {
 	int ret = 0;
@@ -641,8 +696,49 @@ static int tscpu_get_temp(struct thermal_zone_device *thermal, int *t)
 	curr_temp = temp_temp;
 #endif
 
+	/* Trip 0 powers the phone off, and the stock SW filter above is off
+	 * on MT6755 (ENALBE_SW_FILTER 0): one bogus sample (a small raw reads
+	 * hundreds of C) must not do it. A sample out of the stock filter's
+	 * range (> 150 C, < -20 C) is never used; one 40 C off the last used
+	 * sample is used only after 3 such in a row (a real step, or a sensor
+	 * that came back). Not used: -EAGAIN, the zone keeps its last
+	 * temperature (thermal_core.c update_temperature();
+	 * mtk_thermal_wrapper_get_temp() passes the error on). Only used
+	 * samples move the reference, so a sensor flickering between bogus and
+	 * real values still delivers the real ones. 0 (resume, sensor not
+	 * ready) passes as before, but counts towards a dead sensor like a
+	 * sample not used. */
+	if (curr_temp != 0) {
+		int last = forge_tz_last_temp;
+
+		if (curr_temp > 150000 || curr_temp < -20000 ||
+		    (last && abs(curr_temp - last) > 40000 &&
+		     forge_tz_jumps++ < 3)) {
+			forge_tz_rejected++;
+			pr_warn_ratelimited("[FORGE_THERMAL] CPU T=%d not used (last %d, rejected %u)\n",
+					    curr_temp, last, forge_tz_rejected);
+			forge_tz_bad_sample(curr_temp);
+			return -EAGAIN;
+		}
+		forge_tz_last_temp = curr_temp;
+		forge_tz_jumps = 0;
+		forge_tz_bad_run = 0;
+		if (forge_tz_dead && ++forge_tz_good_run >= FORGE_TZ_BACK_RUN) {
+			WRITE_ONCE(forge_tz_dead, 0);
+			pr_err("[FORGE_THERMAL] CPU sensor back: T=%d\n", curr_temp);
+		}
+	} else {
+		forge_tz_bad_sample(curr_temp);
+	}
+
 #if THERMAL_LT_SET_HPM
-	if (enable_hpm_temp) {
+	/* vcorefs is not built (mt_vcorefs_stub.c returns OPPI_UNREQ
+	 * forever), so this low-temperature HPM ladder can never latch a
+	 * request, while a misreading sensor re-fires "enter HPM" on every
+	 * 40 ms poll. Skipped behind a knob (forge_therm_lt_hpm). */
+	if (enable_hpm_temp && !forge_therm_lt_hpm) {
+		pr_info_once("[FORGE_THERM] LT-HPM ladder skipped (vcorefs deferred); mtk_ts_cpu.forge_therm_lt_hpm=1 re-enables\n");
+	} else if (enable_hpm_temp) {
 		ts_temp = get_immediate_ts4_wrap();
 		if (ts_temp > leave_hpm_temp) {
 			if (vcorefs_get_kicker_opp(KIR_THERMAL) != OPPI_UNREQ) {
@@ -2782,6 +2878,35 @@ int isMT6753T(void)
 }
 #endif
 
+/*
+ * The stock Flyme 6 mtktscpu policy as the kernel default (thermal.conf
+ * "normal" profile, /proc/driver/thermal/tzcpu): trip 0 at the stock
+ * 117 C, cpu_adaptive_0 from 67 C (M681H) / 55 C (L681H), 200 ms polling.
+ * Trip 0 binds mtk-cl-kshutdown00, not stock's mtktscpu-sysrst: that cooler
+ * only signals a Meizu thermald (send_sysrst_signal() returns without its
+ * pid), so on LineageOS it protects nothing. kshutdown00 powers off
+ * (forge_therm_enforce = 1). Other boards keep tzcpu_initcfg.h; a later
+ * write to the node still wins.
+ */
+static void __init forge_tzcpu_stock_policy(void)
+{
+	bool l681 = m3note_board_known_is(M3NOTE_BOARD_L681);
+
+	if (!l681 && !m3note_board_known_is(M3NOTE_BOARD_M681))
+		return;
+	num_trip = 2;
+	trip_temp[0] = 117000;
+	strlcpy(g_bind0, "mtk-cl-kshutdown00", sizeof(g_bind0));
+	trip_temp[1] = l681 ? 55000 : 67000;
+	strlcpy(g_bind1, "cpu_adaptive_0", sizeof(g_bind1));
+	g_bind2[0] = g_bind3[0] = g_bind4[0] = g_bind5[0] = '\0';
+	g_bind6[0] = g_bind7[0] = g_bind8[0] = g_bind9[0] = '\0';
+	interval = 200;
+	/* the same lines as 4.9 7de958eab */
+	pr_info("[FORGE_THERMAL] %s tzcpu policy (117 C mtk-cl-kshutdown00, %d C cpu_adaptive_0, 200 ms)\n",
+		l681 ? "l681: stock L681H" : "m681: stock", l681 ? 55 : 67);
+}
+
 static int __init tscpu_init(void)
 {
 	int err = 0;
@@ -2799,6 +2924,7 @@ static int __init tscpu_init(void)
 		return err;
 	}
 
+	forge_tzcpu_stock_policy();
 	err = tscpu_register_thermal();
 	if (err) {
 		tscpu_warn("tscpu_register_thermal fail\n");

@@ -63,6 +63,14 @@ battery_get_bat_temperature(void)
 	mtktsbattery_exit();
 	return -127000;
 }
+
+/* Battery driver (provider) not built: 0 = protect mode off. Silent on
+ * purpose: get_trip_temp polls this every thermal interval. */
+int __attribute__ ((weak))
+get_Batt_Temp_Protect_Mode(void)
+{
+	return 0;
+}
 /* ************************************ */
 static kuid_t uid = KUIDT_INIT(0);
 static kgid_t gid = KGIDT_INIT(1000);
@@ -716,6 +724,13 @@ static int __init mtktsbattery_init(void)
 	int err = 0;
 	struct proc_dir_entry *entry = NULL;
 	struct proc_dir_entry *mtktsbattery_dir = NULL;
+	(void)entry; (void)mtktsbattery_dir;
+
+	/* Without MTK_SMART_BATTERY there is no battery temperature provider
+	 * and the zone would feed garbage into the trip logic, so it is
+	 * skipped (as on 3.18). */
+	{ extern void forge_m681_mark(unsigned char); forge_m681_mark(0xE8); }
+	return 0;
 
 	mtktsbattery_dprintk("[mtktsbattery_init]\n");
 

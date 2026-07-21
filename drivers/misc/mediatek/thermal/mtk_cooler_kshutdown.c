@@ -23,8 +23,26 @@
 #include <linux/printk.h>
 #include <linux/types.h>
 #include <linux/kobject.h>
+#include <linux/reboot.h>
 
 #include "mt-plat/mtk_thermal_monitor.h"
+
+/* Emergency action of tzcpu trip 0 (bound to mtk-cl-kshutdown00; the stock
+ * mtktscpu-sysrst cooler is a no-op on LineageOS, it only signals a Meizu
+ * thermald that does not exist). Action gate:
+ *   0 = log only (the [FORGE_THERM] EMERGENCY line shows the trip fired),
+ *   1 = orderly_poweroff(true)  (falls back to kernel poweroff -> rtc
+ *       mt_power_off -> bounded charger-check reset loop),
+ *   2 = machine_power_off()     (stock kshutdown behaviour, no userspace).
+ * Boot arg mtk_cooler_kshutdown.forge_therm_enforce=N or the /sys/module
+ * parameter changes it. The zone runs the backward_compatible governor
+ * (m3note_a9_unified.config), which calls set_cur_state on every poll above
+ * the trip, so a live change acts at the next poll. Default 1: this cooler
+ * is the tzcpu trip 0 at 117 C and the only shutdown left there, as stock's
+ * thermald power-off was. */
+static int forge_therm_enforce = 1;
+module_param(forge_therm_enforce, int, 0644);
+static int forge_therm_fired;
 
 #if 1
 #define mtk_cooler_kshutdown_dprintk(fmt, args...) pr_debug("thermal/cooler/kshutdown " fmt, ##args)
@@ -64,9 +82,29 @@ static int mtk_cl_kshutdown_set_cur_state(struct thermal_cooling_device *cdev, u
 	cl_kshutdown_state[(int)cdev->type[16]] = state;
 #endif
 	if (state == 1) {
-		mtk_cooler_kshutdown_dprintk("%s %s invokes machine_power_off\n", __func__,
-					     cdev->type);
-		machine_power_off();
+		/* log every crossing (ratelimited), act only once per
+		 * boot */
+		pr_emerg_ratelimited("[FORGE_THERM] EMERGENCY trip: %s state=1 enforce=%d fired=%d\n",
+				     cdev->type, forge_therm_enforce, forge_therm_fired);
+		if (forge_therm_fired)
+			return 0;
+		switch (forge_therm_enforce) {
+		case 1:
+			forge_therm_fired = 1;
+			pr_emerg("[FORGE_THERM] EMERGENCY action: orderly_poweroff\n");
+			orderly_poweroff(true);
+			break;
+		case 2:
+			forge_therm_fired = 1;
+			mtk_cooler_kshutdown_dprintk("%s %s invokes machine_power_off\n", __func__,
+						     cdev->type);
+			pr_emerg("[FORGE_THERM] EMERGENCY action: machine_power_off\n");
+			machine_power_off();
+			break;
+		default:
+			/* LOG-ONLY: no action; the marker above is the evidence */
+			break;
+		}
 	}
 
 	return 0;
