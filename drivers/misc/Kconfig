@@ -531,6 +531,35 @@ config UID_CPUTIME
 	help
 	  Per UID based cpu time statistics exported to /proc/uid_cputime
 
+config DEVINFO
+	bool "WT /dev/dev_info hw-component registry (m681 stock)"
+	help
+	  m681 (2026-07-20): stock wt6755_66_sz_l driver (stock 3.10
+	  drivers/misc/dev_info.c, CONFIG_DEVINFO). Exports the hw component
+	  name strings (camera_b_info/camera_f_info/lcd_info/...) that the
+	  stock-ported camera sensor drivers fill in at detect time, and the
+	  /dev/dev_info misc chrdev the WT factory tools read them from.
+
+config M3NOTE_UNIFIED
+	bool "One kernel for both Meizu M3 Note boards (m681 and l681)"
+	depends on OF && MACH_MT6755
+	help
+	  The m681 (SM5414 charger, ILI9885 panel) and the l681 (BQ24196
+	  charger, HX8399 panel) share the MT6755 SoC and the MT6351 PMIC.
+	  With this option both boards' drivers are built into one Image and
+	  each board-specific driver acts only on the board named by the
+	  machine compatible of the appended DTB ("meizu,m681" or
+	  "meizu,l681"). An unknown or ambiguous DT leaves all of them inert.
+	  See include/linux/m3note_board.h.
+
+config M3NOTE_SINGLE_L681
+	bool "l681-only Meizu M3 Note kernel"
+	depends on MACH_MT6755 && !M3NOTE_UNIFIED
+	help
+	  An l681 (hq6755_66_b1a_l) build that names its board at compile
+	  time (linux/m3note_board.h), so drivers pick the l681 pads without
+	  the unified kernel's DT lookup.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"

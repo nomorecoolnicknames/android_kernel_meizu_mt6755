@@ -56,4 +56,10 @@ obj-$(CONFIG_ECHO)		+= echo/
 obj-$(CONFIG_VEXPRESS_SYSCFG)	+= vexpress-syscfg.o
 obj-$(CONFIG_CXL_BASE)		+= cxl/
 obj-$(CONFIG_UID_CPUTIME) += uid_cputime.o
+# Wingtech device-info registry (provides camera_b_info/camera_f_info)
+obj-$(CONFIG_DEVINFO)		+= dev_info.o
+obj-$(CONFIG_M3NOTE_UNIFIED)	+= m3note_board.o
+# PMIC HWCID/SWCID print at boot, read-only (both boards)
+obj-$(CONFIG_M3NOTE_SINGLE_L681)	+= m3note_pmic_id.o
+obj-$(CONFIG_M3NOTE_UNIFIED)	+= m3note_pmic_id.o
 obj-$(CONFIG_MEDIATEK_SOLUTION)	+= mediatek/
