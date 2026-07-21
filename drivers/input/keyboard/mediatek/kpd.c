@@ -20,6 +20,7 @@
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/clk.h>
+#include <linux/reboot.h>
 
 #define KPD_NAME	"mtk-kpd"
 #define MTK_KP_WAKESOURCE	/* this is for auto set wake up source */
@@ -28,11 +29,81 @@ void __iomem *kp_base;
 static unsigned int kp_irqnr;
 struct input_dev *kpd_input_dev;
 static bool kpd_suspend;
-static int kpd_show_hw_keycode = 1;
+/* Per-key log lines (hardware and Linux keycodes, power/home events) are
+ * off by default: with KPD_DEBUG they go out at KERN_ERR, dmesg survives a
+ * warm reboot in pstore, and a key trace is enough to rebuild PINs and
+ * typed text. Runtime switch: /sys/module/kpd/parameters/kpd_show_hw_keycode. */
+static int kpd_show_hw_keycode;
 static int kpd_show_register = 1;
+/* long_press_reboot_function_setting() is a PMIC write over pwrap that uses
+ * MT6353 offsets on MT6351 silicon and wedges the boot; keep it skipped.
+ * The power key comes from the PMIC pwrkey EINT path. */
+static int forge_skip_kpd_longpress = 1;
+module_param(forge_skip_kpd_longpress, int, 0444);
+
+#ifdef CONFIG_KPD_PWRKEY_USE_PMIC
+/* Kernel-side power-key long-press fallback. The PMIC 8 s hard reset
+ * (RG_PWRKEY_RST_EN) is not armed, so a held power key would do nothing;
+ * if the PMIC pwrkey stays pressed for forge_kpd_longpress_sec seconds, do
+ * an orderly kernel_restart(). No PMIC register is touched. */
+static int forge_kpd_longpress_reboot = 1;
+module_param(forge_kpd_longpress_reboot, int, 0644);
+static int forge_kpd_longpress_sec = 6;
+module_param(forge_kpd_longpress_sec, int, 0644);
+static struct hrtimer forge_kpd_lp_timer;
+static struct work_struct forge_kpd_lp_work;
+static atomic_t forge_kpd_lp_fired = ATOMIC_INIT(0);
+static int forge_kpd_lp_ready;	/* timer/work initialized (kpd_mod_init) */
+
+static void forge_kpd_lp_work_func(struct work_struct *work)
+{
+	pr_emerg("[FORGE_KPD] F5 longpress reboot: kernel_restart via PSCI-first wdt_arch_reset (#150)\n");
+	kernel_restart("kpd-longpress");
+}
+
+static enum hrtimer_restart forge_kpd_lp_timer_func(struct hrtimer *timer)
+{
+	/* fire once; we are rebooting anyway */
+	if (atomic_cmpxchg(&forge_kpd_lp_fired, 0, 1) == 0) {
+		pr_emerg("[FORGE_KPD] F5 power key held to timeout -> scheduling orderly reboot\n");
+		schedule_work(&forge_kpd_lp_work);
+	}
+	return HRTIMER_NORESTART;
+}
+
+/* called from the PMIC pwrkey press/release path (pmic thread context) */
+static void forge_kpd_longpress_watch(unsigned long pressed)
+{
+	int sec = forge_kpd_longpress_sec;
+
+	if (!forge_kpd_longpress_reboot || !forge_kpd_lp_ready)
+		return;
+	if (pressed) {
+		if (sec < 3)
+			sec = 3;
+		else if (sec > 30)
+			sec = 30;
+		kpd_info("[FORGE_KPD] F5 longpress reboot armed (%ds hold)\n", sec);
+		hrtimer_start(&forge_kpd_lp_timer, ktime_set(sec, 0), HRTIMER_MODE_REL);
+	} else {
+		if (hrtimer_cancel(&forge_kpd_lp_timer))
+			kpd_info("[FORGE_KPD] F5 longpress reboot disarmed (released)\n");
+	}
+}
+#endif
+
 unsigned long call_status;
 /* [yanlin] Support snapshot when screenoff */
 static char snapshot_status = '0';
+/* Keep the keypad controller enabled across suspend so its IRQ (an SPM
+ * wake source, WAKE_SRC_R12_KP_IRQ_B) can resume the system: on L681 Home
+ * is keypad matrix key 1, not a PMIC key, and with the stock
+ * MTK_KP_WAKESOURCE path only the PMIC power/volume-up keys could wake.
+ * Whether the screen turns on is up to the framework
+ * (config_deviceHardwareWakeKeys); 0 restores the stock behaviour. */
+static int forge_kpd_wake = 1;
+module_param(forge_kpd_wake, int, 0644);
+MODULE_PARM_DESC(forge_kpd_wake, "keep the keypad as a wake source in suspend (1) or stock (0)");
 struct wake_lock kpd_suspend_lock;	/* For suspend usage */
 
 /*for kpd_memory_setting() function*/
@@ -390,7 +461,9 @@ static void kpd_pwrkey_eint_handler(void)
 #ifdef CONFIG_KPD_PWRKEY_USE_PMIC
 void kpd_pwrkey_pmic_handler(unsigned long pressed)
 {
-	kpd_print("Power Key generate, pressed=%ld\n", pressed);
+	if (kpd_show_hw_keycode)
+		kpd_print("Power Key generate, pressed=%ld\n", pressed);
+	forge_kpd_longpress_watch(pressed);
 	if (!kpd_input_dev) {
 		kpd_print("KPD input device not ready\n");
 		return;
@@ -407,7 +480,8 @@ void kpd_pwrkey_pmic_handler(unsigned long pressed)
 
 void kpd_pmic_rstkey_handler(unsigned long pressed)
 {
-	kpd_print("PMIC reset Key generate, pressed=%ld\n", pressed);
+	if (kpd_show_hw_keycode)
+		kpd_print("PMIC reset Key generate, pressed=%ld\n", pressed);
 	if (!kpd_input_dev) {
 		kpd_print("KPD input device not ready\n");
 		return;
@@ -454,13 +528,15 @@ static void kpd_keymap_handler(unsigned long data)
 
 			linux_keycode = kpd_keymap[hw_keycode];
 			if (unlikely(linux_keycode == 0)) {
-				kpd_print("Linux keycode = 0\n");
+				if (kpd_show_hw_keycode)
+					kpd_print("Linux keycode = 0\n");
 				continue;
 			}
 			kpd_aee_handler(linux_keycode, pressed);
 			input_report_key(kpd_input_dev, linux_keycode, pressed);
 			input_sync(kpd_input_dev);
-			kpd_print("report Linux keycode = %u\n", linux_keycode);
+			if (kpd_show_hw_keycode)
+				kpd_print("report Linux keycode = %u\n", linux_keycode);
 		}
 	}
 
@@ -956,7 +1032,10 @@ static int kpd_pdrv_probe(struct platform_device *pdev)
 #endif
 
 #ifndef KPD_EARLY_PORTING	/*add for avoid early porting build err the macro is defined in custom file */
-	long_press_reboot_function_setting();	/* /API 4 for kpd long press reboot function setting */
+	if (forge_skip_kpd_longpress)
+		kpd_info("m681 F1: SKIP long_press_reboot_function_setting (pwrap/PMIC write, 3.18 v247 boot-wedge)\n");
+	else
+		long_press_reboot_function_setting();	/* /API 4 for kpd long press reboot function setting */
 #endif
 	hrtimer_init(&aee_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	aee_timer.function = aee_timer_func;
@@ -987,7 +1066,7 @@ static int kpd_pdrv_suspend(struct platform_device *pdev, pm_message_t state)
 	kpd_suspend = true;
 #ifdef MTK_KP_WAKESOURCE
 	/* [yanlin] Support snapshot when screenoff */
-	if (call_status == 2 || snapshot_status == '1') {
+	if (call_status == 2 || snapshot_status == '1' || forge_kpd_wake) {
 		kpd_print("kpd_early_suspend wake up source enable!! (%d)\n", kpd_suspend);
 	} else {
 		kpd_wakeup_src_setting(0);
@@ -1066,6 +1145,15 @@ static struct sb_handler kpd_sb_handler_desc = {
 static int __init kpd_mod_init(void)
 {
 	int r;
+
+#ifdef CONFIG_KPD_PWRKEY_USE_PMIC
+	/* Init before the driver registers, so a pwrkey INT arriving mid-probe
+	 * never hits an uninitialised timer/work. */
+	hrtimer_init(&forge_kpd_lp_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	forge_kpd_lp_timer.function = forge_kpd_lp_timer_func;
+	INIT_WORK(&forge_kpd_lp_work, forge_kpd_lp_work_func);
+	forge_kpd_lp_ready = 1;
+#endif
 
 	r = platform_driver_register(&kpd_pdrv);
 	if (r) {
