@@ -1794,11 +1794,32 @@ int DumpThreadNativeInfo(struct aee_oops *oops)
 	return 0;
 }
 
+/* 1: kernel_reportAPI() logs the kernel exception but does not forward it to
+ * the userspace aed daemon, whose DB collection reboots the SoC on a report
+ * storm. 0: normal aed collection. */
+static int m681_aee_forward_disabled = 1;
+
 static void kernel_reportAPI(const AE_DEFECT_ATTR attr, const int db_opt, const char *module,
 			     const char *msg)
 {
 	struct aee_oops *oops;
 	int n = 0;
+
+	/* Name the first 64 kernel AEE reports in the kernel log, so a stream of
+	 * KE reports is identifiable in dmesg/expdb.
+	 * attr: AE_DEFECT_WARNING=1 / AE_DEFECT_EXCEPTION=2. */
+	{
+		static int _ke134;
+
+		if (_ke134 < 64) {
+			_ke134++;
+			pr_emerg("[FORGE_AEE] #134 KE#%d attr=%d module=%s comm=%s pid=%d msg=%s\n",
+				 _ke134, (int)attr, module ? module : "(null)",
+				 current->comm, current->pid, msg ? msg : "(null)");
+		}
+	}
+	if (m681_aee_forward_disabled)
+		return;
 
 	if (aee_mode == AEE_MODE_CUSTOMER_USER || (aee_mode == AEE_MODE_CUSTOMER_ENG && attr == AE_DEFECT_WARNING))
 		return;
