@@ -58,12 +58,25 @@ void rtc_write(u16 addr, u16 data)
 	pwrap_write((u32) addr, (u32) data);
 }
 
+/* Bounded CBUSY wait. The stock body `while (rtc_read(RTC_BBPU) &
+ * RTC_BBPU_CBUSY) ;` is unbounded, and every iteration is a pwrap
+ * transaction. arch_reset() reaches this from restart context (IRQs off,
+ * after smp_send_stop()); a stuck status bit would turn a reboot into a
+ * silent hang. ~10000 pwrap reads is >= 100 ms, far beyond the few polls a
+ * healthy CBUSY needs. */
+#define FORGE_RTC_CBUSY_MAX_POLLS	10000u
+
 void rtc_busy_wait(void)
 {
-	do {
-		while (rtc_read(RTC_BBPU) & RTC_BBPU_CBUSY)
-			;
-	} while (0);
+	unsigned int polls = 0;
+
+	while (rtc_read(RTC_BBPU) & RTC_BBPU_CBUSY) {
+		if (++polls > FORGE_RTC_CBUSY_MAX_POLLS) {
+			hal_rtc_xfatal("[FORGE_M681] rtc_busy_wait: CBUSY still set after %u polls, giving up\n",
+				       polls);
+			return;
+		}
+	}
 }
 
 void rtc_write_trigger(void)

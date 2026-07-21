@@ -55,8 +55,10 @@
 #define GPIO_SRCLKEN_PIN (148 | 0x80000000)
 
 
+#ifndef PMIC_EOSC_CALI_TD_MASK
 #define PMIC_EOSC_CALI_TD_MASK		MT6351_PMIC_EOSC_CALI_TD_MASK
 #define PMIC_EOSC_CALI_TD_SHIFT		MT6351_PMIC_EOSC_CALI_TD_SHIFT
+#endif
 
 /*TODO extern bool pmic_chrdet_status(void);*/
 

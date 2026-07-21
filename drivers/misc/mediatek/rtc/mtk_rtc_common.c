@@ -65,6 +65,12 @@
 #include <upmu_common.h>
 /* #include <mach/upmu_hw.h> */
 #include <mtk_pmic_wrap.h>
+
+/* mtk_chr_is_charger_exist is declared in charging.h under CONFIG_MTK_SMART_BATTERY;
+ * provide an unconditional extern so RTC power-off compiles with battery deferred. */
+#ifndef CONFIG_MTK_SMART_BATTERY
+extern int mtk_chr_is_charger_exist(unsigned char *exist);
+#endif
 #if defined CONFIG_MTK_KERNEL_POWER_OFF_CHARGING
 #include <mtk_boot.h>
 #include <mt-plat/mtk_boot_common.h>
@@ -425,7 +431,9 @@ void mt_power_off(void)
 {
 #if !defined(CONFIG_POWER_EXT)
 	int count = 0;
+#ifdef CONFIG_MTK_SMART_BATTERY
 	unsigned char exist;
+#endif
 #endif
 
 	rtc_xinfo("mt_power_off\n");

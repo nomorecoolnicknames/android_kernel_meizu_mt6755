@@ -20,6 +20,11 @@ ifneq (,$(filter y,$(CONFIG_MACH_MT6757)))
   MDI_IP_FOLDER:=mt6351
 endif
 
+# MT6755 boards use the MT6351 PMIC; there is no MT6755 RTC HAL, reuse MT6351
+ifneq (,$(filter y,$(CONFIG_MACH_MT6755)))
+  MDI_IP_FOLDER:=mt6351
+endif
+
 ifneq (,$(filter y,$(CONFIG_MTK_PMIC_CHIP_MT6355)))
   MDI_IP_FOLDER:=mt6355
 endif

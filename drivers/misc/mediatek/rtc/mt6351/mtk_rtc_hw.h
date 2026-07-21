@@ -239,6 +239,7 @@ extern unsigned int pmic_config_interface_nospinlock(unsigned int RegNum,
 #define RTC_SPAR0                (RTC_BASE + 0x0030)
 #define RTC_SPAR0_32K_LESS             (1U << 6)
 #define RTC_SPAR0_LP_DET            (1U << 7)
+#define RTC_SPAR0_BOOT_VIB_DISABLE  (1U << 8)	/* match mt6355; used by hal_common */
 
 /*
  * RTC_SPAR1:
@@ -355,6 +356,9 @@ extern u16 rtc_spare_reg[][3];
 #define VRTC_PWM_L_DUTY_102_4_MS                         (15 << MT_PMIC_VRTC_PWM_L_DUTY_SHIFT)
 #define VRTC_PWM_MODE                                     (1 << MT_PMIC_VRTC_PWM_MODE_SHIFT)
 
+/* mt6353_hw.h (pulled via upmu_common) may already define these for mt6353;
+ * guard to avoid redefinition when the mt6351 RTC HAL reuses the same PMIC names. */
+#ifndef PMIC_RG_SRCLKEN_IN0_HW_MODE_ADDR
 #define PMIC_RG_SRCLKEN_IN0_HW_MODE_ADDR	MT6351_PMIC_RG_SRCLKEN_IN0_HW_MODE_ADDR
 #define PMIC_RG_SRCLKEN_IN0_HW_MODE_MASK	MT6351_PMIC_RG_SRCLKEN_IN0_HW_MODE_MASK
 #define PMIC_RG_SRCLKEN_IN0_HW_MODE_SHIFT	MT6351_PMIC_RG_SRCLKEN_IN0_HW_MODE_SHIFT
@@ -365,6 +369,7 @@ extern u16 rtc_spare_reg[][3];
 #define PMIC_EOSC_CALI_START_MASK	MT6351_PMIC_EOSC_CALI_START_MASK
 #define PMIC_EOSC_CALI_START_SHIFT	MT6351_PMIC_EOSC_CALI_START_SHIFT
 #define PMIC_EOSC_CALI_TD_ADDR		MT6351_PMIC_EOSC_CALI_TD_ADDR
+#endif /* PMIC_RG_SRCLKEN_IN0_HW_MODE_ADDR */
 
 #endif /* __MT_RTC_HW_H__ */
 

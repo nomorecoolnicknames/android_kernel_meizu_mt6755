@@ -16,6 +16,7 @@
 #include <mach/wd_api.h>
 #include <linux/smp.h>
 /*add by debug for register restart notify*/
+#include <linux/module.h>
 #include <linux/notifier.h>
 #include <linux/reboot.h>
 #include <mt-plat/mtk_reboot.h>
@@ -619,6 +620,65 @@ int get_wd_api(struct wd_api **obj)
 }
 
 #ifndef CONFIG_MEDIATEK_WATCHDOG
+
+/* Mark the recovery/fastboot RTC flag in process context, not in restart
+ * context.
+ *
+ * Android 9 init does not write a misc/BCB for `reboot,recovery`; it only
+ * passes the string to reboot(2). arm_pm_restart is NULL (the DT declares
+ * PSCI 0.1, so psci.c never assigns it), so machine_restart() falls through
+ * to do_kernel_restart(cmd) -> mtk_arch_reset_handle -> arch_reset(), and
+ * the only difference from a plain reboot is the rtc_mark_recovery() below.
+ * That call runs with IRQs off, after smp_send_stop(), takes rtc_lock and
+ * ends in pwrap traffic: it can hang if rtc_lock is held by a CPU that
+ * smp_send_stop() failed to stop, or if CBUSY never clears.
+ *
+ * kernel_restart_prepare() calls the reboot notifier chain
+ * (blocking_notifier_call_chain(SYS_RESTART, cmd)) in normal process
+ * context with IRQs on, before device_shutdown(), migrate_to_reboot_cpu()
+ * and machine_restart(). Doing the RTC mark there cannot be worse than
+ * doing it after smp_send_stop(), and arch_reset() then skips the redundant
+ * write.
+ * echo 0 > /sys/module/wd_api/parameters/forge_rtc_mark_early restores the
+ * stock ordering at run time.
+ */
+static int forge_rtc_mark_early = 1;
+module_param(forge_rtc_mark_early, int, 0644);
+MODULE_PARM_DESC(forge_rtc_mark_early,
+	"m681: 1 = set the RTC recovery/fastboot flag from the reboot notifier (process context)");
+static bool forge_rtc_marked;
+
+static int forge_reboot_notify(struct notifier_block *nb, unsigned long action, void *data)
+{
+	const char *cmd = (const char *)data;
+
+	/* Cleared on every restart so a later plain reboot cannot inherit a
+	 * stale "already marked" and skip a mark it needs. */
+	forge_rtc_marked = false;
+
+	if (!forge_rtc_mark_early || action != SYS_RESTART || !cmd)
+		return NOTIFY_DONE;
+
+#ifdef CONFIG_MTK_RTC
+	if (!strcmp(cmd, "recovery")) {
+		pr_emerg("[FORGE_M681] #S2 reboot notifier: rtc_mark_recovery() in PROCESS context\n");
+		rtc_mark_recovery();
+		forge_rtc_marked = true;
+		pr_emerg("[FORGE_M681] #S2 reboot notifier: rtc_mark_recovery() returned\n");
+	} else if (!strcmp(cmd, "bootloader")) {
+		pr_emerg("[FORGE_M681] #S2 reboot notifier: rtc_mark_fast() in PROCESS context\n");
+		rtc_mark_fast();
+		forge_rtc_marked = true;
+		pr_emerg("[FORGE_M681] #S2 reboot notifier: rtc_mark_fast() returned\n");
+	}
+#endif
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block forge_reboot_nb = {
+	.notifier_call = forge_reboot_notify,
+};
+
 /*register restart notify and own by debug start-------
 *
 */
@@ -637,9 +697,21 @@ void arch_reset(char mode, const char *cmd)
 	if (cmd && !strcmp(cmd, "charger")) {
 		/* do nothing */
 	} else if (cmd && !strcmp(cmd, "recovery")) {
-		rtc_mark_recovery();
+#ifdef CONFIG_MTK_RTC
+		/* already done in process context by forge_reboot_notify();
+		 * repeating it here can hang */
+		if (forge_rtc_marked)
+			pr_emerg("[FORGE_M681] #S2 arch_reset: RTC flag already set in process context, skipping restart-context write\n");
+		else
+			rtc_mark_recovery();
+#endif
 	} else if (cmd && !strcmp(cmd, "bootloader")) {
-		rtc_mark_fast();
+#ifdef CONFIG_MTK_RTC
+		if (forge_rtc_marked)
+			pr_emerg("[FORGE_M681] #S2 arch_reset: RTC flag already set in process context, skipping restart-context write\n");
+		else
+			rtc_mark_fast();
+#endif
 	} else if (cmd && !strcmp(cmd, "kpoc")) {
 #ifdef CONFIG_MTK_KERNEL_POWER_OFF_CHARGING
 		rtc_mark_kpoc();
@@ -666,7 +738,9 @@ static int mtk_arch_reset_handle(struct notifier_block *this, unsigned long mode
 static int __init mtk_arch_reset_init(void)
 {
 	int ret;
+#ifdef CONFIG_MTK_RTC
 	pm_power_off = mt_power_off;
+#endif
 	mtk_restart_handler.notifier_call = mtk_arch_reset_handle;
 	mtk_restart_handler.priority = 128;
 	pr_alert("\n register_restart_handler- 0x%p, Notify call: - 0x%p\n",
@@ -675,6 +749,13 @@ static int __init mtk_arch_reset_init(void)
 	if (ret)
 		pr_err("ARCH_RESET cannot register mtk_restart_handler!!!!\n");
 	pr_alert("ARCH_RESET register mtk_restart_handler  ok!!!!\n");
+	/* reboot_notifier_list is a statically initialised blocking chain,
+	 * so registering at pure_initcall is safe. */
+	if (register_reboot_notifier(&forge_reboot_nb))
+		pr_err("[FORGE_M681] #S2 cannot register reboot notifier\n");
+	else
+		pr_alert("[FORGE_M681] #S2 reboot notifier registered (forge_rtc_mark_early=%d)\n",
+			 forge_rtc_mark_early);
 	return ret;
 }
 
