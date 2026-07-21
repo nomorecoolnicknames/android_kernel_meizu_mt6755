@@ -30,3 +30,12 @@ config BACKLIGHT_SUPPORT_LM3697
 	  Set y to support.
 	  Set n to disable.
 	  Charge pump driver for external backlight.
+
+config MTK_LEDS_L681_MX
+	bool "Meizu M3 Note l681 mx-led (home-key LED on MT6351 ISINK0)"
+	depends on LEDS_CLASS
+	default n
+	---help---
+	  LED class device "mx-led" with the Meizu "blink" attribute, driven
+	  on the MT6351 ISINK0 fields of the stock L681H kernel. Inert on any
+	  board but l681 and on a PMIC whose HWCID is not 0x51xx.
