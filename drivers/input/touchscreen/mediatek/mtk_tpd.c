@@ -19,6 +19,7 @@
  ******************************************************************************/
 
 #include "tpd.h"
+#include <linux/of_platform.h>
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/miscdevice.h>
@@ -613,6 +614,9 @@ static int tpd_probe(struct platform_device *pdev)
 #endif
 #endif
 
+	pr_emerg("[M681_TOUCH] tpd_probe ENTER pdev=%p of_node=%p name=%s\n",
+		 pdev, pdev ? pdev->dev.of_node : NULL,
+		 (pdev && pdev->dev.of_node) ? pdev->dev.of_node->name : "?");
 	TPD_DMESG("enter %s, %d\n", __func__, __LINE__);
 
 	if (misc_register(&tpd_misc_device))
@@ -774,6 +778,9 @@ pr_err("Lomen 1\n");
 		TPD_DMESG("input_register_device failed.(tpd)\n");
 	else
 		tpd_register_flag = 1;
+	pr_emerg("[M681_TOUCH] tpd_probe input_register_device done flag=%d drv=%s\n",
+		 tpd_register_flag,
+		 g_tpd_drv ? g_tpd_drv->tpd_device_name : "?");
 	if (g_tpd_drv->tpd_have_button)
 		tpd_button_init();
 
@@ -793,9 +800,38 @@ static int tpd_remove(struct platform_device *pdev)
 /* called when loaded into kernel */
 static void tpd_init_work_callback(struct work_struct *work)
 {
+	struct device_node *m681_tn;
+	struct platform_device *m681_existing;
+
+	pr_emerg("[M681_TOUCH] initwork ENTER\n");
 	TPD_DEBUG("MediaTek touch panel driver init\n");
+
+	/* The touch node lives under soc (simple-bus), so of_platform should
+	 * create its platform_device at arch_initcall_sync; registering tpd_driver
+	 * here then binds it and tpd_probe runs synchronously. Log the device
+	 * before and after driver registration to show whether the
+	 * platform_device exists and whether tpd_probe ran. */
+	m681_tn = of_find_matching_node(NULL, touch_of_match);
+	m681_existing = m681_tn ? of_find_device_by_node(m681_tn) : NULL;
+	pr_emerg("[M681_TOUCH] pre-reg: node=%p existing_pdev=%p\n",
+		 m681_tn, m681_existing);
+
 	if (platform_driver_register(&tpd_driver) != 0)
 		TPD_DMESG("unable to register touch panel driver.\n");
+	pr_emerg("[M681_TOUCH] drv registered\n");
+
+	m681_existing = m681_tn ? of_find_device_by_node(m681_tn) : NULL;
+	pr_emerg("[M681_TOUCH] post-reg: existing_pdev=%p\n", m681_existing);
+
+	/* Only force-create when auto-populate genuinely failed to produce a
+	 * platform_device.  Fence with BEGIN/END so a hang inside device_add is
+	 * distinguishable in ram_console from a downstream tpd_probe hang. */
+	if (m681_tn && !m681_existing) {
+		pr_emerg("[M681_TOUCH] force-create BEGIN\n");
+		of_platform_device_create(m681_tn, NULL, NULL);
+		pr_emerg("[M681_TOUCH] force-create END\n");
+	}
+	pr_emerg("[M681_TOUCH] initwork DONE\n");
 }
 static int __init tpd_device_init(void)
 {

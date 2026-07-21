@@ -62,4 +62,13 @@ config TOUCHSCREEN_MTK_SYNAPTICS
 
 source "drivers/input/touchscreen/mediatek/synaptics_dsx/Kconfig"
 
+config TOUCHSCREEN_MTK_GT9XX_MZ
+	bool "GT9XX_MZ (Meizu Goodix GT9xx) for Mediatek package"
+	help
+	  Stock Meizu m681 Goodix GT9xx touch driver (GT917D/GT915L), ported
+	  from the m681 3.10 tree via the 3.18 graft (device-verified there,
+	  v257). Binds the DTS cap_touch@5d node via "mediatek,cap_touch".
+
+	  If unsure, say N.
+
 endif

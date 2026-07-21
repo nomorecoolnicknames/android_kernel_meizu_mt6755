@@ -15,3 +15,4 @@ obj-y   +=  tpd_setting.o
 obj-$(CONFIG_TOUCHSCREEN_MTK_GT1151)	+=  GT1151/
 obj-$(CONFIG_TOUCHSCREEN_MTK_SYNAPTICS)	+=  synaptics_dsx/
 obj-$(CONFIG_TOUCHSCREEN_MTK_NT36xxx)	+=  gn_nt36xxx/
+obj-$(CONFIG_TOUCHSCREEN_MTK_GT9XX_MZ)	+=  GT9XX_MZ/
