@@ -251,6 +251,31 @@ static ssize_t store_vibr_on(struct device *dev, struct device_attribute *attr,
 
 static DEVICE_ATTR(vibr_on, 0220, NULL, store_vibr_on);
 
+/* /sys/class/timed_output/vibrator/vibr_vol. The stock
+ * android.hardware.vibrator@1.0-service.mtk opens both .../enable and
+ * .../vibr_vol at init; without vibr_vol it fails (EACCES/ENOENT),
+ * crash-loops and never registers IVibrator, and system_server waits on
+ * IVibrator/default forever (boot_completed never fires). Node presence and
+ * accepting read/write is all the HAL needs. */
+static unsigned int g_m681_vibr_vol = 5;
+static ssize_t show_vibr_vol(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%u\n", g_m681_vibr_vol);
+}
+static ssize_t store_vibr_vol(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t size)
+{
+	if (buf && size)
+		g_m681_vibr_vol = (unsigned int)(buf[0] - '0');
+	return size;
+}
+/* 0644 (not 0666): the kernel's VERIFY_OCTAL_PERMISSIONS rejects world-writable
+ * sysfs at compile time. World-readable is enough if the HAL reads vibr_vol; if
+ * it needs to WRITE, a ueventd/init.rc chown of this node to system is added
+ * ROM-side (already present in the unified ramdisk, zb2). */
+static DEVICE_ATTR(vibr_vol, 0644, show_vibr_vol, store_vibr_vol);
+
 /******************************************************************************
  * vib_mod_init
  *
@@ -271,6 +296,10 @@ static DEVICE_ATTR(vibr_on, 0220, NULL, store_vibr_on);
 static int vib_mod_init(void)
 {
 	s32 ret;
+
+	/* QEMU virt: vibr_power_set() reads the pmic/upmu regmap, which never
+	 * probes on virt (NULL dereference). Self-registered device; skip. */
+	{ extern int forge_virt; if (forge_virt) return 0; }
 
 	VIB_DEBUG("MediaTek MTK vibrator driver register, version %s\n",
 		  VERSION);
@@ -312,6 +341,12 @@ static int vib_mod_init(void)
 	ret = device_create_file(mtk_vibrator.dev, &dev_attr_vibr_on);
 	if (ret)
 		VIB_DEBUG("device_create_file vibr_on fail!\n");
+
+	/* vibr_vol node: the second sysfs file the vibrator@1.0 HAL requires
+	 * (see DEVICE_ATTR(vibr_vol) above). */
+	ret = device_create_file(mtk_vibrator.dev, &dev_attr_vibr_vol);
+	if (ret)
+		VIB_DEBUG("device_create_file vibr_vol fail!\n");
 
 	VIB_DEBUG("vib_mod_init Done\n");
 
