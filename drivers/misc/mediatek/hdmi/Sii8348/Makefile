@@ -13,7 +13,7 @@
 
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/hdmi/inc  \
              -I$(srctree)/drivers/misc/mediatek/include/ \
-             -I$(srctree)/drivers/misc/mediatek/video/$(MTK_PLATFORM)/dispsys/ \
+             -I$(srctree)/drivers/misc/mediatek/video/mt6757/dispsys/ \
              -I$(srctree)/drivers/misc/mediatek/ext_disp/$(MTK_PLATFORM)/
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/mmp/
 

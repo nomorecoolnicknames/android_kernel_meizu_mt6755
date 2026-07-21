@@ -42,29 +42,29 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/video/include/     \
              -I$(srctree)/drivers/misc/mediatek/video/common/   \
              -I$(srctree)/drivers/misc/mediatek/video/common/rdma10/ \
              -I$(srctree)/drivers/misc/mediatek/video/common/wdma10/ \
-             -I$(srctree)/drivers/misc/mediatek/video/$(MTK_PLATFORM)/dispsys/   \
+             -I$(srctree)/drivers/misc/mediatek/video/mt6757/dispsys/   \
              -I$(srctree)/drivers/misc/mediatek/sync/      \
              -I$(srctree)/drivers/misc/mediatek/mach/$(MTK_PLATFORM)/include/mach/ \
              -I$(srctree)/drivers/misc/mediatek/base/power/$(MTK_PLATFORM) \
              -I$(srctree)/drivers/misc/mediatek/base/power/include \
              -I$(srctree)/drivers/misc/mediatek/base/power/include/spm_v2 \
              -I$(srctree)/drivers/misc/mediatek/smi/ \
-             -I$(srctree)/drivers/misc/mediatek/dramc/$(MTK_PLATFORM)
+             -I$(srctree)/drivers/misc/mediatek/dramc/mt6757
 
 subdir-ccflags-y += -I$(srctree)/drivers/staging/android/ion \
 		    -I$(srctree)/drivers/staging/android/ion/mtk
 
-subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM) \
+subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/m4u/mt6757 \
 		    -I$(srctree)/drivers/misc/mediatek/m4u/2.0
 
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/ \
-		    -I$(srctree)/drivers/misc/mediatek/cmdq/v2/$(MTK_PLATFORM)/
+		    -I$(srctree)/drivers/misc/mediatek/cmdq/v2/mt6757/
 
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/mmp/
 
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/ext_disp \
 	     -I$(srctree)/drivers/misc/mediatek/ext_disp/v2 \
-	     -I$(srctree)/drivers/misc/mediatek/ext_disp/$(MTK_PLATFORM)
+	     -I$(srctree)/drivers/misc/mediatek/ext_disp/mt6757
 
 ccflags-$(CONFIG_MTK_LCM) += -I$(srctree)/drivers/misc/mediatek/lcm/inc
 

@@ -18,17 +18,17 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/video/include/ \
              -I$(srctree)/drivers/misc/mediatek/video/common/rdma10/ \
              -I$(srctree)/drivers/misc/mediatek/video/common/wdma10/ \
              -I$(srctree)/drivers/misc/mediatek/video/common/color20/ \
-             -I$(srctree)/drivers/misc/mediatek/video/$(MTK_PLATFORM)/videox/ \
+             -I$(srctree)/drivers/misc/mediatek/video/mt6757/videox/ \
              -I$(srctree)/drivers/misc/mediatek/base/power/include/ \
              -I$(srctree)/drivers/misc/mediatek/smi/ \
              -I$(srctree)/drivers/misc/mediatek/gpu/ged/include/
 
 
-subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM) \
+subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/m4u/mt6757 \
 		    -I$(srctree)/drivers/misc/mediatek/m4u/2.0
 
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/ \
-		    -I$(srctree)/drivers/misc/mediatek/cmdq/v2/$(MTK_PLATFORM)/
+		    -I$(srctree)/drivers/misc/mediatek/cmdq/v2/mt6757/
 
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/mmp/
 
@@ -70,6 +70,7 @@ obj-y += ddp_pwm_mux.o
 
 obj-y += ddp_mmp.o
 obj-y += ddp_met.o
+obj-y += ddp_od_stub.o		# od10 disabled for mt6755; stub ddp_driver_od + od_test
 
 obj-y += display_recorder.o
 

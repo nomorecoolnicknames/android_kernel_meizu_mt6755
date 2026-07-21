@@ -13,7 +13,7 @@
 
 # common driver code for CMDQ
 
-ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v3/$(MTK_PLATFORM) \
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v3/mt6757 \
              -I$(srctree)/drivers/misc/mediatek/smi/ \
              -I$(srctree)/drivers/misc/mediatek/mmp/ \
              -I$(srctree)/drivers/misc/mediatek/mach/$(MTK_PLATFORM)/include
@@ -65,4 +65,4 @@ obj-y += cmdq_prof.o
 obj-y += cmdq_test.o
 obj-y += cmdq_sec.o
 
-obj-y += $(subst ",,$(CONFIG_MTK_PLATFORM))/
+obj-y += mt6757/

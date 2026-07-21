@@ -2343,17 +2343,25 @@ int m4u_reg_init(m4u_domain_t *m4u_domain, unsigned long ProtectPA, int m4u_id)
 				M4UINFO("init larb %d error\n", i);
 
 			gLarbBaseAddr[i] = (unsigned long)of_iomap(node, 0);
-			/* set mm engine domain to 0x4 (default value) */
-			larb_clock_on(i, 1);
+			/* larb0 only: larb1+ are unpowered MM domains
+			 * (SRAM_PDN_ACK wait in larb_clock_on -> spm_mtcmos_ctrl_*),
+			 * display needs only larb0. Map every larb base, but only
+			 * clock and program larb0. */
+			if (i == 0) {
+				/* set mm engine domain to 0x4 (default value) */
+				larb_clock_on(i, 1);
 #ifndef CONFIG_FPGA_EARLY_PORTING
-			M4UMSG("m4u write all port domain to 4\n");
-			for (j = 0; j < 32; j++)
-				m4uHw_set_field_by_mask(gLarbBaseAddr[i], SMI_LARB_SEC_CONx(j),
-									F_SMI_DOMN(0x7), F_SMI_DOMN(0x4));
+				M4UMSG("m4u write all port domain to 4\n");
+				for (j = 0; j < 32; j++)
+					m4uHw_set_field_by_mask(gLarbBaseAddr[i], SMI_LARB_SEC_CONx(j),
+										F_SMI_DOMN(0x7), F_SMI_DOMN(0x4));
 #else
-			j = 0;
+				j = 0;
 #endif
-			larb_clock_off(i, 1);
+				larb_clock_off(i, 1);
+			} else {
+				pr_emerg("[FORGE_M4U] larb%d clock/program SKIPPED (unpowered domain)\n", i);
+			}
 
 			M4UINFO("init larb %d, 0x%lx\n", i, gLarbBaseAddr[i]);
 		}

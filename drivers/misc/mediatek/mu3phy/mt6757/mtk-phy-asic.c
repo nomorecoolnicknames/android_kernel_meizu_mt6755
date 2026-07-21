@@ -1360,12 +1360,15 @@ static int mt_usb_dts_probe(struct platform_device *pdev)
 		return PTR_ERR(musb_clk);
 	}
 
-	os_printk(K_DEBUG, "SSUSB get musb clock ok, prepare it\n");
-	retval = clk_prepare(musb_clk);
+	os_printk(K_DEBUG, "SSUSB get musb clock ok, prepare+enable it\n");
+	/* clk_prepare_enable, not clk_prepare: the runtime clk_enable(musb_clk)
+	 * path is not reliably hit before musb_probe touches the SSUSB
+	 * registers, and an unclocked IP stalls the AXI bus. */
+	retval = clk_prepare_enable(musb_clk);
 	if (retval == 0)
-		os_printk(K_DEBUG, "musb clock prepare done\n");
+		os_printk(K_DEBUG, "musb clock prepare+enable done\n");
 	else
-		os_printk(K_ERR, "musb clock prepare fail\n");
+		os_printk(K_ERR, "musb clock prepare+enable fail\n");
 #endif
 	verion = mt_get_chip_sw_ver();
 	if (verion >= CHIP_SW_VER_02)

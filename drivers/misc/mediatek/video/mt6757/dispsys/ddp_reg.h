@@ -1147,6 +1147,8 @@ extern unsigned long dsi_reg_va[2];
 #define DISPSYS_COLOR1_BASE		        DDP_REG_BASE_DISP_COLOR1
 #define DISPSYS_CCORR0_BASE		        DDP_REG_BASE_DISP_CCORR0
 #define DISPSYS_CCORR1_BASE		        DDP_REG_BASE_DISP_CCORR1
+/* mt6755 compat: single-instance aliases for common/corr10 */
+#define DISPSYS_CCORR_BASE		        DISPSYS_CCORR0_BASE
 #define DISPSYS_AAL0_BASE		        DDP_REG_BASE_DISP_AAL0
 #define DISPSYS_AAL1_BASE		        DDP_REG_BASE_DISP_AAL1
 #define DISPSYS_GAMMA0_BASE		        DDP_REG_BASE_DISP_GAMMA0
@@ -1154,6 +1156,8 @@ extern unsigned long dsi_reg_va[2];
 #define DISPSYS_OD_BASE                 DDP_REG_BASE_DISP_OD
 #define DISPSYS_DITHER0_BASE		    DDP_REG_BASE_DISP_DITHER0
 #define DISPSYS_DITHER1_BASE		    DDP_REG_BASE_DISP_DITHER1
+/* mt6755 compat: single-instance alias for common/corr10 */
+#define DISPSYS_DITHER_BASE		        DISPSYS_DITHER0_BASE
 #define DISPSYS_UFOE_BASE		        DDP_REG_BASE_DISP_UFOE
 #define DISPSYS_DSC_BASE		        DDP_REG_BASE_DISP_DSC
 #define DISPSYS_SPLIT0_BASE		        DDP_REG_BASE_DISP_SPLIT0

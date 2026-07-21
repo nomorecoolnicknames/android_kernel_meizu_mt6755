@@ -3584,6 +3584,20 @@ int primary_display_init(char *lcm_name, unsigned int lcm_fps, int is_lcm_inited
 		DISPINFO("primary display mode is WRONG\n");
 	}
 
+	/*
+	 * _build_path_*() returns -1 and leaves pgc->dpmgr_handle == NULL if
+	 * dpmgr_create_path() failed, but the calls above ignore that return,
+	 * and dpmgr_path_get_last_config(pgc->dpmgr_handle) below would
+	 * dereference NULL. Bail out here, so the kernel keeps running and the
+	 * reason the path failed is visible in dmesg.
+	 */
+	if (!pgc->dpmgr_handle) {
+		DISPERR("FORGE_M681: dpmgr_handle NULL after path build (mode=%d) -> abort display init, continue to adb\n",
+			primary_display_mode);
+		ret = DISP_STATUS_ERROR;
+		goto done;
+	}
+
 	if (use_cmdq && is_lcm_inited) {
 		/* if lcm is not inited (no LK),*/
 		/* the first config should not wait frame done*/

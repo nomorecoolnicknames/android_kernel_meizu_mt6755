@@ -123,6 +123,16 @@ enum DISP_REG_ENUM {
 	DISP_REG_NUM
 };
 
+/* mt6755 compat: single-instance aliases used by common/color20 #else branches
+ * and by common/aal20 and common/corr10 which use the non-suffixed names. */
+#define DISP_REG_COLOR  DISP_REG_COLOR0
+#define DISP_REG_AAL    DISP_REG_AAL0
+#define DISP_REG_CCORR  DISP_REG_CCORR0
+#define DISP_MODULE_AAL    DISP_MODULE_AAL0
+#define DISP_MODULE_GAMMA  DISP_MODULE_GAMMA0
+#define DISP_MODULE_CCORR  DISP_MODULE_CCORR0
+#define DISP_MODULE_DITHER DISP_MODULE_DITHER0
+
 enum OVL_LAYER_SOURCE {
 	OVL_LAYER_SOURCE_MEM = 0,
 	OVL_LAYER_SOURCE_RESERVED = 1,

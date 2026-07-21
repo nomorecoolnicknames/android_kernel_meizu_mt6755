@@ -1153,10 +1153,22 @@ int dpmgr_path_config(disp_path_handle dp_handle, struct disp_ddp_path_config *c
 	return 0;
 }
 
+/*
+ * A zeroed dummy returned when the path handle is NULL (display path failed
+ * to build), so the boot-time consumers of
+ * dpmgr_path_get_last_config[_notclear]() do not dereference NULL and the
+ * failure shows in dmesg.
+ */
+static struct disp_ddp_path_config forge_dummy_last_config;
+
 struct disp_ddp_path_config *dpmgr_path_get_last_config_notclear(disp_path_handle dp_handle)
 {
 	struct ddp_path_handle *handle = (struct ddp_path_handle *)dp_handle;
 
+	if (!dp_handle) {
+		pr_warn_once("[FORGE_M681] dpmgr_path_get_last_config_notclear: NULL handle -> dummy\n");
+		return &forge_dummy_last_config;
+	}
 	ASSERT(dp_handle != NULL);
 	return &handle->last_config;
 }
@@ -1165,6 +1177,10 @@ struct disp_ddp_path_config *dpmgr_path_get_last_config(disp_path_handle dp_hand
 {
 	struct ddp_path_handle *handle = (struct ddp_path_handle *)dp_handle;
 
+	if (!dp_handle) {
+		pr_warn_once("[FORGE_M681] dpmgr_path_get_last_config: NULL handle -> dummy\n");
+		return &forge_dummy_last_config;
+	}
 	ASSERT(dp_handle != NULL);
 	handle->last_config.ovl_dirty = 0;
 	handle->last_config.rdma_dirty = 0;
