@@ -56,6 +56,11 @@
 static LIST_HEAD(misc_list);
 static DEFINE_MUTEX(misc_mtx);
 
+/* Stock Meizu kernels create the shared "meizu" sysfs class in misc.c;
+ * ported Meizu drivers (inv_mpu calibration nodes etc.) use it. */
+#define MEIZU_CLASS_NAME "meizu"
+struct class *meizu_class;
+
 /*
  * Assigned numbers, used for dynamic minors
  */
@@ -290,6 +295,14 @@ static int __init misc_init(void)
 	if (register_chrdev(MISC_MAJOR,"misc",&misc_fops))
 		goto fail_printk;
 	misc_class->devnode = misc_devnode;
+
+	meizu_class = class_create(THIS_MODULE, MEIZU_CLASS_NAME);
+	if (IS_ERR(meizu_class)) {
+		/* unlike stock, non-fatal: consumers get a classless device */
+		pr_err("misc: cannot create %s class (%ld)\n",
+			MEIZU_CLASS_NAME, PTR_ERR(meizu_class));
+		meizu_class = NULL;
+	}
 	return 0;
 
 fail_printk:

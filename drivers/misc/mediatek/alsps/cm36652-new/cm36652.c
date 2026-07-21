@@ -197,6 +197,10 @@ int CM36652_i2c_master_operate(struct i2c_client *client, char *buf, int count, 
 #ifndef CONFIG_MTK_I2C_EXTENSION
         struct i2c_msg msg[2];
 #endif
+	/* client is NULL when the chip never probed, and every branch below
+	 * dereferences client->addr. */
+	if (!client)
+		return -EINVAL;
 	mutex_lock(&cm36652_mutex);
 	switch (i2c_flag) {
 	case I2C_FLAG_WRITE:

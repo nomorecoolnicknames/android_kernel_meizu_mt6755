@@ -22,3 +22,4 @@ source "drivers/misc/mediatek/alsps/alspshub/Kconfig"
 # [yanlin start] Porting sensors
 source "drivers/misc/mediatek/alsps/ltr579/Kconfig"
 # [yanlin end]
+source "drivers/misc/mediatek/alsps/pa12200001/Kconfig"

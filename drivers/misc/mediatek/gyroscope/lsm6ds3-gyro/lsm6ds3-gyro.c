@@ -12,6 +12,7 @@
  *
  */
 
+#include <linux/m3note_board.h>
 #include <cust_gyro.h>
 #include "lsm6ds3-gyro.h"
 
@@ -2302,6 +2303,10 @@ static int __init lsm6ds3_gyro_init(void)
 {
 	//GYRO_FUN();
 	const char* name = "mediatek,lsm6ds3_gyro";
+
+	/* LSM6DS3 is the L681 accel/gyro (M681 has an ICM20608). */
+	if (!m3note_board_is(M3NOTE_BOARD_L681))
+		return -ENODEV;
 	hw = get_gyro_dts_func(name, hw);
 	if (!hw)
 		GYRO_ERR("get dts info fail\n");

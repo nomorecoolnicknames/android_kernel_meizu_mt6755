@@ -1,0 +1,8 @@
+config MTK_PA12200001
+	bool "TXC PA12200001 ALS/PS for MediaTek package"
+	default n
+	help
+	  TXC PA12200001 ambient light + proximity sensor (m681
+	  dual-source variant, i2c1 @ 0x1E). Probes the shared
+	  "mediatek,alsps" client after ltr579 NAKs; keep MTK_LTR579=y
+	  for the other variant.

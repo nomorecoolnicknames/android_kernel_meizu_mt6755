@@ -21,3 +21,4 @@ source "drivers/misc/mediatek/magnetometer/qmcX983/Kconfig"
 # [yanlin start] Porting sensors
 source "drivers/misc/mediatek/magnetometer/akm09916-new/Kconfig"
 # [yanlin end]
+source "drivers/misc/mediatek/magnetometer/st480/Kconfig"

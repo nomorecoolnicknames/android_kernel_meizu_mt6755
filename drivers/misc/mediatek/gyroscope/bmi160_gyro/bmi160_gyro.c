@@ -150,33 +150,35 @@ static int bmg_i2c_read_block(struct i2c_client *client, u8 addr,
 				u8 *data, u8 len)
 {
 	u8 beg = addr;
-	struct i2c_msg msgs[2] = {
-		{
-			.addr = client->addr,	.flags = 0,
-			.len = 1,	.buf = &beg,
-/* [liliwen edit] use client timing */
-#ifdef CONFIG_MTK_I2C_EXTENSION
-			.timing = client->timing,
-			.ext_flag = client->ext_flag,
-#endif
-		},
-		{
-			.addr = client->addr,	.flags = I2C_M_RD,
-			.len = len,	.buf = data,
-#ifdef CONFIG_MTK_I2C_EXTENSION
-			.timing = client->timing,
-			.ext_flag = client->ext_flag,
-#endif
-		}
-	};
+	struct i2c_msg msgs[2];
 	int err;
 
+	/* Check client before the msgs[] initialiser dereferences
+	 * client->addr (the chip may be absent), then fill a zeroed i2c_msg:
+	 * the MTK ext_flag/timing fields must not be stack garbage. */
 	if (!client)
 		return -EINVAL;
 	else if (len > C_I2C_FIFO_SIZE) {
 		GYRO_ERR(" length %d exceeds %d\n", len, C_I2C_FIFO_SIZE);
 		return -EINVAL;
 	}
+
+	memset(msgs, 0, sizeof(msgs));
+	msgs[0].addr = client->addr;
+	msgs[0].flags = 0;
+	msgs[0].len = 1;
+	msgs[0].buf = &beg;
+	msgs[1].addr = client->addr;
+	msgs[1].flags = I2C_M_RD;
+	msgs[1].len = len;
+	msgs[1].buf = data;
+/* [liliwen edit] use client timing */
+#ifdef CONFIG_MTK_I2C_EXTENSION
+	msgs[0].timing = client->timing;
+	msgs[0].ext_flag = client->ext_flag;
+	msgs[1].timing = client->timing;
+	msgs[1].ext_flag = client->ext_flag;
+#endif
 
 	err = i2c_transfer(client->adapter, msgs, sizeof(msgs)/sizeof(msgs[0]));
 	if (err != 2) {

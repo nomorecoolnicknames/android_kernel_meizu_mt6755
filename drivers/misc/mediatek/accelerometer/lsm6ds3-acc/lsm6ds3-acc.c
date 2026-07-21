@@ -14,6 +14,7 @@
  */
 
 #include <linux/interrupt.h>
+#include <linux/m3note_board.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
 #include <linux/irq.h>
@@ -3087,6 +3088,9 @@ static int __init lsm6ds3_init(void)
 	struct acc_hw *hw = get_cust_acc_hw();
 	const char *name = "mediatek,lsm6ds3_acc";
 
+	/* LSM6DS3 is the L681 accel/gyro (M681 has an ICM20608). */
+	if (!m3note_board_is(M3NOTE_BOARD_L681))
+		return -ENODEV;
 	hw = get_accel_dts_func(name, hw);
 	if (!hw)
 		GSE_ERR("get dts info fail\n");

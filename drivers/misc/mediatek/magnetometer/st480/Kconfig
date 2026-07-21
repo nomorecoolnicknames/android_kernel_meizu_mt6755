@@ -1,0 +1,8 @@
+config MTK_ST480
+	bool "Senodia ST480 magnetometer for MediaTek package"
+	default n
+	help
+	  Senodia ST480 magnetometer (m681 dual-source variant, i2c1 @
+	  0x0D). Probes the shared "mediatek,msensor" client after
+	  akm09911 fails its chip check; keep MTK_AKM09911_NEW=y for the
+	  other variant.

@@ -78,25 +78,25 @@ static int stc_i2c_read_block(struct i2c_client *client, u8 addr,
 {
 	u8 beg = addr;
 	int err;
-	struct i2c_msg msgs[2] = {
-		{
-			.addr = client->addr,
-			.flags = 0,
-			.len = 1,
-			.buf = &beg
-		},
-		{
-			.addr = client->addr,
-			.flags = I2C_M_RD,
-			.len = len,	.buf = data,
-		}
-	};
+	struct i2c_msg msgs[2];
+
+	/* Check the pointer and length before the msgs[] initialiser
+	 * dereferences client->addr: the step counter's i2c client is never
+	 * set when its chip did not probe. */
 	if (!client)
 		return -EINVAL;
-	else if (len > C_I2C_FIFO_SIZE) {
+	if (len > C_I2C_FIFO_SIZE) {
 		STEP_C_ERR(" length %d exceeds %d\n", len, C_I2C_FIFO_SIZE);
 		return -EINVAL;
 	}
+	msgs[0].addr = client->addr;
+	msgs[0].flags = 0;
+	msgs[0].len = 1;
+	msgs[0].buf = &beg;
+	msgs[1].addr = client->addr;
+	msgs[1].flags = I2C_M_RD;
+	msgs[1].len = len;
+	msgs[1].buf = data;
 	err = i2c_transfer(client->adapter, msgs, sizeof(msgs)/sizeof(msgs[0]));
 	if (err != 2) {
 		STEP_C_ERR("i2c_transfer error: (%d %p %d) %d\n",

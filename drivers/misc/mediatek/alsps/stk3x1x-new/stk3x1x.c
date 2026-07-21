@@ -480,23 +480,12 @@ int stk3x1x_hwmsen_read_block(struct i2c_client *client, u8 addr, u8 *data, u8 l
 {
 	int err;
 	u8 beg = addr;
-	struct i2c_msg msgs[2] =
-	{
-		{
-			.addr = client->addr,
-			.flags = 0,
-			.len = 1,
-			.buf= &beg
-		},
-		{
-			.addr = client->addr,
-			.flags = I2C_M_RD,
-			.len = len,
-			.buf = data,
-		}
-	};
+	struct i2c_msg msgs[2];
 
 	mutex_lock(&STK3X1X_i2c_mutex);
+	/* Check client before the msgs[] initialiser dereferences
+	 * client->addr, then fill a zeroed i2c_msg: the MTK ext_flag/timing
+	 * fields must not be stack garbage. */
 	if (!client)
 	{
 		mutex_unlock(&STK3X1X_i2c_mutex);
@@ -508,6 +497,16 @@ int stk3x1x_hwmsen_read_block(struct i2c_client *client, u8 addr, u8 *data, u8 l
 		APS_LOG(" length %d exceeds %d\n", len, C_I2C_FIFO_SIZE);
 		return -EINVAL;
 	}
+
+	memset(msgs, 0, sizeof(msgs));
+	msgs[0].addr = client->addr;
+	msgs[0].flags = 0;
+	msgs[0].len = 1;
+	msgs[0].buf = &beg;
+	msgs[1].addr = client->addr;
+	msgs[1].flags = I2C_M_RD;
+	msgs[1].len = len;
+	msgs[1].buf = data;
 
 	err = i2c_transfer(client->adapter, msgs, sizeof(msgs)/sizeof(msgs[0]));
 	mutex_unlock(&STK3X1X_i2c_mutex);

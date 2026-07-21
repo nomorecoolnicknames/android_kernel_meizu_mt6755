@@ -12,6 +12,7 @@
  */
 
 #include <linux/of.h>
+#include <linux/m3note_board.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/gpio.h>
@@ -2534,6 +2535,10 @@ static int  ltr579_local_init(void)
 static int __init ltr579_init(void)
 {
     const char *name = "mediatek,ltr579";
+
+	/* LTR579 is an M681 light/proximity part. */
+	if (!m3note_board_is(M3NOTE_BOARD_M681))
+		return -ENODEV;
 	APS_FUN();
     hw = get_alsps_dts_func(name, hw);
 	if (!hw)
