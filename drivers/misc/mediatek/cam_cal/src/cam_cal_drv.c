@@ -10,6 +10,12 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 * See http://www.gnu.org/licenses/gpl-2.0.html for more details.
 */
+/*
+ * Driver for CAM_CAL
+ *
+ *
+ */
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/i2c.h>
@@ -30,6 +36,9 @@
 #include <linux/fs.h>
 #include <linux/compat.h>
 #endif
+#ifdef CONFIG_HUAWEI_DSM
+#include "mtk_camera_dsm.h"
+#endif
 
 /*#define CAM_CALGETDLT_DEBUG*/
 #define CAM_CAL_DEBUG
@@ -46,9 +55,9 @@
 #define CAM_CAL_DRV_NAME "CAM_CAL_DRV"
 #define CAM_CAL_DEV_MAJOR_NUMBER 226
 
+#define CAM_CAL_MAX_BUF_SIZE 4096/*Memory organization: 4096 bytes*/
 #define CAM_CAL_I2C_MAX_BUSNUM 2
 #define CAM_CAL_I2C_MAX_SENSOR 4
-#define CAM_CAL_MAX_BUF_SIZE 65536/*For Safety, Can Be Adjested*/
 
 #define CAM_CAL_I2C_DEV1_NAME CAM_CAL_DRV_NAME
 #define CAM_CAL_I2C_DEV2_NAME "CAM_CAL_DEV2"
@@ -66,7 +75,6 @@ static struct class *g_drvClass;
 static unsigned int g_drvOpened;
 static DEFINE_SPINLOCK(g_spinLock); /*for SMP*/
 
-
 typedef enum {
 	I2C_DEV_1 = 0,
 	I2C_DEV_2,
@@ -74,6 +82,7 @@ typedef enum {
 	I2C_DEV_4,
 	I2C_DEV_MAX,
 } CAM_CAL_DEV_ID;
+extern void mtk_eeprom_hw_otp_check_set(char *name, int otp_flag);
 
 typedef CAM_CAL_DEV_ID cam_cal_dev_id;
 
@@ -83,14 +92,12 @@ static cam_cal_dev_id g_curDevIdx = I2C_DEV_1;
 typedef enum {
 	BUS_ID_MAIN = 0,
 	BUS_ID_SUB,
-	BUS_ID_MAIN2,
-	BUS_ID_SUB2,
 	BUS_ID_MAX,
 } CAM_CAL_BUS_ID;
 
 typedef CAM_CAL_BUS_ID cam_cal_bus_id;
 
-static unsigned int g_busNum[BUS_ID_MAX] = {0, 0, 0, 0};
+static unsigned int g_busNum[BUS_ID_MAX] = {0, 0};
 static cam_cal_bus_id g_curBusIdx = BUS_ID_MAIN;
 
 /*Note: Must Mapping to IHalSensor.h*/
@@ -101,7 +108,6 @@ enum {
 	SENSOR_DEV_PIP = 0x03,
 	SENSOR_DEV_MAIN_2 = 0x04,
 	SENSOR_DEV_MAIN_3D = 0x05,
-	SENSOR_DEV_SUB_2 = 0x08,
 	SENSOR_DEV_MAX = 0x50
 };
 
@@ -112,13 +118,69 @@ static unsigned int g_lastDevID = SENSOR_DEV_NONE;
 ********************************************************************************/
 typedef struct {
 	unsigned int sensorID;
-	unsigned int deviceID;
 	struct i2c_client *client;
 	cam_cal_cmd_func readCMDFunc;
 	cam_cal_cmd_func writeCMDFunc;
 } stCAM_CAL_CMD_INFO_STRUCT, *stPCAM_CAL_CMD_INFO_STRUCT;
 
 static stCAM_CAL_CMD_INFO_STRUCT g_camCalDrvInfo[CAM_CAL_I2C_MAX_SENSOR];
+
+static void m6_cam_cal_diag_cmd_probe(unsigned int sensorID,
+	int list_idx, int func_idx, cam_cal_cmd_type list_cmd,
+	cam_cal_cmd_type func_cmd, int check_ok, struct i2c_client *client)
+{
+	static unsigned int count;
+
+	if (count++ >= 96)
+		return;
+
+	pr_info("DIAGNOSTIC M6_CAM_CAL cmd_probe sensor=0x%x list=%d func=%d list_cmd=%d func_cmd=%d check=%d client=%p addr=0x%x bus=%u dev=%u\n",
+		sensorID, list_idx, func_idx, list_cmd, func_cmd, check_ok,
+		client, client ? client->addr : 0, g_busNum[g_curBusIdx],
+		g_curDevIdx);
+}
+
+static void m6_cam_cal_diag_read(const char *stage,
+	stCAM_CAL_INFO_STRUCT *info, stCAM_CAL_CMD_INFO_STRUCT *cmdInfo,
+	int ret, const u8 *buf)
+{
+	static unsigned int count;
+	unsigned int len = info ? info->u4Length : 0;
+
+	if (count++ >= 96)
+		return;
+
+	pr_info("DIAGNOSTIC M6_CAM_CAL %s sensor=0x%x device=0x%x off=0x%x len=%u ret=%d bus=%u dev=%u cmd=%p client=%p addr=0x%x data=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+		stage, info ? info->sensorID : 0, info ? info->deviceID : 0,
+		info ? info->u4Offset : 0, info ? info->u4Length : 0, ret,
+		g_busNum[g_curBusIdx], g_curDevIdx,
+		cmdInfo ? cmdInfo->readCMDFunc : NULL,
+		cmdInfo ? cmdInfo->client : NULL,
+		(cmdInfo && cmdInfo->client) ? cmdInfo->client->addr : 0,
+		(buf && len > 0) ? buf[0] : 0,
+		(buf && len > 1) ? buf[1] : 0,
+		(buf && len > 2) ? buf[2] : 0,
+		(buf && len > 3) ? buf[3] : 0,
+		(buf && len > 4) ? buf[4] : 0,
+		(buf && len > 5) ? buf[5] : 0,
+		(buf && len > 6) ? buf[6] : 0,
+		(buf && len > 7) ? buf[7] : 0);
+}
+
+static int m6_cam_cal_buf_has_nonzero(const u8 *buf, unsigned int len)
+{
+	unsigned int i;
+
+	if (!buf)
+		return 0;
+
+	for (i = 0; i < len; i++) {
+		if (buf[i])
+			return 1;
+	}
+
+	return 0;
+}
 
 /*******************************************************************************
 *
@@ -136,19 +198,18 @@ static int cam_cal_set_i2c_bus(unsigned int deviceID)
 		g_curDevIdx = I2C_DEV_2;
 		break;
 	case SENSOR_DEV_MAIN_2:
-		g_curBusIdx = BUS_ID_MAIN2;
+		g_curBusIdx = BUS_ID_MAIN;
 		g_curDevIdx = I2C_DEV_3;
 		break;
-	case SENSOR_DEV_SUB_2:
-		g_curBusIdx = BUS_ID_SUB2;
-		g_curDevIdx = I2C_DEV_4;
 	default:
-		return 1;
+		g_curBusIdx = BUS_ID_MAIN;
+		g_curDevIdx = I2C_DEV_1;
+		break;
 	}
 	CAM_CALDB("cam_cal_set_i2c_bus end! deviceID=%d g_curBusIdx=%d g_curDevIdx=%d\n",
 		deviceID, g_curBusIdx, g_curDevIdx);
 
-	return 0;
+	return g_curBusIdx;
 
 }
 
@@ -160,7 +221,6 @@ static int cam_cal_get_i2c_client(struct i2c_board_info *i2c_info,
 		I2C_CLIENT_END
 	};
 	struct i2c_adapter *adapt = NULL;
-	int ret = 1;
 
 	if (*client == NULL) {
 		CAM_CALDB("i2c_info->addr ==%x, register i2c g_busNum[%d]=%d\n", i2c_info->addr,
@@ -169,32 +229,53 @@ static int cam_cal_get_i2c_client(struct i2c_board_info *i2c_info,
 		adapt = i2c_get_adapter(g_busNum[g_curBusIdx]);
 		if (adapt == NULL) {
 			CAM_CALDB("failed to get adapter i2c busID=%d\n", g_busNum[g_curBusIdx]);
-			ret = 0;
+			return 0;
 		} else {
 			CAM_CALDB("g_adapt!=NULL, register i2c %d start !\n", g_curBusIdx);
-
-			mutex_lock(&EEPROM_Mutex);
 			*client = i2c_new_probed_device(adapt, i2c_info, addr_list, NULL);
-			mutex_unlock(&EEPROM_Mutex);
 
 			i2c_put_adapter(adapt);
 
 			if (!(*client)) {
 				CAM_CALDB("failed to get client i2c busID=%d\n", g_busNum[g_curBusIdx]);
-				ret = 0;
+				return 0;
 			}
-
 		}
 	}
-	return ret;
+	return 1;
 
 }
+
+#ifdef CONFIG_HUAWEI_DSM
+void camera_report_dsm_err_cam_cal(unsigned int sensorID)
+{
+	ssize_t len = 0;
+	int rc = 0;
+
+	memset(camera_dsm_log_buff, 0, MTK_CAMERA_DSM_BUFFER_SIZE);
+
+	len += snprintf(camera_dsm_log_buff+len, MTK_CAMERA_DSM_BUFFER_SIZE-len, "[SensorID:%x]OTP error.No effective OTP info.\n",sensorID);
+	if (len >= MTK_CAMERA_DSM_BUFFER_SIZE -1)
+	{
+		pr_err("write camera_dsm_log_buff overflow.\n");
+		return ;
+	}
+
+	rc = camera_report_dsm_err(DSM_CAMERA_OTP_ERR, -1, camera_dsm_log_buff);
+	if (rc < 0)
+	{
+	     pr_err("%s. report dsm err fail.\n", __func__);
+	     return ;
+	}
+	return ;
+}
+#endif
 
 static int cam_cal_get_cmd_info(unsigned int sensorID, stCAM_CAL_CMD_INFO_STRUCT *cmdInfo)
 {
 	stCAM_CAL_LIST_STRUCT *pCamCalList = NULL;
 	stCAM_CAL_FUNC_STRUCT *pCamCalFunc = NULL;
-	int i = 0, j = 0;
+	int i = 0, j = 0, check_ok = 0;
 
 	cam_cal_get_sensor_list(&pCamCalList);
 	cam_cal_get_func_list(&pCamCalFunc);
@@ -208,67 +289,51 @@ static int cam_cal_get_cmd_info(unsigned int sensorID, stCAM_CAL_CMD_INFO_STRUCT
 					  (*g_i2c_info[g_curDevIdx]).addr);
 				if (cam_cal_get_i2c_client(g_i2c_info[g_curDevIdx], &(cmdInfo->client))) {
 					for (j = 0; pCamCalFunc[j].cmdType != CMD_NONE; j++) {
+						CAM_CALDB("pCamCalFunc[%d].cmdType = %d,\
+						pCamCalList[%d].cmdType = %d\n",\
+						j, pCamCalFunc[j].cmdType, i,\
+						pCamCalList[i].cmdType);
 				if (pCamCalFunc[j].cmdType == pCamCalList[i].cmdType
 						    || pCamCalList[i].cmdType == CMD_AUTO) {
 					if (pCamCalList[i].checkFunc != NULL) {
-					if (pCamCalList[i].checkFunc(cmdInfo->client,
-						pCamCalFunc[j].readCamCalData)) {
+					check_ok = pCamCalList[i].checkFunc(cmdInfo->client,
+						pCamCalFunc[j].readCamCalData);
+					m6_cam_cal_diag_cmd_probe(sensorID, i, j,
+						pCamCalList[i].cmdType, pCamCalFunc[j].cmdType,
+						check_ok, cmdInfo->client);
+					if (check_ok) {
 					CAM_CALDB("pCamCalList[%d].checkFunc ok!\n", i);
 					cmdInfo->readCMDFunc = pCamCalFunc[j].readCamCalData;
-					/*151101=Write Command Unverified*/
+					/*LukeHu--151101=Write Command Unverified*/
 					/*cmdInfo->writeCMDFunc = pCamCalFunc[j].writeCamCalData;*/
 					return 1;
 					} else if (pCamCalList[i].cmdType == CMD_AUTO) {
+#ifdef CONFIG_HUAWEI_DSM
+						camera_report_dsm_err_cam_cal(pCamCalList[i].sensorID);
+#endif
 						CAM_CALDB("reset i2c\n");
 						i2c_unregister_device(cmdInfo->client);
 						cmdInfo->client = NULL;
 						cam_cal_get_i2c_client(g_i2c_info[g_curDevIdx],
 						&(cmdInfo->client));
-					}
-					}
-				}
+								}
+							}
+						}
 					}
 					if (cmdInfo->client != NULL) {
 						i2c_unregister_device(cmdInfo->client);
 						CAM_CALDB("unregister i2c\n");
 						cmdInfo->client = NULL;
 					}
-				} else {
-					int infoDeciceID = 0;
-
-					switch (pCamCalList[i].cmdType) {
-
-					case CMD_MAIN:
-						infoDeciceID = SENSOR_DEV_MAIN;
-						break;
-					case CMD_MAIN2:
-						infoDeciceID = SENSOR_DEV_MAIN_2;
-						break;
-					case CMD_SUB:
-						infoDeciceID = SENSOR_DEV_SUB;
-						break;
-					case CMD_SUB2:
-						infoDeciceID = SENSOR_DEV_SUB_2;
-						break;
-					default:
-						CAM_CALDB("cmdType=%d error.\n", pCamCalList[i].cmdType);
-						return 0;
-					}
-					for (j = 0; j < CAM_CAL_I2C_MAX_SENSOR; j++) {
-					if (g_camCalDrvInfo[j].deviceID == infoDeciceID) {
-						CAM_CALDB("g_camCalDrvInfo[%d].deviceID = %x!\n", j,
-						g_camCalDrvInfo[j].deviceID);
-						break;
-					}
-					}
-					CAM_CALDB("Check infoDeciceID=%d cmdInfo\n", infoDeciceID);
-					if (j < CAM_CAL_I2C_MAX_SENSOR &&
-						pCamCalList[j].checkFunc(g_camCalDrvInfo[j].client,
-						g_camCalDrvInfo[j].readCMDFunc)) {
-						cmdInfo->client = g_camCalDrvInfo[j].client;
-						cmdInfo->readCMDFunc = g_camCalDrvInfo[j].readCMDFunc;
+				} else if (pCamCalList[i].cmdType == CMD_DEV1) {
+					CAM_CALDB("Use Stereo MAIN1 cmdInfo\n");
+					if (cam_cal_check_double_eeprom(g_camCalDrvInfo[0].client,
+						g_camCalDrvInfo[0].readCMDFunc)) {
+						cmdInfo->client = g_camCalDrvInfo[0].client;
+						cmdInfo->readCMDFunc = g_camCalDrvInfo[0].readCMDFunc;
 						return 1;
-					}
+					} else
+						CAM_CALDB("Check MAIN1 cmdInfo failed\n");
 				}
 			}
 		}
@@ -277,14 +342,13 @@ static int cam_cal_get_cmd_info(unsigned int sensorID, stCAM_CAL_CMD_INFO_STRUCT
 
 }
 
-static stCAM_CAL_CMD_INFO_STRUCT *cam_cal_get_cmd_info_ex(unsigned int sensorID,
-	unsigned int deviceID)
+static stCAM_CAL_CMD_INFO_STRUCT *cam_cal_get_cmd_info_ex(unsigned int sensorID)
 {
 	int i = 0;
 
 	for (i = 0; i < CAM_CAL_I2C_MAX_SENSOR; i++) {
-		if (g_camCalDrvInfo[i].deviceID == deviceID) {
-			CAM_CALDB("g_camCalDrvInfo[%d].deviceID == deviceID == %x!\n", i, deviceID);
+		if (g_camCalDrvInfo[i].sensorID == sensorID) {
+			CAM_CALDB("g_camCalDrvInfo[%d].sensorID == sensorID == %x!\n", i, sensorID);
 			break;
 		}
 	}
@@ -296,10 +360,11 @@ static stCAM_CAL_CMD_INFO_STRUCT *cam_cal_get_cmd_info_ex(unsigned int sensorID,
 				cam_cal_get_cmd_info(sensorID, &g_camCalDrvInfo[i]);
 
 				if (g_camCalDrvInfo[i].readCMDFunc != NULL) {
+					CAM_CALDB("SensorID=%x, BusID=%d\n", sensorID, g_busNum[g_curBusIdx]);
 					g_camCalDrvInfo[i].sensorID = sensorID;
-					g_camCalDrvInfo[i].deviceID = deviceID;
-					CAM_CALDB("deviceID=%d, SensorID=%x, BusID=%d\n",
-						deviceID, sensorID, g_busNum[g_curBusIdx]);
+				} else {
+					m6_cam_cal_diag_read("cmd_info_no_reader", NULL,
+						&g_camCalDrvInfo[i], 0, NULL);
 				}
 				break;
 			}
@@ -390,6 +455,9 @@ static long cam_cal_drv_compat_ioctl(struct file *filp, unsigned int cmd, unsign
 	stCAM_CAL_INFO_STRUCT __user *data;
 	int err;
 
+	CAM_CALDB("cam_cal_drv_compat_ioctl Start!,%p %p %x ioc size %d\n", filp->f_op ,
+		  filp->f_op->unlocked_ioctl, cmd, _IOC_SIZE(cmd));
+
 	if (!filp->f_op || !filp->f_op->unlocked_ioctl)
 		return -ENOTTY;
 
@@ -428,7 +496,7 @@ static long cam_cal_drv_compat_ioctl(struct file *filp, unsigned int cmd, unsign
 		ret = filp->f_op->unlocked_ioctl(filp, CAM_CALIOC_S_WRITE,
 						 (unsigned long)data);
 		/*err = compat_put_cal_info_struct(data32, data);*/
-		/*151122=write won't need*/
+		/*LukeHu--151122=write won't need*/
 
 		if (err != 0)
 			CAM_CALERR("compat_put_acdk_sensor_getinfo_struct failed\n");
@@ -470,45 +538,45 @@ static long cam_cal_drv_ioctl(
 	unsigned long TimeIntervalUS;
 #endif
 
-	if (_IOC_DIR(a_u4Command) != _IOC_NONE) {
+	if (_IOC_NONE != _IOC_DIR(a_u4Command)) {
 		pBuff = kmalloc(sizeof(stCAM_CAL_INFO_STRUCT), GFP_KERNEL);
-		if (pBuff == NULL) {
-			CAM_CALDB(" ioctl allocate pBuff mem failed\n");
+		if (NULL == pBuff) {
+			CAM_CALDB(" ioctl allocate mem failed\n");
 			return -ENOMEM;
 		}
 
-		if (copy_from_user((u8 *) pBuff, (u8 *) a_u4Param, sizeof(stCAM_CAL_INFO_STRUCT))) {
-			/*get input structure address*/
-			kfree(pBuff);
-			CAM_CALDB("ioctl copy from user failed\n");
-			return -EFAULT;
+		if (_IOC_WRITE & _IOC_DIR(a_u4Command)) {
+			if (copy_from_user((u8 *) pBuff , (u8 *) a_u4Param, sizeof(stCAM_CAL_INFO_STRUCT))) {
+				/*get input structure address*/
+				kfree(pBuff);
+				CAM_CALDB("ioctl copy from user failed\n");
+				return -EFAULT;
+			}
 		}
-
-		ptempbuf = (stCAM_CAL_INFO_STRUCT *)pBuff;
-
-		if ((ptempbuf->u4Length <= 0) || (ptempbuf->u4Length > CAM_CAL_MAX_BUF_SIZE)) {
-			kfree(pBuff);
-			CAM_CALDB("Buffer Length Error!\n");
-			return -EFAULT;
-		}
-
-		pu1Params = kmalloc(ptempbuf->u4Length, GFP_KERNEL);
-
-		if (pu1Params == NULL) {
-			kfree(pBuff);
-			CAM_CALDB("ioctl allocate pu1Params mem failed\n");
-			return -ENOMEM;
-		}
-
-		if (copy_from_user((u8 *)pu1Params, (u8 *)ptempbuf->pu1Params, ptempbuf->u4Length)) {
-			kfree(pBuff);
-			kfree(pu1Params);
-			CAM_CALDB("ioctl copy from user failed\n");
-			return -EFAULT;
-		}
-
+	}
+	else
+		return -EPERM; //null cmd
+	ptempbuf = (stCAM_CAL_INFO_STRUCT *)pBuff;
+    if(ptempbuf->u4Offset == 0 && ptempbuf->u4Length == 0){
+        ptempbuf->u4Length = 64;
+    }
+    if((ptempbuf->u4Length <= 0) || (ptempbuf->u4Length > CAM_CAL_MAX_BUF_SIZE)) {
+        kfree(pBuff);
+        return -EINVAL;
+    }
+	pu1Params = kmalloc(ptempbuf->u4Length, GFP_KERNEL);
+	if (NULL == pu1Params) {
+		kfree(pBuff);
+		CAM_CALDB("ioctl allocate mem failed\n");
+		return -ENOMEM;
 	}
 
+	if (copy_from_user((u8 *)pu1Params, (u8 *)ptempbuf->pu1Params, ptempbuf->u4Length)) {
+		kfree(pBuff);
+		kfree(pu1Params);
+		CAM_CALDB("ioctl copy from user failed\n");
+		return -EFAULT;
+	}
 
 	switch (a_u4Command) {
 
@@ -520,15 +588,10 @@ static long cam_cal_drv_ioctl(
 
 	if (g_lastDevID != ptempbuf->deviceID) {
 		g_lastDevID = ptempbuf->deviceID;
-		if (cam_cal_set_i2c_bus(ptempbuf->deviceID)) {
-			CAM_CALDB("deviceID Error!\n");
-			kfree(pBuff);
-			kfree(pu1Params);
-			return -EFAULT;
-		}
+		cam_cal_set_i2c_bus(ptempbuf->deviceID);
 	}
 
-	pcmdInf = cam_cal_get_cmd_info_ex(ptempbuf->sensorID, ptempbuf->deviceID);
+	pcmdInf = cam_cal_get_cmd_info_ex(ptempbuf->sensorID);
 
 	if (pcmdInf != NULL) {
 		if (pcmdInf->writeCMDFunc != NULL) {
@@ -546,14 +609,20 @@ static long cam_cal_drv_ioctl(
 		else
 			TimeIntervalUS = ktv2.tv_usec - ktv1.tv_usec;
 
+
 		CAM_CALDB("Write data %d bytes take %lu us\n", ptempbuf->u4Length, TimeIntervalUS);
 #endif
 		CAM_CALDB("CAM_CALIOC_S_WRITE End!\n");
 		break;
 
 	case CAM_CALIOC_G_READ:
+		if (ptempbuf->u4Offset == 0 && ptempbuf->u4Length == 64) {
+			printk("CAM_CALIOC_G_OTP read-through offset=%d, length=%d\n",
+				ptempbuf->u4Offset, ptempbuf->u4Length);
+		}
 		CAM_CALDB("CAM_CALIOC_G_READ start! offset=%d, length=%d\n", ptempbuf->u4Offset,
 			  ptempbuf->u4Length);
+		m6_cam_cal_diag_read("read_entry", ptempbuf, NULL, 0, pu1Params);
 
 #ifdef CAM_CALGETDLT_DEBUG
 		do_gettimeofday(&ktv1);
@@ -564,15 +633,32 @@ static long cam_cal_drv_ioctl(
 			cam_cal_set_i2c_bus(ptempbuf->deviceID);
 		}
 
-		pcmdInf = cam_cal_get_cmd_info_ex(ptempbuf->sensorID, ptempbuf->deviceID);
+		pcmdInf = cam_cal_get_cmd_info_ex(ptempbuf->sensorID);
 
 		if (pcmdInf != NULL) {
-			if (pcmdInf->readCMDFunc != NULL)
+			if (pcmdInf->readCMDFunc != NULL) {
 				i4RetValue = pcmdInf->readCMDFunc(pcmdInf->client,
 					ptempbuf->u4Offset, pu1Params, ptempbuf->u4Length);
-			else {
+				m6_cam_cal_diag_read("read_result", ptempbuf,
+					pcmdInf, i4RetValue, pu1Params);
+				if (ptempbuf->u4Offset == 0 && ptempbuf->u4Length == 64) {
+					int otp_ok = i4RetValue == ptempbuf->u4Length &&
+						m6_cam_cal_buf_has_nonzero(pu1Params,
+							ptempbuf->u4Length);
+
+					pr_info("DIAGNOSTIC M6_CAM_CAL otp_status ret=%d len=%u nonzero=%d status=%s\n",
+						i4RetValue, ptempbuf->u4Length, otp_ok,
+						otp_ok ? "back_ok" : "back_err");
+					mtk_eeprom_hw_otp_check_set("back", otp_ok ? 0 : 1);
+				}
+			} else {
 				CAM_CALDB("pcmdInf->readCMDFunc == NULL\n");
+				m6_cam_cal_diag_read("read_no_reader", ptempbuf,
+					pcmdInf, i4RetValue, pu1Params);
 			}
+		} else {
+			m6_cam_cal_diag_read("read_no_cmdinfo", ptempbuf,
+				NULL, i4RetValue, pu1Params);
 		}
 
 #ifdef CAM_CALGETDLT_DEBUG
@@ -581,6 +667,7 @@ static long cam_cal_drv_ioctl(
 			TimeIntervalUS = ktv1.tv_usec + 1000000 - ktv2.tv_usec;
 		else
 			TimeIntervalUS = ktv2.tv_usec - ktv1.tv_usec;
+
 
 		CAM_CALDB("Read data %d bytes take %lu us\n", ptempbuf->u4Length, TimeIntervalUS);
 #endif
@@ -594,7 +681,13 @@ static long cam_cal_drv_ioctl(
 
 	if (_IOC_READ & _IOC_DIR(a_u4Command)) {
 		/*copy data to user space buffer, keep other input paremeter unchange.*/
-		if (copy_to_user((u8 __user *) ptempbuf->pu1Params, (u8 *)pu1Params, ptempbuf->u4Length)) {
+		if ((ptempbuf->u4Length <= 0) || (ptempbuf->u4Length > 65535)) {
+			kfree(pBuff);
+			kfree(pu1Params);
+			CAM_CALDB("Buffer Length Error!\n");
+			return -EFAULT;
+		}
+		if (copy_to_user((u8 __user *) ptempbuf->pu1Params , (u8 *)pu1Params , ptempbuf->u4Length)) {
 			kfree(pBuff);
 			kfree(pu1Params);
 			CAM_CALDB("ioctl copy to user failed\n");
@@ -609,21 +702,19 @@ static long cam_cal_drv_ioctl(
 
 static int cam_cal_drv_open(struct inode *a_pstInode, struct file *a_pstFile)
 {
-	int ret = 0;
-
 	CAM_CALDB("cam_cal_drv_open start\n");
 	spin_lock(&g_spinLock);
 	if (g_drvOpened) {
 		spin_unlock(&g_spinLock);
 		CAM_CALDB("Opened, return -EBUSY\n");
-		ret = -EBUSY;
-	} else {
+		return -EBUSY;
+	} else
 		g_drvOpened = 1;
-		spin_unlock(&g_spinLock);
-	}
+
+	spin_unlock(&g_spinLock);
 	mdelay(2);
 
-	return ret;
+	return 0;
 }
 
 static int cam_cal_drv_release(struct inode *a_pstInode, struct file *a_pstFile)
@@ -671,7 +762,7 @@ static inline int cam_cal_chrdev_register(void)
 
 	g_charDrv = cdev_alloc();
 
-	if (g_charDrv == NULL) {
+	if (NULL == g_charDrv) {
 		unregister_chrdev_region(g_devNum, 1);
 		CAM_CALDB("Allocate mem for kobject failed\n");
 		return -ENOMEM;
@@ -726,8 +817,6 @@ static int __init cam_cal_drv_init(void)
 	if (node1) {
 		of_property_read_u32(node1, "main_bus", &g_busNum[BUS_ID_MAIN]);
 		of_property_read_u32(node1, "sub_bus", &g_busNum[BUS_ID_SUB]);
-		of_property_read_u32(node1, "main2_bus", &g_busNum[BUS_ID_MAIN2]);
-		of_property_read_u32(node1, "sub2_bus", &g_busNum[BUS_ID_SUB2]);
 	}
 
 	if (platform_driver_register(&g_platDrv)) {
@@ -760,6 +849,3 @@ module_exit(cam_cal_drv_exit);
 
 MODULE_DESCRIPTION("CAM_CAL Driver");
 MODULE_AUTHOR("DreamYeh <Dream.Yeh@mediatek.com>");
-MODULE_LICENSE("GPL");
-
-

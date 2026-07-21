@@ -34,7 +34,7 @@
 /*#include <asm/system.h>//for SMP */
 
 /* #define CAM_CALGETDLT_DEBUG */
-/* #define CAM_CAL_DEBUG */
+/*#define CAM_CAL_DEBUG*/
 #ifdef CAM_CAL_DEBUG
 #define CAM_CALDB pr_debug
 #else
@@ -42,7 +42,7 @@
 #endif
 
 
-/*static DEFINE_SPINLOCK(g_CAM_CALLock); for SMP */
+static DEFINE_SPINLOCK(g_CAM_CALLock);/* for SMP */
 /* #define CAM_CAL_I2C_BUSNUM 1 */
 #define CAM_CAL_I2C_BUSNUM 3
 #define CAM_CAL_DEV_MAJOR_NUMBER 226
@@ -68,6 +68,14 @@
 ********************************************************************************/
 /*static struct i2c_board_info kd_cam_cal_dev __initdata = { I2C_BOARD_INFO(CAM_CAL_DRVNAME, 0xAA >> 1)};*/
 static struct i2c_client *g_pstI2Cclient;
+
+/* 81 is used for V4L driver */
+/*static dev_t g_CAM_CALdevno = MKDEV(CAM_CAL_DEV_MAJOR_NUMBER, 0);*/
+/*static struct cdev *g_pCAM_CAL_CharDrv;*/
+/* static spinlock_t g_CAM_CALLock; */
+/* spin_lock(&g_CAM_CALLock); */
+/* spin_unlock(&g_CAM_CALLock); */
+
 /*static struct class *CAM_CAL_class;*/
 /*static atomic_t g_CAM_CALatomic;*/
 /* static DEFINE_SPINLOCK(kdcam_cal_drv_lock); */
@@ -79,11 +87,11 @@ static struct i2c_client *g_pstI2Cclient;
 ********************************************************************************/
 /* maximun read length is limited at "I2C_FIFO_SIZE" in I2c-mt65xx.c which is 8 bytes */
 #if 0
-static int iWriteCAM_CAL(u16 a_u2Addr, u32 a_u4Bytes, u8 *puDataInBytes)
+static int iWriteCAM_CAL(u16 a_u2Addr  , u32 a_u4Bytes, u8 *puDataInBytes)
 {
 	int  i4RetValue = 0;
 	u32 u4Index = 0;
-	char puSendCmd[8] = {(char)(a_u2Addr >> 8), (char)(a_u2Addr & 0xFF),
+	char puSendCmd[8] = {(char)(a_u2Addr >> 8) , (char)(a_u2Addr & 0xFF) ,
 			     0, 0, 0, 0, 0, 0
 			    };
 	if (a_u4Bytes + 2 > 8) {
@@ -110,18 +118,19 @@ static int iWriteCAM_CAL(u16 a_u2Addr, u32 a_u4Bytes, u8 *puDataInBytes)
 static int iReadCAM_CAL(u16 a_u2Addr, u32 ui4_length, u8 *a_puBuff)
 {
 	int  i4RetValue = 0;
-	char puReadCmd[2] = {(char)(a_u2Addr >> 8), (char)(a_u2Addr & 0xFF)};
-	/*CAM_CALDB("[CAM_CAL] iReadCAM_CAL~~g_pstI2Cclient->addr=%x\n", g_pstI2Cclient->addr);*/
+	char puReadCmd[2] = {(char)(a_u2Addr >> 8) , (char)(a_u2Addr & 0xFF)};
+
+	/* CAM_CALDB("[CAM_CAL] iReadCAM_CAL!!\n"); */
 
 	if (ui4_length > 8) {
 		CAM_CALDB("[BRCB032GWZ] exceed I2c-mt65xx.c 8 bytes limitation\n");
 		return -1;
 	}
-#ifdef CONFIG_MTK_I2C_EXTENSION
+
 	spin_lock(&g_CAM_CALLock); /* for SMP */
-	g_pstI2Cclient->addr = g_pstI2Cclient->addr & (I2C_MASK_FLAG | I2C_WR_FLAG);
+	do {} while (0); /* M6-4.4 plain i2c: no addr-flag/ext_flag/timing on 4.4 i2c-mtk (C7a pattern) */
 	spin_unlock(&g_CAM_CALLock); /* for SMP */
-#endif
+
 	/* CAM_CALDB("[CAM_CAL] i2c_master_send\n"); */
 	i4RetValue = i2c_master_send(g_pstI2Cclient, puReadCmd, 2);
 	if (i4RetValue != 2) {
@@ -135,11 +144,11 @@ static int iReadCAM_CAL(u16 a_u2Addr, u32 ui4_length, u8 *a_puBuff)
 		CAM_CALDB("[CAM_CAL] I2C read data failed!!\n");
 		return -1;
 	}
-#ifdef CONFIG_MTK_I2C_EXTENSION
+
 	spin_lock(&g_CAM_CALLock); /* for SMP */
-	g_pstI2Cclient->addr = g_pstI2Cclient->addr & I2C_MASK_FLAG;
+	do {} while (0); /* M6-4.4 plain i2c: no addr-flag/ext_flag/timing on 4.4 i2c-mtk (C7a pattern) */
 	spin_unlock(&g_CAM_CALLock); /* for SMP */
-#endif
+
 	/* CAM_CALDB("[CAM_CAL] iReadCAM_CAL done!!\n"); */
 	return 0;
 }
@@ -238,9 +247,9 @@ static int iReadData(unsigned int  ui4_offset, unsigned int  ui4_length, unsigne
 			/* break; */
 		}
 	} while (i4ResidueDataLength > 0);
-
-
-
+	/* CAM_CALDB("[S24EEPORM] iReadData finial address is %d length is %d buffer address is
+	0x%x\n",u4CurrentOffset, i4ResidueDataLength, pBuff); */
+	/* CAM_CALDB("[S24EEPORM] iReadData done\n" ); */
 	return 0;
 }
 
@@ -286,18 +295,18 @@ static long CAM_CAL_Ioctl(
 	unsigned long TimeIntervalUS;
 #endif
 
-
-
-	if (_IOC_DIR(a_u4Command) != _IOC_NONE) {
+/*	if (_IOC_NONE == _IOC_DIR(a_u4Command)) {
+	}else {*/
+	if (_IOC_NONE != _IOC_DIR(a_u4Command)) {
 		pBuff = kmalloc(sizeof(stCAM_CAL_INFO_STRUCT), GFP_KERNEL);
 
-		if (pBuff == NULL) {
+		if (NULL == pBuff) {
 			CAM_CALDB("[BRCB032GWZ] ioctl allocate mem failed\n");
 			return -ENOMEM;
 		}
 
 		if (_IOC_WRITE & _IOC_DIR(a_u4Command)) {
-			if (copy_from_user((u8 *) pBuff, (u8 *) a_u4Param, sizeof(stCAM_CAL_INFO_STRUCT))) {
+			if (copy_from_user((u8 *) pBuff , (u8 *) a_u4Param, sizeof(stCAM_CAL_INFO_STRUCT))) {
 				/* get input structure address */
 				kfree(pBuff);
 				CAM_CALDB("[BRCB032GWZ] ioctl copy from user failed\n");
@@ -308,7 +317,7 @@ static long CAM_CAL_Ioctl(
 
 	ptempbuf = (stCAM_CAL_INFO_STRUCT *)pBuff;
 	pWorkingBuff = kmalloc(ptempbuf->u4Length, GFP_KERNEL);
-	if (pWorkingBuff == NULL) {
+	if (NULL == pWorkingBuff) {
 		kfree(pBuff);
 		CAM_CALDB("[BRCB032GWZ] ioctl allocate mem failed\n");
 		return -ENOMEM;
@@ -317,7 +326,7 @@ static long CAM_CAL_Ioctl(
 	(u32)pWorkingBuff, (u32)a_u4Command);
 
 
-	if (copy_from_user((u8 *)pWorkingBuff, (u8 *)ptempbuf->pu1Params, ptempbuf->u4Length)) {
+	if (copy_from_user((u8 *)pWorkingBuff , (u8 *)ptempbuf->pu1Params, ptempbuf->u4Length)) {
 		kfree(pBuff);
 		kfree(pWorkingBuff);
 		CAM_CALDB("[BRCB032GWZ] ioctl copy from user failed\n");
@@ -368,27 +377,28 @@ static long CAM_CAL_Ioctl(
 			CAM_CALDB("[BRCB032GWZ] Shading CheckSum MSB=> %x %x\n", pWorkingBuff[0],
 			pWorkingBuff[1]);
 		} else {
+			/* i4RetValue = iReadData((u16)ptempbuf->u4Offset, ptempbuf->u4Length,
+			pWorkingBuff); */
 
+			/* i4RetValue =  iReadDataFromM24C08F((u16)ptempbuf->u4Offset,
+			ptempbuf->u4Length, pWorkingBuff); */
 			readTryagain = 3;
 			test_retry = 2;
-			while (readTryagain > 0) {
-
-
-
-
-
-
-
-
+			while (0 < readTryagain) {
+				/* i4RetValue =  iReadDataFromGT24c32a((u16)ptempbuf->u4Offset,
+				ptempbuf->u4Length, pWorkingBuff); */
+				/* i4RetValue =  iReadDataFromM24C08F((u16)ptempbuf->u4Offset,
+				ptempbuf->u4Length, pWorkingBuff); */
 				i4RetValue = iReadData((u16)ptempbuf->u4Offset, ptempbuf->u4Length,
 				pWorkingBuff);
-
-
-
-
-
-
-
+#if 0
+				if (0 < test_retry) {
+					CAM_CALDB("[BRCB032GWZ] Test error (%d) Read retry (%d)\n",
+					test_retry, i4RetValue);
+					i4RetValue = -1;
+					test_retry--;
+				}
+#endif
 				CAM_CALDB("[BRCB032GWZ] error (%d) Read retry (%d)\n", i4RetValue,
 				readTryagain);
 				if (i4RetValue != 0)
@@ -532,7 +542,7 @@ static long CAM_CAL_Ioctl(
 		/* copy data to user space buffer, keep other input paremeter unchange. */
 		CAM_CALDB("[BRCB032GWZ] to user length %d\n", ptempbuf->u4Length);
 		CAM_CALDB("[BRCB032GWZ] to user  Working buffer address 0x%8x\n", (u32)pWorkingBuff);
-		if (copy_to_user((u8 __user *) ptempbuf->pu1Params, (u8 *)pWorkingBuff,
+		if (copy_to_user((u8 __user *) ptempbuf->pu1Params , (u8 *)pWorkingBuff ,
 			ptempbuf->u4Length)) {
 			kfree(pBuff);
 			kfree(pWorkingBuff);
@@ -554,19 +564,24 @@ static u32 g_u4Opened;
 /* 2.Initialize the device if it is opened for the first time. */
 static int CAM_CAL_Open(struct inode *a_pstInode, struct file *a_pstFile)
 {
-	int result = 0;
-
 	CAM_CALDB("[BRCB032GWZ_3_CAM_CAL] CAM_CAL_Open\n");
 	spin_lock(&g_CAM_CALLock);
 	if (g_u4Opened) {
 		spin_unlock(&g_CAM_CALLock);
-		result = -EBUSY;
+		return -EBUSY;
 	} else {
 		g_u4Opened = 1;
 		atomic_set(&g_CAM_CALatomic, 0);
 	}
 	spin_unlock(&g_CAM_CALLock);
-	return result;
+
+#if 0
+	if (TRUE != hwPowerOn(MT65XX_POWER_LDO_VCAMA, VOL_2800, "S24CS64A")) {
+		CAM_CALDB("[BRCB032GWZ] Fail to enable analog gain\n");
+		return -EIO;
+	}
+#endif
+	return 0;
 }
 
 /* Main jobs: */
@@ -607,7 +622,7 @@ static inline int RegisterCAM_CALCharDrv(void)
 		return -EAGAIN;
 	}
 #else
-	if (register_chrdev_region(g_CAM_CALdevno, 1, CAM_CAL_DRVNAME)) {
+	if (register_chrdev_region(g_CAM_CALdevno , 1 , CAM_CAL_DRVNAME)) {
 		CAM_CALDB("[BRCB032GWZ_3_CAM_CAL] Register device no failed\n");
 
 		return -EAGAIN;
@@ -617,7 +632,7 @@ static inline int RegisterCAM_CALCharDrv(void)
 	/* Allocate driver */
 	g_pCAM_CAL_CharDrv = cdev_alloc();
 
-	if (g_pCAM_CAL_CharDrv == NULL) {
+	if (NULL == g_pCAM_CAL_CharDrv) {
 		unregister_chrdev_region(g_CAM_CALdevno, 1);
 
 		CAM_CALDB("[BRCB032GWZ_3_CAM_CAL] Allocate mem for kobject failed\n");
@@ -675,7 +690,12 @@ static int CAM_CAL_i2c_probe(struct i2c_client *client, const struct i2c_device_
 static int CAM_CAL_i2c_remove(struct i2c_client *);
 
 static const struct i2c_device_id CAM_CAL_i2c_id[] = {{CAM_CAL_DRVNAME, 0}, {} };
-
+#if 0 /* test110314 Please use the same I2C Group ID as Sensor */
+static unsigned short force[] = {CAM_CAL_I2C_GROUP_ID, S24CS64A_DEVICE_ID, I2C_CLIENT_END, I2C_CLIENT_END};
+#else
+/* static unsigned short force[] = {IMG_SENSOR_I2C_GROUP_ID, S24CS64A_DEVICE_ID, I2C_CLIENT_END,
+I2C_CLIENT_END}; */
+#endif
 /* static const unsigned short * const forces[] = { force, NULL }; */
 /* static struct i2c_client_address_data addr_data = { .forces = forces,}; */
 
@@ -781,7 +801,7 @@ module_init(CAM_CAL_i2C_init);
 module_exit(CAM_CAL_i2C_exit);
 
 MODULE_DESCRIPTION("CAM_CAL driver");
-MODULE_AUTHOR("Dream Yeh <Dream.Yeh@Mediatek.com>");
+MODULE_AUTHOR("Sean Lin <Sean.Lin@Mediatek.com>");
 MODULE_LICENSE("GPL");
 
 #endif

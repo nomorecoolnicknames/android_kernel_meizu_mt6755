@@ -21,6 +21,22 @@ config MTK_FLASHLIGHT_LM3643
 
 		Say M here if you want to compile this driver as a module.
 
+config MTK_FLASHLIGHT_SGM3784
+	bool "MediaTek SGM3784 flashlight"
+	depends on MTK_FLASHLIGHT
+	help
+	  m681 part1 flash driver, SGM3784 at 0x30 on i2c1.  Torch only:
+	  the high-current strobe is deliberately never driven.  Register
+	  map transcribed from the 3.10 stock constant_flashlight source.
+
+config MTK_FLASHLIGHT_LM3642
+	bool "Meizu M3 Note l681 LM3642 flashlight (LM3643 regmap, i2c1 0x63)"
+	depends on MTK_FLASHLIGHT
+	help
+	  l681 main flash, the stock "leds-LM3642" at i2c1 0x63 with HWEN on
+	  GPIO9. Torch/flash codes from the stock L681H kernel. Registers
+	  only on l681.
+
 config MTK_FLASHLIGHT_RT4505
 	tristate "Mediatek flashlight with driver IC (Richtek RT4505)"
 	depends on MTK_FLASHLIGHT

@@ -42,6 +42,10 @@
 #endif
 
 #include "flashlight.h"
+#ifdef CONFIG_MTK_FLASHLIGHT_LM3642
+#include <linux/miscdevice.h>
+#include <linux/m3note_board.h>
+#endif
 #include <mach/upmu_sw.h> /* PT */
 
 #ifdef CONFIG_MTK_FLASHLIGHT_DLPT
@@ -768,6 +772,29 @@ static const struct file_operations flashlight_fops = {
 #endif
 };
 
+#ifdef CONFIG_MTK_FLASHLIGHT_LM3642
+/*
+ * The vendor camera HAL (libfeatureiodrv.so StrobeGlobalDriver) opens
+ * /dev/kd_camera_flashlight, never /dev/flashlight; its ioctls pass
+ * {sensorDev, strobeId, arg}, the flashlight_user_arg layout, with the
+ * same command numbers (X_SET_DRIVER 0xc004531e, SET_DUTY 0x8004536e,
+ * SET_TIME_OUT_TIME_MS 0x80045364). Same fops under the legacy name.
+ */
+static struct miscdevice flashlight_kd_misc = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "kd_camera_flashlight",
+	.fops = &flashlight_fops,
+};
+
+static int __init flashlight_kd_node_init(void)
+{
+	if (!m3note_board_is(M3NOTE_BOARD_L681))
+		return -ENODEV;
+	return misc_register(&flashlight_kd_misc);
+}
+late_initcall(flashlight_kd_node_init);
+#endif
+
 
 /******************************************************************************
  * Platform device and driver
@@ -1259,6 +1286,8 @@ static void flashlight_shutdown(struct platform_device *dev)
 #ifdef CONFIG_OF
 static const struct of_device_id flashlight_of_match[] = {
 	{.compatible = "mediatek,flashlight_core"},
+	/* The board DTB only has /soc/flashlight with this compatible. */
+	{.compatible = "mediatek,mt6755-flashlight"},
 	{},
 };
 MODULE_DEVICE_TABLE(of, flashlight_of_match);

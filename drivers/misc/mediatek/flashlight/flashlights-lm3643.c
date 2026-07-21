@@ -12,6 +12,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/m3note_board.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/types.h>
@@ -37,8 +38,54 @@
 #include <linux/i2c.h>
 #include <linux/leds.h>
 
+#include <linux/of.h>
+#include <mt_gpio.h>
+
 #include "flashlight.h"
 #include "flashlight-dt.h"
+
+/* The board DTB has neither a "mediatek,flashlights_lm3643" platform node,
+ * nor an i2c child node for the chip, nor hwen_high/hwen_low pinctrl
+ * states, so nothing here can probe from DT alone. Fallbacks (all log
+ * [FORGE_FLASH]):
+ *  - platform device registered from init when the DT node is absent;
+ *  - EN pin via legacy GPIO99 when pinctrl is missing (stock
+ *    leds_strobe.c: GPIO_LED_EN = GPIO99, flash chip on i2c bus 1);
+ *  - i2c client attached from late_initcall after a non-destructive
+ *    presence read at 0x63 (SY7806/NT50572/AW3643, LM3643 register map).
+ *    SGM3784@0x30 has a different register map: logged only, never driven;
+ *  - torch-level clamp (forge_flash_torch_only). */
+static int forge_flash_i2c_bus = 1;
+module_param(forge_flash_i2c_bus, int, 0444);
+static int forge_flash_i2c_addr = 0x63;
+module_param(forge_flash_i2c_addr, int, 0444);
+static int forge_flash_torch_only = 1;
+module_param(forge_flash_torch_only, int, 0644);
+static int forge_flash_en_gpio = 99;
+module_param(forge_flash_en_gpio, int, 0444);
+static int forge_hwen_use_gpio;	/* pinctrl states absent -> GPIO EN */
+static int forge_lm3643_probed;	/* platform probe ran (EN path usable) */
+
+/* Result of the late_initcall attach below, readable at any time (the
+ * kernel log rotates early in boot):
+ *   -1 = the attach never ran to a verdict
+ *    0 = no ACK at forge_flash_i2c_addr and none at the SGM3784 alternative
+ *    1 = ACK at forge_flash_i2c_addr, client created
+ *    2 = no ACK at forge_flash_i2c_addr but SGM3784@0x30 answered
+ *        (different register map: identity only, not driven)
+ *    3 = already bound from DT before the fallback ran
+ *    4 = platform probe never ran, so nothing was attempted
+ *    5 = the i2c adapter itself was missing
+ */
+static int forge_flash_present = -1;
+module_param(forge_flash_present, int, 0444);
+MODULE_PARM_DESC(forge_flash_present,
+	"m681: flash-chip attach verdict; -1 no verdict, 0 nothing answers, 1 bound at addr, 2 SGM3784 only, 3 bound from DT, 4 no platform probe, 5 no i2c adapter");
+
+static int forge_flash_devid = -1;
+module_param(forge_flash_devid, int, 0444);
+MODULE_PARM_DESC(forge_flash_devid,
+	"m681: register 0x0C read back from the flash chip once bound (-1 = never read)");
 
 /* device tree should be defined in flashlight-dt.h */
 #ifndef LM3643_DTNAME
@@ -152,16 +199,27 @@ static int lm3643_pinctrl_set(int pin, int state)
 {
 	int ret = 0;
 
-	if (IS_ERR(lm3643_pinctrl)) {
+	/* no hwen pinctrl states in the DTB -> legacy EN GPIO */
+	if (forge_hwen_use_gpio && pin == LM3643_PINCTRL_PIN_HWEN) {
+		mt_set_gpio_out(forge_flash_en_gpio,
+				state == LM3643_PINCTRL_PINSTATE_HIGH ?
+				GPIO_OUT_ONE : GPIO_OUT_ZERO);
+		fl_dbg("hwen GPIO%d -> %d\n", forge_flash_en_gpio, state);
+		return 0;
+	}
+
+	/* IS_ERR_OR_NULL, not IS_ERR: a call before or without probe sees
+	 * NULL here */
+	if (IS_ERR_OR_NULL(lm3643_pinctrl)) {
 		fl_err("pinctrl is not available\n");
 		return -1;
 	}
 
 	switch (pin) {
 	case LM3643_PINCTRL_PIN_HWEN:
-		if (state == LM3643_PINCTRL_PINSTATE_LOW && !IS_ERR(lm3643_hwen_low))
+		if (state == LM3643_PINCTRL_PINSTATE_LOW && !IS_ERR_OR_NULL(lm3643_hwen_low))
 			pinctrl_select_state(lm3643_pinctrl, lm3643_hwen_low);
-		else if (state == LM3643_PINCTRL_PINSTATE_HIGH && !IS_ERR(lm3643_hwen_high))
+		else if (state == LM3643_PINCTRL_PINSTATE_HIGH && !IS_ERR_OR_NULL(lm3643_hwen_high))
 			pinctrl_select_state(lm3643_pinctrl, lm3643_hwen_high);
 		else
 			fl_err("set err, pin(%d) state(%d)\n", pin, state);
@@ -207,6 +265,12 @@ static int lm3643_verify_level(int level)
 		level = 0;
 	else if (level >= LM3643_LEVEL_NUM)
 		level = LM3643_LEVEL_NUM - 1;
+
+	/* Torch range only (forge_flash_torch_only): flash-mode currents (up
+	 * to flash code 0x5D) with the timers userspace tends to zero out are
+	 * not safe on an unvalidated LED/board. */
+	if (forge_flash_torch_only && level >= LM3643_LEVEL_TORCH)
+		level = LM3643_LEVEL_TORCH - 1;
 
 	return level;
 }
@@ -740,13 +804,23 @@ static int lm3643_probe(struct platform_device *dev)
 	/* init pinctrl */
 	if (lm3643_pinctrl_init(dev)) {
 		fl_dbg("Failed to init pinctrl.\n");
-		return -1;
+		/* No hwen states in the DTB: fall back to the stock EN line
+		 * (GPIO99) instead of aborting; pinctrl_set is guarded with
+		 * IS_ERR_OR_NULL. */
+		pr_err("[FORGE_FLASH] hwen pinctrl missing -> legacy GPIO%d EN fallback\n",
+		       forge_flash_en_gpio);
+		mt_set_gpio_mode(forge_flash_en_gpio, GPIO_MODE_00);
+		mt_set_gpio_dir(forge_flash_en_gpio, GPIO_DIR_OUT);
+		mt_set_gpio_out(forge_flash_en_gpio, GPIO_OUT_ZERO);
+		forge_hwen_use_gpio = 1;
 	}
 
 	if (i2c_add_driver(&lm3643_i2c_driver)) {
 		fl_dbg("Failed to add i2c driver.\n");
 		return -1;
 	}
+
+	forge_lm3643_probed = 1;
 
 	fl_dbg("Probe done.\n");
 
@@ -798,6 +872,9 @@ static int __init flashlight_lm3643_init(void)
 {
 	int ret;
 
+	/* LM3643 is an M681 flash part, not on the L681 DCT */
+	if (!m3note_board_is(M3NOTE_BOARD_M681))
+		return -ENODEV;
 	fl_dbg("Init start.\n");
 
 #ifndef CONFIG_OF
@@ -814,10 +891,128 @@ static int __init flashlight_lm3643_init(void)
 		return ret;
 	}
 
+#ifdef CONFIG_OF
+	/* No flashlights_lm3643 node in the DTB: register the platform
+	 * device from code so lm3643_probe() (pinctrl/GPIO EN setup +
+	 * i2c_add_driver) still runs; the name match binds it. */
+	{
+		struct device_node *np;
+
+		np = of_find_compatible_node(NULL, NULL, LM3643_DTNAME);
+		if (np) {
+			of_node_put(np);
+		} else {
+			struct platform_device *pdev;
+
+			pr_err("[FORGE_FLASH] no %s DT node -> registering platform device from code\n",
+			       LM3643_DTNAME);
+			pdev = platform_device_register_simple(LM3643_NAME, -1,
+							       NULL, 0);
+			if (IS_ERR(pdev))
+				fl_err("Failed to register fallback platform device\n");
+		}
+	}
+#endif
+
 	fl_dbg("Init done.\n");
 
 	return 0;
 }
+
+/* Attach the i2c client from code: the DTB has no i2c child node for the
+ * flash chip. late_initcall so the i2c1 adapter (i2c-mtk) is registered.
+ * Presence is tested with a non-destructive 1-byte read (no register
+ * write) with EN high; only the LM3643 register-map family at 0x63 is
+ * bound. */
+static int forge_flash_i2c_probe_addr(struct i2c_adapter *adap, u16 addr)
+{
+	struct i2c_msg msg;
+	u8 probe_byte = 0;
+
+	memset(&msg, 0, sizeof(msg));	/* gt9xx lesson: no junk in i2c_msg */
+	msg.addr = addr;
+	msg.flags = I2C_M_RD;
+	msg.len = 1;
+	msg.buf = &probe_byte;
+
+	return i2c_transfer(adap, &msg, 1);
+}
+
+static int __init forge_flash_i2c_attach(void)
+{
+	struct i2c_adapter *adap;
+	struct i2c_board_info info;
+	int ret;
+
+	/* see flashlight_lm3643_init() */
+	if (!m3note_board_is(M3NOTE_BOARD_M681))
+		return -ENODEV;
+	if (lm3643_i2c_client) {	/* already bound via DT */
+		forge_flash_present = 3;
+		return 0;
+	}
+
+	if (!forge_lm3643_probed) {
+		/* platform probe never ran: EN path (pinctrl/GPIO) is not set
+		 * up and the i2c driver is not added - nothing safe to do */
+		pr_err("[FORGE_FLASH] lm3643 platform probe never ran - skipping i2c attach\n");
+		forge_flash_present = 4;
+		return 0;
+	}
+
+	adap = i2c_get_adapter(forge_flash_i2c_bus);
+	if (!adap) {
+		pr_err("[FORGE_FLASH] i2c adapter %d missing - flashlight not attached\n",
+		       forge_flash_i2c_bus);
+		forge_flash_present = 5;
+		return 0;
+	}
+
+	/* the chip only ACKs with EN high */
+	lm3643_pinctrl_set(LM3643_PINCTRL_PIN_HWEN, LM3643_PINCTRL_PINSTATE_HIGH);
+	msleep(2);
+
+	ret = forge_flash_i2c_probe_addr(adap, forge_flash_i2c_addr);
+	pr_err("[FORGE_FLASH] presence read 0x%02x on i2c%d: %d (%s)\n",
+	       forge_flash_i2c_addr, forge_flash_i2c_bus, ret,
+	       ret == 1 ? "ACK" : "no ACK");
+
+	forge_flash_present = (ret == 1) ? 1 : 0;
+	if (ret == 1) {
+		memset(&info, 0, sizeof(info));
+		strlcpy(info.type, LM3643_NAME, sizeof(info.type));
+		info.addr = forge_flash_i2c_addr;
+		if (!i2c_new_device(adap, &info))
+			pr_err("[FORGE_FLASH] i2c_new_device failed\n");
+		if (lm3643_i2c_client) {
+			/* identity evidence: SY7806/NT50572/AW3643/LM3643
+			 * carry a device-id at 0x0C */
+			int id0 = i2c_smbus_read_byte_data(lm3643_i2c_client, 0x00);
+			int idc = i2c_smbus_read_byte_data(lm3643_i2c_client, 0x0C);
+
+			pr_err("[FORGE_FLASH] bound at 0x%02x: reg00=0x%02x reg0C(devid)=0x%02x (LM3643-family part2)\n",
+			       forge_flash_i2c_addr, id0, idc);
+			forge_flash_devid = idc;
+		}
+	} else {
+		/* stock 3.10 part1 = SGM3784@0x30: different regmap, only
+		 * log its presence, never drive it with LM3643 writes */
+		ret = forge_flash_i2c_probe_addr(adap, 0x30);
+		if (ret == 1)
+			forge_flash_present = 2;
+		pr_err("[FORGE_FLASH] 0x63 absent; SGM3784 0x30 presence: %d (%s)\n",
+		       ret, ret == 1 ?
+		       "PRESENT - part1 unit, needs SGM3784 port, NOT driven" :
+		       "absent - i2c1 dead or EN line wrong");
+	}
+
+	/* chip off until userspace opens it (set_driver raises EN again) */
+	lm3643_pinctrl_set(LM3643_PINCTRL_PIN_HWEN, LM3643_PINCTRL_PINSTATE_LOW);
+	i2c_put_adapter(adap);
+
+	return 0;
+}
+late_initcall(forge_flash_i2c_attach);
 
 static void __exit flashlight_lm3643_exit(void)
 {

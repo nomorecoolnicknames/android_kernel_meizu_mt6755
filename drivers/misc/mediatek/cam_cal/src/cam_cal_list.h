@@ -27,10 +27,9 @@
  *
  * Author:
  * -------
-  * Dream Yeh (MTK08783)
+ *   LukeHu (MTK10439)
  *
- *============================================================================
- */
+ *============================================================================*/
 #ifndef __CAM_CAL_LIST_H
 #define __CAM_CAL_LIST_H
 #include <linux/i2c.h>
@@ -44,10 +43,7 @@ typedef unsigned int (*cam_cal_check_func)(struct i2c_client *client,
 typedef enum {
 	CMD_NONE = 0,
 	CMD_AUTO,
-	CMD_MAIN,
-	CMD_MAIN2,
-	CMD_SUB,
-	CMD_SUB2,
+	CMD_DEV1,
 	CMD_BRCB032GWZ,
 	CMD_CAT24C16,
 	CMD_GT24C32A,
@@ -74,8 +70,6 @@ unsigned int cam_cal_get_func_list(stCAM_CAL_FUNC_STRUCT **ppCamcalFuncList);
 unsigned int cam_cal_check_mtk_cid(struct i2c_client *client, cam_cal_cmd_func readCamCalData);
 unsigned int cam_cal_check_double_eeprom(struct i2c_client *client,
 	cam_cal_cmd_func readCamCalData);
-
-extern struct mutex EEPROM_Mutex;
 
 #endif /* __CAM_CAL_LIST_H */
 

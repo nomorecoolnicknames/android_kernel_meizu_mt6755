@@ -16,6 +16,10 @@ flashlight-y	+= flashlight-device.o
 
 obj-$(CONFIG_MTK_FLASHLIGHT)		     += flashlight.o
 obj-$(CONFIG_MTK_FLASHLIGHT_LM3643)      += flashlights-lm3643.o
+# SGM3784@0x30 (part1 units); the LM3643 above serves the part2 variant.
+obj-$(CONFIG_MTK_FLASHLIGHT_SGM3784)     += flashlights-sgm3784.o
+# l681: leds-LM3642 at i2c1 0x63
+obj-$(CONFIG_MTK_FLASHLIGHT_LM3642)      += flashlights-lm3642.o
 obj-$(CONFIG_MTK_FLASHLIGHT_RT4505)      += flashlights-rt4505.o
 obj-$(CONFIG_MTK_FLASHLIGHT_RT5081)      += flashlights-rt5081.o
 # [linyimin] Add sub flashlight
