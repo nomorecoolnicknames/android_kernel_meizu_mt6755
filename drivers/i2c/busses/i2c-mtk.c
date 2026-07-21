@@ -1264,7 +1264,11 @@ static int mt_i2c_parse_dt(struct device_node *np, struct mt_i2c *i2c)
 	i2c->speed_hz = I2C_DEFAUT_SPEED;
 	of_property_read_u32(np, "clock-frequency", &i2c->speed_hz);
 	of_property_read_u32(np, "clock-div", &i2c->clk_src_div);
-	of_property_read_u32(np, "id", (u32 *)&i2c->id);
+	/* The MT6755 DT carries the bus number in "cell-index", not "id";
+	 * without this fallback every controller gets nr 0 and all but the
+	 * first fail to register with -EBUSY. */
+	if (of_property_read_u32(np, "id", (u32 *)&i2c->id))
+		of_property_read_u32(np, "cell-index", (u32 *)&i2c->id);
 	i2c->have_pmic = of_property_read_bool(np, "mediatek,have-pmic");
 	i2c->have_dcm = of_property_read_bool(np, "mediatek,have-dcm");
 	i2c->use_push_pull = of_property_read_bool(np, "mediatek,use-push-pull");
@@ -1311,6 +1315,8 @@ static const struct of_device_id mtk_i2c_of_match[] = {
 	{ .compatible = "mediatek,mt6735-i2c", .data = &mt6735_compat },
 	{ .compatible = "mediatek,mt6797-i2c", .data = &mt6797_compat },
 	{ .compatible = "mediatek,mt6757-i2c", .data = &mt6757_compat },
+	/* The MT6755 i2c IP matches MT6757; reuse its compat data. */
+	{ .compatible = "mediatek,mt6755-i2c", .data = &mt6757_compat },
 	{ .compatible = "mediatek,elbrus-i2c", .data = &elbrus_compat },
 	{},
 };
