@@ -15,6 +15,7 @@
  */
 
 #include <linux/device.h>
+#include <linux/m3note_board.h>
 #include <linux/input.h>
 #include <linux/mutex.h>
 #include <linux/io.h>
@@ -48,8 +49,15 @@
 #include <linux/spi/spidev.h>
 
 /* MTK header */
+#ifdef CONFIG_ARCH_MT6755
+/* The MT6755 BSP spi dir ships mt_spi.h/mt_spi_hal.h (renamed to mtk_* on
+ * MT6757). */
+#include "mt_spi.h"
+#include "mt_spi_hal.h"
+#else
 #include "mtk_spi.h"
 #include "mtk_spi_hal.h"
+#endif
 #include "mtk_gpio.h"
 #include "mach/gpio_const.h"
 
@@ -106,6 +114,17 @@ static DEFINE_MUTEX(device_list_lock);
 static unsigned bufsiz = (15 * 1024);
 module_param(bufsiz, uint, S_IRUGO);
 MODULE_PARM_DESC(bufsiz, "maximum data bytes for SPI message");
+
+/* forge_fp_probe_irq: request the EINT at probe time, so the sensor IRQ
+ * shows in /proc/interrupts without a HAL (stock requests it only in
+ * GF_IOC_INIT).
+ * forge_fp_keymode: arm the sensor's autonomous touch detection (mode reg
+ * 0x8043 <- 0x01, KEY mode) and report KEY_BACK from the IRQ thread, the
+ * Meizu mBack tap-back; REE SPI only, no TEE. */
+static int forge_fp_probe_irq = 1;
+module_param(forge_fp_probe_irq, int, 0644);
+static int forge_fp_keymode = 1;
+module_param(forge_fp_keymode, int, 0644);
 
 #ifdef CONFIG_OF
 static const struct of_device_id gf_of_match[] = {
@@ -279,6 +298,23 @@ static int gf_get_sensor_dts_info(void)
 	return 0;
 }
 
+/*
+ * Board pads. M681: RST = GPIO19, sensor supply always on.
+ * L681: RST = GPIO14 and an external sensor LDO on GPIO116 (LDO high,
+ * 20 ms, then reset). GPIO19 is the microSD LDO enable on L681.
+ */
+static bool gf_board_l681(void)
+{
+	return m3note_board_known_is(M3NOTE_BOARD_L681);
+}
+
+static unsigned long gf_rst_pin(void)
+{
+	return gf_board_l681() ? (14 | 0x80000000) : GPIO19;
+}
+
+#define GF_L681_LDO_PIN	(116 | 0x80000000)
+
 static void gf_hw_power_enable(u8 onoff)
 {
 	/* TODO: LDO configure */
@@ -287,9 +323,19 @@ static void gf_hw_power_enable(u8 onoff)
 	if (onoff && enable) {
 		/* TODO:  set power  according to actual situation  */
 		/* hwPowerOn(MT6331_POWER_LDO_VIBR, VOL_2800, "fingerprint"); */
+		if (gf_board_l681()) {
+			mt_set_gpio_mode(GF_L681_LDO_PIN, GPIO_MODE_00);
+			mt_set_gpio_dir(GF_L681_LDO_PIN, GPIO_DIR_OUT);
+			mt_set_gpio_out(GF_L681_LDO_PIN, GPIO_OUT_ONE);
+			msleep(20);
+		}
 		enable = 0;
 	} else if (!onoff && !enable) {
 		/* hwPowerDown(MT6331_POWER_LDO_VIBR, "fingerprint"); */
+		if (gf_board_l681()) {
+			mt_set_gpio_out(GF_L681_LDO_PIN, GPIO_OUT_ZERO);
+			msleep(50);
+		}
 		enable = 1;
 	}
 }
@@ -354,7 +400,14 @@ static void gf_irq_gpio_cfg(struct gf_device *gf_dev)
 static void gf_reset_gpio_cfg(struct gf_device *gf_dev)
 {
 #ifdef CONFIG_OF
-	pinctrl_select_state(gf_dev->pinctrl_gpios, gf_dev->pins_reset_high);
+	if (!IS_ERR_OR_NULL(gf_dev->pinctrl_gpios) &&
+	    !IS_ERR_OR_NULL(gf_dev->pins_reset_high))
+		pinctrl_select_state(gf_dev->pinctrl_gpios, gf_dev->pins_reset_high);
+	/* Also drive the pad directly: RST = GPIO19 on M681, GPIO14 on L681
+	 * (see gf_rst_pin()). */
+	mt_set_gpio_mode(gf_rst_pin(), GPIO_MODE_00);
+	mt_set_gpio_dir(gf_rst_pin(), GPIO_DIR_OUT);
+	mt_set_gpio_out(gf_rst_pin(), GPIO_OUT_ONE);
 #endif
 
 }
@@ -363,9 +416,17 @@ static void gf_reset_gpio_cfg(struct gf_device *gf_dev)
 static void gf_hw_reset(struct gf_device *gf_dev, u8 delay)
 {
 #ifdef CONFIG_OF
-	pinctrl_select_state(gf_dev->pinctrl_gpios, gf_dev->pins_reset_low);
+	mt_set_gpio_mode(gf_rst_pin(), GPIO_MODE_00);
+	mt_set_gpio_dir(gf_rst_pin(), GPIO_DIR_OUT);
+	if (!IS_ERR_OR_NULL(gf_dev->pinctrl_gpios) &&
+	    !IS_ERR_OR_NULL(gf_dev->pins_reset_low))
+		pinctrl_select_state(gf_dev->pinctrl_gpios, gf_dev->pins_reset_low);
+	mt_set_gpio_out(gf_rst_pin(), GPIO_OUT_ZERO);
 	mdelay(5);
-	pinctrl_select_state(gf_dev->pinctrl_gpios, gf_dev->pins_reset_high);
+	if (!IS_ERR_OR_NULL(gf_dev->pinctrl_gpios) &&
+	    !IS_ERR_OR_NULL(gf_dev->pins_reset_high))
+		pinctrl_select_state(gf_dev->pinctrl_gpios, gf_dev->pins_reset_high);
+	mt_set_gpio_out(gf_rst_pin(), GPIO_OUT_ONE);
 #endif
 
 	if (delay) {
@@ -642,6 +703,27 @@ static irqreturn_t gf_irq(int irq, void *handle)
 	struct gf_device *gf_dev = (struct gf_device *)handle;
 	FUNC_ENTRY();
 
+	/* KEY mode status (threaded context, REE SPI allowed): 0x8140 bit7 =
+	 * buffer ready, bit5 = key event, bit4 = press(1)/release(0). Report
+	 * KEY_BACK (mBack tap-back). Clear by writing the status back with
+	 * bit7 dropped (stock clears it through the TEE). */
+	if (forge_fp_keymode && gf_dev->input) {
+		u8 forge_status = 0;
+
+		gf_spi_read_byte_ree(gf_dev, 0x8140, &forge_status);
+		if ((forge_status & 0x20) && (forge_status & 0x80)) {
+			input_report_key(gf_dev->input, GF_INPUT_BACK_KEY,
+					 (forge_status & 0x10) >> 4);
+			input_sync(gf_dev->input);
+			pr_info("[FORGE_FP] key status=0x%02x -> KEY_BACK %s\n",
+				forge_status, (forge_status & 0x10) ? "down" : "up");
+		} else if (forge_status) {
+			pr_info("[FORGE_FP] irq status=0x%02x (non-key)\n", forge_status);
+		}
+		if (forge_status & 0x80)
+			gf_spi_write_byte_ree(gf_dev, 0x8140, forge_status & 0x7F);
+	}
+
 	gf_netlink_send(gf_dev, GF_NETLINK_IRQ);
 	gf_dev->sig_count++;
 
@@ -702,9 +784,18 @@ static long gf_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			gf_debug(INFO_LOG, "%s: system re-started======\n", __func__);
 			break;
 		}
-		gf_irq_gpio_cfg(gf_dev);
-		retval = request_threaded_irq(gf_dev->irq, NULL, gf_irq,
-				IRQF_TRIGGER_RISING | IRQF_ONESHOT, "goodix_fp_irq", gf_dev);
+		/* The IRQ is already held from probe (forge_fp_probe_irq); a
+		 * second request_threaded_irq() would fail with -EBUSY, so keep
+		 * the existing one. */
+		if (gf_dev->irq && gf_dev->irq_count) {
+			gf_debug(INFO_LOG, "%s forge probe-irq already holds irq %d, skip request\n",
+				 __func__, gf_dev->irq);
+			retval = 0;
+		} else {
+			gf_irq_gpio_cfg(gf_dev);
+			retval = request_threaded_irq(gf_dev->irq, NULL, gf_irq,
+					IRQF_TRIGGER_RISING | IRQF_ONESHOT, "goodix_fp_irq", gf_dev);
+		}
 		if (!retval)
 			gf_debug(INFO_LOG, "%s irq thread request success!\n", __func__);
 		else
@@ -1010,9 +1101,15 @@ static ssize_t gf_debug_store(struct device *dev,
 	} else if (!strncmp(buf, "-10", 3)) {
 		gf_debug(INFO_LOG, "%s: parameter is -10, gf init start===============\n", __func__);
 
-		gf_irq_gpio_cfg(gf_dev);
-		retval = request_threaded_irq(gf_dev->irq, NULL, gf_irq,
-				IRQF_TRIGGER_RISING | IRQF_ONESHOT, dev_name(&(gf_dev->spi->dev)), gf_dev);
+		if (gf_dev->irq && gf_dev->irq_count) {
+			gf_debug(INFO_LOG, "%s forge probe-irq already holds irq %d, skip request\n",
+				 __func__, gf_dev->irq);
+			retval = 0;
+		} else {
+			gf_irq_gpio_cfg(gf_dev);
+			retval = request_threaded_irq(gf_dev->irq, NULL, gf_irq,
+					IRQF_TRIGGER_RISING | IRQF_ONESHOT, dev_name(&(gf_dev->spi->dev)), gf_dev);
+		}
 		if (!retval)
 			gf_debug(INFO_LOG, "%s irq thread request success!\n", __func__);
 		else
@@ -1127,10 +1224,27 @@ static void gf_miso_gpio_cfg(struct gf_device *gf_dev, u8 pullhigh)
 {
 
 #ifdef CONFIG_OF
-	if (pullhigh)
-		pinctrl_select_state(gf_dev->pinctrl_gpios, gf_dev->pins_miso_pullhigh);
-	else
-		pinctrl_select_state(gf_dev->pinctrl_gpios, gf_dev->pins_miso_spi);
+	if (pullhigh) {
+		if (!IS_ERR_OR_NULL(gf_dev->pinctrl_gpios) &&
+		    !IS_ERR_OR_NULL(gf_dev->pins_miso_pullhigh))
+			pinctrl_select_state(gf_dev->pinctrl_gpios, gf_dev->pins_miso_pullhigh);
+		/* Also force the pads directly, since &pio sub-nodes may be
+		 * dropped by the pinctrl layer. Sequence as in the stock
+		 * gf516m_pull_miso_high (MISO GPIO mode, input, pull-up).
+		 * MI = GPIO95, CS = GPIO96, MO = GPIO97, CLK = GPIO98, SPI = mode 1. */
+		mt_set_gpio_mode(GPIO95, GPIO_MODE_00);
+		mt_set_gpio_dir(GPIO95, GPIO_DIR_IN);
+		mt_set_gpio_pull_enable(GPIO95, GPIO_PULL_ENABLE);
+		mt_set_gpio_pull_select(GPIO95, GPIO_PULL_UP);
+	} else {
+		if (!IS_ERR_OR_NULL(gf_dev->pinctrl_gpios) &&
+		    !IS_ERR_OR_NULL(gf_dev->pins_miso_spi))
+			pinctrl_select_state(gf_dev->pinctrl_gpios, gf_dev->pins_miso_spi);
+		mt_set_gpio_mode(GPIO95, GPIO_MODE_01);	/* SPI0_MI */
+		mt_set_gpio_mode(GPIO96, GPIO_MODE_01);	/* SPI0_CSB */
+		mt_set_gpio_mode(GPIO97, GPIO_MODE_01);	/* SPI0_MO */
+		mt_set_gpio_mode(GPIO98, GPIO_MODE_01);	/* SPI0_CLK */
+	}
 
 #endif
 }
@@ -1722,10 +1836,44 @@ static int gf_probe(struct spi_device *spi)
 		goto err_input;
 	}
 
+	/* Hold the EINT from probe on, so /proc/interrupts shows sensor
+	 * activity without a HAL; GF_IOC_INIT then skips its own request. */
+	if (forge_fp_probe_irq) {
+		gf_irq_gpio_cfg(gf_dev);
+		if (gf_dev->irq) {
+			status = request_threaded_irq(gf_dev->irq, NULL, gf_irq,
+					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+					"goodix_fp_irq", gf_dev);
+			if (status) {
+				pr_err("[FORGE_FP] probe irq request failed %d (irq=%d)\n",
+				       status, gf_dev->irq);
+				gf_dev->irq = 0;
+			} else {
+				gf_dev->irq_count = 1;
+				pr_info("[FORGE_FP] probe irq %d requested+enabled (EINT8/GPIO8)\n",
+					gf_dev->irq);
+			}
+			status = 0;
+		} else {
+			pr_err("[FORGE_FP] irq map=0 - &fingerprint interrupts/eintc missing in dtb\n");
+		}
+	}
+
+	/* Arm autonomous touch detection (mBack tap-back): 0x8043 <- 0x01 (KEY
+	 * mode). Needs the SPI clock, so the master clock stays on past probe. */
+	if (forge_fp_keymode) {
+		u8 forge_mode = 0xFF;
+
+		gf_spi_write_byte_ree(gf_dev, 0x8043, 0x01);
+		gf_spi_read_byte_ree(gf_dev, 0x8043, &forge_mode);
+		pr_info("[FORGE_FP] keymode armed: 0x8043=0x%02x (want 0x01)\n", forge_mode);
+	}
+
 	gf_dev->probe_finish = 1;
 	gf_dev->is_sleep_mode = 0;
 	gf_debug(INFO_LOG, "%s probe finished\n", __func__);
-	gf_spi_clk_enable(gf_dev, 0);
+	if (!forge_fp_keymode)
+		gf_spi_clk_enable(gf_dev, 0);
 
 	FUNC_EXIT();
 	return 0;
@@ -1841,6 +1989,11 @@ static int __init gf_init(void)
 {
 	int status = 0;
 
+	/* M681 only: on L681 the sensor reads 0xff with these pads
+	 * (gf_rst_pin(), GF_L681_LDO_PIN), and the stock L681H HAL talks to a
+	 * GF66xx/GF616, not a GF516M. */
+	if (!m3note_board_is(M3NOTE_BOARD_M681))
+		return -ENODEV;
 	FUNC_ENTRY();
 
 	status = spi_register_driver(&gf_spi_driver);

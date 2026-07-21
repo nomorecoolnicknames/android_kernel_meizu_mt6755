@@ -25,5 +25,15 @@ config GOODIX_FINGERPRINT
 	---help---
 	Goodix Fingerprint chip GF316M/GX556/GF3118M/GF518M/GF5118M/GF516M/GF816M/GF3208/GF3206/GF3266/GF3288/GF5206/GF5216/GF5208 TEE driver
 
+config GOODIX_SENSOR_TYPE
+	string "Goodix sensor type"
+	depends on GOODIX_FINGERPRINT
+	default "GF3208"
+	---help---
+	Chip name compiled into gf_spi_tee.c. Names from the oswego_m list
+	(GF316M/GF318M/GF3118M/GF518M/GF5118M/GF516M/GF816M) additionally run
+	the REE-SPI probe path (MISO-high reset dance + flash fw check).
+	m681 uses "GF516M" (stock m3note defconfig + stock-3.10 dmesg chip id).
+
 endif
 endmenu

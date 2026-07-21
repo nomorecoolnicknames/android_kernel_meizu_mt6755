@@ -5,6 +5,10 @@
 # Each configuration option enables a list of files.
 #include $(srctree)/drivers/misc/mediatek/Makefile.custom
 
+# MTK_PLATFORM is normally set only inside drivers/misc/mediatek; derive it
+# here so the include path resolves.
+MTK_PLATFORM := $(subst ",,$(CONFIG_MTK_PLATFORM))
+
 ccflags-y += -I$(srctree)/drivers/spi/mediatek/$(MTK_PLATFORM)
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/include
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat

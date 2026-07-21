@@ -21,7 +21,12 @@
 #include <linux/types.h>
 #include <linux/netlink.h>
 #include <linux/cdev.h>
+#ifdef CONFIG_ARCH_MT6755
+/* The MT6755 BSP names this header mt_spi.h (mtk_spi.h on MT6757). */
+#include "mt_spi.h"
+#else
 #include "mtk_spi.h"
+#endif
 
 /**************************debug******************************/
 #define ERR_LOG  (0)
