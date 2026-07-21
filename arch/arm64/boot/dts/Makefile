@@ -1,3 +1,8 @@
+# The board DTS trips dtc's ranges_format check (/soc has an empty "ranges"
+# with #address/#size-cells = 1 while the root uses 2); -f still emits a
+# valid dtb.
+DTC_FLAGS += -f
+
 dts-dirs += altera
 dts-dirs += amd
 dts-dirs += apm
