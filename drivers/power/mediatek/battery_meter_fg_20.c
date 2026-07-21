@@ -55,10 +55,15 @@
 #include <mt-plat/battery_meter_hal.h>
 #include <mach/mtk_battery_meter.h>
 #include <mach/mtk_battery_meter_table.h>
+#include <mach/mtk_battery_meter_table_l681.h>
+#include <linux/m3note_board.h>
 #include <mach/mtk_pmic.h>
 
 
 #include <mt-plat/upmu_common.h>
+
+/* battery_common_fg_20.c, P1 */
+extern bool forge_rtc_soc_owned(void);
 
 
 /* ============================================================ // */
@@ -71,6 +76,45 @@ static DEFINE_MUTEX(FGADC_mutex);
 int Enable_FGADC_LOG = BMLOG_INFO_LEVEL;
 
 #define NETLINK_FGD 26
+/* Temperature corner overrides, applied where the cust blob is served (not
+ * at driver init), so restarting fuelgauged (stop/start) re-runs the cmd28
+ * handshake and picks up a new value. Defaults are the compiled macro
+ * values. (T0 = 110 sits out of order next to T1=0, T2=25, T3=50; -10
+ * would make the ladder monotonic.) */
+/* Working-table probe. battery_profile_temperature[] /
+ * r_profile_temperature[] are the last two arrays of the served blob
+ * (+3216 and +7236); the kernel never writes them (their _size is never
+ * assigned), so it ships 0-sized, all-zero arrays, and the daemon dumps a
+ * working table of 24 zero pairs.
+ *   1 = write a marker pattern (percentage = i, voltage = 3000 + 10*i). If
+ *       the daemon's "<vol,res> ... at N" dump echoes it, the daemon reads
+ *       these arrays as input and the kernel must fill them; if the dump
+ *       stays zero, they are the daemon's own output slots.
+ *   2 = serve the real T2 profile and its r-table (the corner nearest
+ *       normal operating temperature).
+ * 0 = off. */
+/* Override the four profile _size fields served to the daemon. The kernel
+ * ships 77 (the M681 vendor curve length) into arrays declared [100]; a
+ * daemon that validates the count or expects a fixed length would reject
+ * 77 silently. 0 = leave the real sizes alone. */
+static int forge_fg_prof_size;
+module_param(forge_fg_prof_size, int, 0644);
+MODULE_PARM_DESC(forge_fg_prof_size, "m681: 0=real size (77), else override battery/r profile _size served to fuelgauged (restart the daemon to apply)");
+
+static int forge_fg_fill_wt;
+module_param(forge_fg_fill_wt, int, 0644);
+MODULE_PARM_DESC(forge_fg_fill_wt, "m681: 0=off, 1=marker pattern in battery/r_profile_temperature, 2=copy the T2 profile (restart fuelgauged to apply)");
+
+static int forge_fg_t0 = TEMPERATURE_T0;
+static int forge_fg_t1 = TEMPERATURE_T1;
+static int forge_fg_t2 = TEMPERATURE_T2;
+static int forge_fg_t3 = TEMPERATURE_T3;
+module_param(forge_fg_t0, int, 0644);
+module_param(forge_fg_t1, int, 0644);
+module_param(forge_fg_t2, int, 0644);
+module_param(forge_fg_t3, int, 0644);
+MODULE_PARM_DESC(forge_fg_t0, "m681: battery temperature corner T0 served to fuelgauged (default = compiled TEMPERATURE_T0; restart the daemon to apply)");
+
 #define CUST_SETTING_VERSION 0x100000
 #define FGD_CHECK_VERSION 0x100001
 
@@ -460,6 +504,76 @@ struct battery_meter_table_custom_data {
 struct battery_meter_custom_data batt_meter_cust_data;
 struct battery_meter_table_custom_data batt_meter_table_cust_data;
 
+/* Voltage -> SOC estimate for the pre-daemon window.
+ *
+ * In FG2.0 the kernel has no self-computed SOC: BMT_status.SOC is 0 at
+ * init and gFG_capacity_by_c is -1 until the daemon's first netlink SET, so
+ * an early publish had nothing to publish and put a hard 0 on the battery
+ * psy (Android then shuts down). The one early signal is bat_vol from the
+ * ADC; map it through the ZCV curve already resident in this kernel
+ * (battery_profile_t2, the 25 C table, vendor row picked at probe). If that
+ * table reads as zeros, fall back to a generic Li-ion OCV curve. The result
+ * is clamped to [1, 99]: an estimate may never order a shutdown (0) nor
+ * claim FULL (100).
+ *
+ * bat_vol is a loaded voltage, not OCV, so the estimate reads a few percent
+ * low under discharge and high while charging. */
+int forge_vbat_to_soc(int vbat_mv)
+{
+	BATTERY_PROFILE_STRUCT *p = batt_meter_table_cust_data.battery_profile_t2;
+	int n = batt_meter_table_cust_data.battery_profile_t2_size;
+	int i;
+	int soc = 1;
+
+	if (n > 1 && n <= 100 && p[0].voltage >= 3000 &&
+	    p[0].voltage > p[n - 1].voltage) {
+		/* resident curve: DOD ascending, voltage descending */
+		if (vbat_mv >= p[0].voltage)
+			return 99;
+		for (i = 1; i < n; i++) {
+			if (vbat_mv >= p[i].voltage) {
+				int v_hi = p[i - 1].voltage;
+				int v_lo = p[i].voltage;
+				int d_lo = p[i - 1].percentage;
+				int d_hi = p[i].percentage;
+				int dod = d_hi;
+
+				if (v_hi > v_lo)
+					dod = d_hi - ((d_hi - d_lo) *
+					      (vbat_mv - v_lo)) / (v_hi - v_lo);
+				soc = 100 - dod;
+				break;
+			}
+		}
+	} else {
+		/* resident table unusable (all-zero cmd28 family) ->
+		 * generic Li-ion OCV piecewise curve, mV : percent */
+		static const int curve[][2] = {
+			{4350, 99}, {4200, 90}, {4080, 78}, {3980, 65},
+			{3870, 55}, {3760, 42}, {3690, 30}, {3620, 18},
+			{3520, 8}, {3450, 3}, {3350, 1}
+		};
+		int m = ARRAY_SIZE(curve);
+
+		if (vbat_mv >= curve[0][0])
+			return 99;
+		for (i = 1; i < m; i++) {
+			if (vbat_mv >= curve[i][0]) {
+				soc = curve[i][1] + ((curve[i - 1][1] -
+				      curve[i][1]) * (vbat_mv - curve[i][0])) /
+				      (curve[i - 1][0] - curve[i][0]);
+				break;
+			}
+		}
+	}
+
+	if (soc < 1)
+		soc = 1;
+	if (soc > 99)
+		soc = 99;
+	return soc;
+}
+
 /* Temperature window size */
 #define TEMP_AVERAGE_SIZE	30
 kal_bool gFG_Is_offset_init = KAL_FALSE;
@@ -467,14 +581,53 @@ kal_bool gFG_Is_offset_init = KAL_FALSE;
 #ifdef MTK_MULTI_BAT_PROFILE_SUPPORT
 unsigned int g_fg_battery_id;
 
+/*
+ * l681 (M3 Note L681H) has its own stock gauge: 2 battery profiles of 100
+ * rows, battery ID on AUXADC channel 12 (500 mV threshold), its Q_MAX and NTC
+ * tables (mtk_battery_meter_table_l681.h) and a few cust_battery_meter.h
+ * values (forge_gauge_l681_params). The m681 tables and values stay for m681
+ * and for an unknown board.
+ */
+static bool forge_gauge_l681(void)
+{
+	return m3note_board_known_is(M3NOTE_BOARD_L681);
+}
+
+#define FORGE_QMAX(n) (forge_gauge_l681() ? l681_g_Q_MAX_##n[g_fg_battery_id] : \
+		       g_Q_MAX_##n[g_fg_battery_id])
+
 #ifdef MTK_GET_BATTERY_ID_BY_AUXADC
+/* Vendor profile override: -1 (default) = stock behaviour, read AP AUXADC
+ * ch13 and map via g_battery_id_voltage[]; 0..TOTAL_BATTERY_NUMBER-1 =
+ * force that profile (runtime-writable, applied at the next
+ * __batt_meter_init_cust_data_from_cust_header call, i.e. the next boot). */
+static int forge_gauge_batid = -1;
+module_param(forge_gauge_batid, int, 0644);
+MODULE_PARM_DESC(forge_gauge_batid,
+		 "m681 battery vendor profile: -1=auto (AUXADC ch13), 0..3=force");
+
 void fgauge_get_profile_id(void)
 {
 	int id_volt = 0;
 	int id = 0;
 	int ret = 0;
 
-	ret = IMM_GetOneChannelValue_Cali(BATTERY_ID_CHANNEL_NUM, &id_volt);
+	int ch = BATTERY_ID_CHANNEL_NUM, n = TOTAL_BATTERY_NUMBER;
+	const signed int *idv = g_battery_id_voltage;
+
+	if (forge_gauge_l681()) {
+		ch = L681_BATTERY_ID_CHANNEL_NUM;
+		n = L681_TOTAL_BATTERY_NUMBER;
+		idv = l681_battery_id_voltage;
+	}
+	if (forge_gauge_batid >= 0 && forge_gauge_batid < n) {
+		g_fg_battery_id = forge_gauge_batid;
+		pr_notice("[FORGE_GAUGE] battery id FORCED to %d (forge_gauge_batid)\n",
+			  g_fg_battery_id);
+		return;
+	}
+
+	ret = IMM_GetOneChannelValue_Cali(ch, &id_volt);
 	if (ret != 0)
 		bm_info("[fgauge_get_profile_id]id_volt read fail\n");
 	else
@@ -485,16 +638,17 @@ void fgauge_get_profile_id(void)
 		return;
 	}
 
-	for (id = 0; id < TOTAL_BATTERY_NUMBER; id++) {
-		if (id_volt < g_battery_id_voltage[id]) {
+	for (id = 0; id < n; id++) {
+		if (id_volt < idv[id]) {
 			g_fg_battery_id = id;
 			break;
-		} else if (g_battery_id_voltage[id] == -1) {
-			g_fg_battery_id = TOTAL_BATTERY_NUMBER - 1;
+		} else if (idv[id] == -1) {
+			g_fg_battery_id = n - 1;
 		}
 	}
 
-	bm_info("[fgauge_get_profile_id]Battery id (%d)\n", g_fg_battery_id);
+	pr_notice("[FORGE_GAUGE] battery id=%u id_volt=%duV ch=%d (ret=%d, auto, %s tables)\n",
+		  g_fg_battery_id, id_volt, ch, ret, forge_gauge_l681() ? "l681" : "m681");
 }
 #elif defined(MTK_GET_BATTERY_ID_BY_GPIO)
 void fgauge_get_profile_id(void)
@@ -509,10 +663,127 @@ void fgauge_get_profile_id(void)
 #endif
 #endif
 
+#ifdef MTK_MULTI_BAT_PROFILE_SUPPORT
+/* l681: the stock L681H profile rows (no r_profile_offset there) */
+static void forge_gauge_copy_l681(void)
+{
+	unsigned int id = g_fg_battery_id;
+
+	if (id >= L681_TOTAL_BATTERY_NUMBER)
+		id = L681_TOTAL_BATTERY_NUMBER - 1;
+#define FORGE_L681_COPY(f) do { \
+	batt_meter_table_cust_data.f##_size = L681_PROFILE_ROWS; \
+	memcpy(&batt_meter_table_cust_data.f, &l681_##f[id], sizeof(l681_##f[id])); \
+	} while (0)
+	FORGE_L681_COPY(battery_profile_t0);
+	FORGE_L681_COPY(battery_profile_t1);
+	FORGE_L681_COPY(battery_profile_t2);
+	FORGE_L681_COPY(battery_profile_t3);
+	FORGE_L681_COPY(r_profile_t0);
+	FORGE_L681_COPY(r_profile_t1);
+	FORGE_L681_COPY(r_profile_t2);
+	FORGE_L681_COPY(r_profile_t3);
+#undef FORGE_L681_COPY
+	pr_notice("[FORGE_GAUGE] l681 stock profile %u: t2[0]=%d mV t2[%d]=%d mV\n", id,
+		  l681_battery_profile_t2[id][0].voltage, L681_PROFILE_ROWS - 1,
+		  l681_battery_profile_t2[id][L681_PROFILE_ROWS - 1].voltage);
+}
+#endif
+
 int __batt_meter_init_cust_data_from_cust_header(struct platform_device *dev)
 {
 	/* cust_battery_meter_table.h */
 
+#ifdef MTK_MULTI_BAT_PROFILE_SUPPORT
+	/* The M681 tables are [TOTAL_BATTERY_NUMBER][77] (4 vendor profiles),
+	 * but this function used the single-profile flat copy:
+	 * sizeof(battery_profile_t0) = 4*77 rows = 2464 B copied into each
+	 * 100-row (800 B) struct field. The _size fields handed to fuelgauged
+	 * became 308 (beyond the 100-entry arrays on both sides of the netlink
+	 * ABI) with the 4 vendor curves concatenated, and the last memcpy
+	 * (r_profile_t3, struct tail) overflowed 860 B past
+	 * batt_meter_table_cust_data into adjacent .bss, clobbering FG globals
+	 * (meter_initilized non-zero -> battery_meter_initial no-ops -> the
+	 * FGADC is never initialised -> FG_Current/CAR stay 0). As in the stock
+	 * 3.10 code under CONFIG_MTK_MULTI_BAT_PROFILE_SUPPORT: pick the vendor
+	 * row via fgauge_get_profile_id() and copy only battery_profile_tX[id] /
+	 * r_profile_tX[id] (77 rows), plus the per-vendor r_profile_offset. */
+	{
+		int i;
+
+		fgauge_get_profile_id();
+
+		batt_meter_table_cust_data.battery_profile_t0_size =
+		    sizeof(battery_profile_t0[g_fg_battery_id]) / sizeof(BATTERY_PROFILE_STRUCT);
+
+		memcpy(&batt_meter_table_cust_data.battery_profile_t0,
+		       &battery_profile_t0[g_fg_battery_id],
+		       sizeof(battery_profile_t0[g_fg_battery_id]));
+
+		batt_meter_table_cust_data.battery_profile_t1_size =
+		    sizeof(battery_profile_t1[g_fg_battery_id]) / sizeof(BATTERY_PROFILE_STRUCT);
+
+		memcpy(&batt_meter_table_cust_data.battery_profile_t1,
+		       &battery_profile_t1[g_fg_battery_id],
+		       sizeof(battery_profile_t1[g_fg_battery_id]));
+
+		batt_meter_table_cust_data.battery_profile_t2_size =
+		    sizeof(battery_profile_t2[g_fg_battery_id]) / sizeof(BATTERY_PROFILE_STRUCT);
+
+		memcpy(&batt_meter_table_cust_data.battery_profile_t2,
+		       &battery_profile_t2[g_fg_battery_id],
+		       sizeof(battery_profile_t2[g_fg_battery_id]));
+
+		batt_meter_table_cust_data.battery_profile_t3_size =
+		    sizeof(battery_profile_t3[g_fg_battery_id]) / sizeof(BATTERY_PROFILE_STRUCT);
+
+		memcpy(&batt_meter_table_cust_data.battery_profile_t3,
+		       &battery_profile_t3[g_fg_battery_id],
+		       sizeof(battery_profile_t3[g_fg_battery_id]));
+
+		batt_meter_table_cust_data.r_profile_t0_size =
+		    sizeof(r_profile_t0[g_fg_battery_id]) / sizeof(R_PROFILE_STRUCT);
+
+		memcpy(&batt_meter_table_cust_data.r_profile_t0,
+		       &r_profile_t0[g_fg_battery_id], sizeof(r_profile_t0[g_fg_battery_id]));
+
+		for (i = 0; i < batt_meter_table_cust_data.r_profile_t0_size; i++)
+			batt_meter_table_cust_data.r_profile_t0[i].resistance +=
+			    r_profile_offset[g_fg_battery_id][0];
+
+		batt_meter_table_cust_data.r_profile_t1_size =
+		    sizeof(r_profile_t1[g_fg_battery_id]) / sizeof(R_PROFILE_STRUCT);
+
+		memcpy(&batt_meter_table_cust_data.r_profile_t1,
+		       &r_profile_t1[g_fg_battery_id], sizeof(r_profile_t1[g_fg_battery_id]));
+
+		for (i = 0; i < batt_meter_table_cust_data.r_profile_t1_size; i++)
+			batt_meter_table_cust_data.r_profile_t1[i].resistance +=
+			    r_profile_offset[g_fg_battery_id][1];
+
+		batt_meter_table_cust_data.r_profile_t2_size =
+		    sizeof(r_profile_t2[g_fg_battery_id]) / sizeof(R_PROFILE_STRUCT);
+
+		memcpy(&batt_meter_table_cust_data.r_profile_t2,
+		       &r_profile_t2[g_fg_battery_id], sizeof(r_profile_t2[g_fg_battery_id]));
+
+		for (i = 0; i < batt_meter_table_cust_data.r_profile_t2_size; i++)
+			batt_meter_table_cust_data.r_profile_t2[i].resistance +=
+			    r_profile_offset[g_fg_battery_id][2];
+
+		batt_meter_table_cust_data.r_profile_t3_size =
+		    sizeof(r_profile_t3[g_fg_battery_id]) / sizeof(R_PROFILE_STRUCT);
+
+		memcpy(&batt_meter_table_cust_data.r_profile_t3,
+		       &r_profile_t3[g_fg_battery_id], sizeof(r_profile_t3[g_fg_battery_id]));
+
+		for (i = 0; i < batt_meter_table_cust_data.r_profile_t3_size; i++)
+			batt_meter_table_cust_data.r_profile_t3[i].resistance +=
+			    r_profile_offset[g_fg_battery_id][3];
+	}
+	if (forge_gauge_l681())
+		forge_gauge_copy_l681();	/* replaces the M681 rows above */
+#else
 	batt_meter_table_cust_data.battery_profile_t0_size = sizeof(battery_profile_t0)
 	    / sizeof(BATTERY_PROFILE_STRUCT);
 
@@ -555,6 +826,7 @@ int __batt_meter_init_cust_data_from_cust_header(struct platform_device *dev)
 	    sizeof(r_profile_t3) / sizeof(R_PROFILE_STRUCT);
 
 	memcpy(&batt_meter_table_cust_data.r_profile_t3, &r_profile_t3, sizeof(r_profile_t3));
+#endif				/* MTK_MULTI_BAT_PROFILE_SUPPORT */
 
 	/* cust_battery_meter.h */
 
@@ -586,6 +858,8 @@ int __batt_meter_init_cust_data_from_cust_header(struct platform_device *dev)
 	batt_meter_cust_data.temperature_t1 = TEMPERATURE_T1;
 	batt_meter_cust_data.temperature_t2 = TEMPERATURE_T2;
 	batt_meter_cust_data.temperature_t3 = TEMPERATURE_T3;
+	/* the corners are re-read at cmd28 serve time (see below); these are
+	 * the boot defaults */
 	batt_meter_cust_data.temperature_t = TEMPERATURE_T;
 
 	batt_meter_cust_data.fg_meter_resistance = FG_METER_RESISTANCE;
@@ -717,6 +991,21 @@ int __batt_meter_init_cust_data_from_cust_header(struct platform_device *dev)
 	batt_meter_cust_data.zcv_int_enable = 0;
 #endif
 
+#ifdef MTK_MULTI_BAT_PROFILE_SUPPORT
+	/* l681: stock hq6755_66_b1a_l cust_battery_meter.h values where they
+	 * differ from the m681 header (Q_MAX_POS_* single values = id 1 there) */
+	if (forge_gauge_l681()) {
+		batt_meter_cust_data.car_tune_value = 118;
+		batt_meter_cust_data.difference_hwocv_rtc = 30;
+		batt_meter_cust_data.difference_hwocv_swocv = 30;
+		batt_meter_cust_data.difference_swocv_rtc = 10;
+		batt_meter_cust_data.batterypseudo100 = 97;
+		batt_meter_cust_data.batterypseudo1 = 6;
+		batt_meter_cust_data.q_max_pos_50 = 4053;
+		batt_meter_cust_data.q_max_pos_25 = 4113;
+		batt_meter_cust_data.q_max_pos_0 = 4092;
+	}
+#endif
 
 	return 0;
 }
@@ -1181,22 +1470,53 @@ int get_r_fg_value(void)
 }
 
 #ifdef MTK_MULTI_BAT_PROFILE_SUPPORT
+/*
+ * The whole NTC table. The stock function stopped at row 16 and clamped to
+ * -20 / 60 C; the M681 table has 19 rows (-25..65 C, BAT_NTC_10 in
+ * mtk_battery_meter_table.h), so 55-65 C read as 60 and anything colder
+ * than -20 as -20. Now every row of the board's table is used. Colder than
+ * the table: the coldest row (-25 / -20 C). Hotter than the table:
+ * FORGE_NTC_OVER_TABLE_C, with a rate-limited log line. It must clear every
+ * over-temperature threshold of the chain, not just the kernel's (charging
+ * stops at >= 46 C, mt_battery_thermal_check powers off at >= 60 C):
+ * Android's BatteryService shuts down at batteryTemperature > 680
+ * (config_shutdownBatteryTemperature, 68.0 C), which the table's hottest
+ * rows (65 C M681, 60 C L681) never reach; the mtktsbattery zone trips at
+ * 55/49/48 C (bcct only, tzbatt_initcfg.h), and the Android 9 profile has
+ * no MTK thermal policy. So 70 C.
+ */
+#define FORGE_NTC_OVER_TABLE_C	70
+
 int BattThermistorConverTemp(int Res)
 {
-	int i = 0;
+	int i = 0, n;
 	int RES1 = 0, RES2 = 0;
 	int TBatt_Value = -200, TMP1 = 0, TMP2 = 0;
-	BATT_TEMPERATURE *batt_temperature_table = &Batt_Temperature_Table[g_fg_battery_id];
+	/* Batt_Temperature_Table is [TOTAL_BATTERY_NUMBER][19]; the stock
+	 * `&Table[id]` yields a pointer to the row array (a warning on 3.10,
+	 * -Werror on 4.4). Row decay keeps the semantics. */
+	BATT_TEMPERATURE *batt_temperature_table = forge_gauge_l681() ?
+		l681_Batt_Temperature_Table[g_fg_battery_id] :
+		Batt_Temperature_Table[g_fg_battery_id];
 
+	n = forge_gauge_l681() ? ARRAY_SIZE(l681_Batt_Temperature_Table[0]) :
+				 ARRAY_SIZE(Batt_Temperature_Table[0]);
 	if (Res >= batt_temperature_table[0].TemperatureR) {
-		TBatt_Value = -20;
-	} else if (Res <= batt_temperature_table[16].TemperatureR) {
-		TBatt_Value = 60;
+		TBatt_Value = batt_temperature_table[0].BatteryTemp;
+	} else if (Res == batt_temperature_table[n - 1].TemperatureR) {
+		TBatt_Value = batt_temperature_table[n - 1].BatteryTemp;
+	} else if (Res < batt_temperature_table[n - 1].TemperatureR) {
+		TBatt_Value = max(FORGE_NTC_OVER_TABLE_C,
+				  batt_temperature_table[n - 1].BatteryTemp);
+		pr_warn_ratelimited("[FORGE_GAUGE] NTC %d ohm is hotter than the table's %d C (%d ohm): reporting %d C\n",
+				    Res, batt_temperature_table[n - 1].BatteryTemp,
+				    batt_temperature_table[n - 1].TemperatureR,
+				    TBatt_Value);
 	} else {
 		RES1 = batt_temperature_table[0].TemperatureR;
 		TMP1 = batt_temperature_table[0].BatteryTemp;
 
-		for (i = 0; i <= 16; i++) {
+		for (i = 0; i < n; i++) {
 			if (Res >= batt_temperature_table[i].TemperatureR) {
 				RES2 = batt_temperature_table[i].TemperatureR;
 				TMP2 = batt_temperature_table[i].BatteryTemp;
@@ -1223,27 +1543,27 @@ signed int fgauge_get_Q_max(signed short temperature)
 
 	if (temperature <= TEMPERATURE_T1) {
 		low_temperature = (-10);
-		tmp_Q_max_1 = g_Q_MAX_NEG_10[g_fg_battery_id];
+		tmp_Q_max_1 = FORGE_QMAX(NEG_10);
 		high_temperature = TEMPERATURE_T1;
-		tmp_Q_max_2 = g_Q_MAX_POS_0[g_fg_battery_id];
+		tmp_Q_max_2 = FORGE_QMAX(POS_0);
 
 		if (temperature < low_temperature)
 			temperature = low_temperature;
 
 	} else if (temperature <= TEMPERATURE_T2) {
 		low_temperature = TEMPERATURE_T1;
-		tmp_Q_max_1 = g_Q_MAX_POS_0[g_fg_battery_id];
+		tmp_Q_max_1 = FORGE_QMAX(POS_0);
 		high_temperature = TEMPERATURE_T2;
-		tmp_Q_max_2 = g_Q_MAX_POS_25[g_fg_battery_id];
+		tmp_Q_max_2 = FORGE_QMAX(POS_25);
 
 		if (temperature < low_temperature)
 			temperature = low_temperature;
 
 	} else {
 		low_temperature = TEMPERATURE_T2;
-		tmp_Q_max_1 = g_Q_MAX_POS_25[g_fg_battery_id];
+		tmp_Q_max_1 = FORGE_QMAX(POS_25);
 		high_temperature = TEMPERATURE_T3;
-		tmp_Q_max_2 = g_Q_MAX_POS_50[g_fg_battery_id];
+		tmp_Q_max_2 = FORGE_QMAX(POS_50);
 
 		if (temperature > high_temperature)
 			temperature = high_temperature;
@@ -1285,27 +1605,27 @@ signed int fgauge_get_Q_max_high_current(signed short temperature)
 
 	if (temperature <= TEMPERATURE_T1) {
 		low_temperature = (-10);
-		tmp_Q_max_1 = g_Q_MAX_NEG_10_H_CURRENT[g_fg_battery_id];
+		tmp_Q_max_1 = FORGE_QMAX(NEG_10_H_CURRENT);
 		high_temperature = TEMPERATURE_T1;
-		tmp_Q_max_2 = g_Q_MAX_POS_0_H_CURRENT[g_fg_battery_id];
+		tmp_Q_max_2 = FORGE_QMAX(POS_0_H_CURRENT);
 
 		if (temperature < low_temperature)
 			temperature = low_temperature;
 
 	} else if (temperature <= TEMPERATURE_T2) {
 		low_temperature = TEMPERATURE_T1;
-		tmp_Q_max_1 = g_Q_MAX_POS_0_H_CURRENT[g_fg_battery_id];
+		tmp_Q_max_1 = FORGE_QMAX(POS_0_H_CURRENT);
 		high_temperature = TEMPERATURE_T2;
-		tmp_Q_max_2 = g_Q_MAX_POS_25_H_CURRENT[g_fg_battery_id];
+		tmp_Q_max_2 = FORGE_QMAX(POS_25_H_CURRENT);
 
 		if (temperature < low_temperature)
 			temperature = low_temperature;
 
 	} else {
 		low_temperature = TEMPERATURE_T2;
-		tmp_Q_max_1 = g_Q_MAX_POS_25_H_CURRENT[g_fg_battery_id];
+		tmp_Q_max_1 = FORGE_QMAX(POS_25_H_CURRENT);
 		high_temperature = TEMPERATURE_T3;
-		tmp_Q_max_2 = g_Q_MAX_POS_50_H_CURRENT[g_fg_battery_id];
+		tmp_Q_max_2 = FORGE_QMAX(POS_50_H_CURRENT);
 
 		if (temperature > high_temperature)
 			temperature = high_temperature;
@@ -1644,8 +1964,8 @@ void fgauge_algo_run_get_init_data(void)
 #endif
 	kal_bool charging_enable = KAL_FALSE;
 
-#if defined(CONFIG_MTK_KERNEL_POWER_OFF_CHARGING) && !defined(SWCHR_POWER_PATH)
-	if (get_boot_mode() != LOW_POWER_OFF_CHARGING_BOOT)
+#if defined(CONFIG_MTK_KERNEL_POWER_OFF_CHARGING)
+	if (swchr_power_path() || get_boot_mode() != LOW_POWER_OFF_CHARGING_BOOT)
 #endif
 		/*stop charging for vbat measurement */
 		battery_charging_control(CHARGING_CMD_ENABLE, &charging_enable);
@@ -1684,8 +2004,8 @@ void fgauge_algo_run_get_init_data(void)
 {
 	kal_bool charging_enable = KAL_FALSE;
 
-#if defined(CONFIG_MTK_KERNEL_POWER_OFF_CHARGING) && !defined(SWCHR_POWER_PATH)
-	if (get_boot_mode() != LOW_POWER_OFF_CHARGING_BOOT)
+#if defined(CONFIG_MTK_KERNEL_POWER_OFF_CHARGING)
+	if (swchr_power_path() || get_boot_mode() != LOW_POWER_OFF_CHARGING_BOOT)
 #endif
 		/*stop charging for vbat measurement */
 		battery_charging_control(CHARGING_CMD_ENABLE, &charging_enable);
@@ -1703,6 +2023,39 @@ void fgauge_algo_run_get_init_data(void)
 }
 #endif
 
+#if defined(SOC_BY_HW_FG) || defined(SOC_BY_SW_FG)
+/* Lazy FG init. With the deferred battery stack start, fuelgauged attaches
+ * before the first BAT_thread iteration runs battery_meter_initial(), so
+ * the daemon's FG_DAEMON_CMD_GET_BATTERY_INIT_VOLTAGE /
+ * GET_HW_FG_INIT_CURRENT queries returned the never-captured defaults
+ * (gFG_voltage_init = 0); the daemon then seeds D0 from its 3700 mV
+ * fallback and UI_SOC tracks down to ~0 on a full cell. Capture the FG init
+ * data exactly once, on whichever side asks first: the daemon INIT queries
+ * or battery_meter_initial. forge_gauge_lazyinit=0 restores the stock
+ * ordering. */
+static int forge_gauge_lazyinit = 1;
+module_param(forge_gauge_lazyinit, int, 0644);
+MODULE_PARM_DESC(forge_gauge_lazyinit,
+		 "capture FG init data at first use (1=on, 0=legacy ordering)");
+static kal_bool forge_fg_init_done;
+
+static void forge_fg_lazy_init(void)
+{
+	if (!forge_gauge_lazyinit || forge_fg_init_done)
+		return;
+	if (battery_meter_ctrl == NULL)
+		return;	/* pre-probe; battery_meter_initial will cover it */
+	forge_fg_init_done = KAL_TRUE;
+	battery_meter_ctrl(BATTERY_METER_CMD_HW_FG_INIT, NULL);
+	fgauge_algo_run_get_init_data();
+	pr_notice("[FORGE_GAUGE] lazy FG init: voltage_init=%d current_init=%d is_charging_init=%d\n",
+		  gFG_voltage_init, gFG_current_init, gFG_Is_Charging_init);
+}
+#else
+static void forge_fg_lazy_init(void)
+{
+}
+#endif
 
 signed int get_dynamic_period(int first_use, int first_wakeup_time, int battery_capacity_level)
 {
@@ -1942,6 +2295,16 @@ signed int battery_meter_get_charging_current_imm(void)
 
 signed int battery_meter_get_charging_current(void)
 {
+	/*
+	 * L681 as stock: the stock L681H defines EXTERNAL_SWCHR_SUPPORT (3.10
+	 * hq6755_66_b1a_l cust_pmic.h), so this returned 0 there: on the
+	 * BQ24196 board the PMIC ISENSE pin does not sense the charge current.
+	 * This kernel keeps the macro off for both boards, and (ISENSE -
+	 * BATSNS) / R_SENSE read 2600-3100 mA against a real 230-380 mA. Board
+	 * gate, M681 unchanged.
+	 */
+	if (m3note_board_known_is(M3NOTE_BOARD_L681))
+		return 0;
 #ifdef DISABLE_CHARGING_CURRENT_MEASURE
 	return 0;
 #elif defined(AUXADC_SUPPORT_IMM_CURRENT_MODE)
@@ -2141,8 +2504,12 @@ signed int battery_meter_initial(void)
 
 	if (meter_initilized == KAL_FALSE) {
 #if defined(SOC_BY_HW_FG)
-		/* 1. HW initialization */
-		battery_meter_ctrl(BATTERY_METER_CMD_HW_FG_INIT, NULL);
+		/* 1. HW initialization. Skip it if the lazy daemon-attach
+		 * path already ran it: re-running HW_FG_INIT here would reset
+		 * the CAR accumulator while the daemon runs. */
+		if (!(forge_gauge_lazyinit && forge_fg_init_done))
+			battery_meter_ctrl(BATTERY_METER_CMD_HW_FG_INIT, NULL);
+		forge_fg_init_done = KAL_TRUE;
 
 		if (wakeup_fg_algo(FG_MAIN) == -1) {
 			/* fgauge_initialization(); */
@@ -3820,6 +4187,7 @@ void bmd_ctrl_cmd_from_user(void *nl_data, struct fgd_nl_msg_t *ret_msg)
 
 	case FG_DAEMON_CMD_GET_HW_FG_INIT_CURRENT:
 		{
+			forge_fg_lazy_init();
 			ret_msg->fgd_data_len += sizeof(gFG_current_init);
 			memcpy(ret_msg->fgd_data, &gFG_current_init, sizeof(gFG_current_init));
 
@@ -3844,6 +4212,7 @@ void bmd_ctrl_cmd_from_user(void *nl_data, struct fgd_nl_msg_t *ret_msg)
 
 	case FG_DAEMON_CMD_GET_HW_FG_INIT_CURRENT_SIGN:
 		{
+			forge_fg_lazy_init();
 			ret_msg->fgd_data_len += sizeof(gFG_Is_Charging_init);
 			memcpy(ret_msg->fgd_data, &gFG_Is_Charging_init,
 			       sizeof(gFG_Is_Charging_init));
@@ -3915,6 +4284,7 @@ void bmd_ctrl_cmd_from_user(void *nl_data, struct fgd_nl_msg_t *ret_msg)
 
 	case FG_DAEMON_CMD_GET_BATTERY_INIT_VOLTAGE:
 		{
+			forge_fg_lazy_init();
 			ret_msg->fgd_data_len += sizeof(gFG_voltage_init);
 			memcpy(ret_msg->fgd_data, &gFG_voltage_init, sizeof(gFG_voltage_init));
 
@@ -4060,13 +4430,146 @@ void bmd_ctrl_cmd_from_user(void *nl_data, struct fgd_nl_msg_t *ret_msg)
 				break;
 			}
 
+			if (forge_fg_fill_wt) {
+				int i, n;
+
+				if (forge_fg_fill_wt == 1) {
+					n = 24;
+					for (i = 0; i < n; i++) {
+						batt_meter_table_cust_data.battery_profile_temperature[i].percentage = i;
+						batt_meter_table_cust_data.battery_profile_temperature[i].voltage = 3000 + 10 * i;
+						batt_meter_table_cust_data.r_profile_temperature[i].resistance = 100 + i;
+						batt_meter_table_cust_data.r_profile_temperature[i].voltage = 3000 + 10 * i;
+					}
+				} else {
+					n = batt_meter_table_cust_data.battery_profile_t2_size;
+					if (n > 100)
+						n = 100;
+					for (i = 0; i < n; i++) {
+						batt_meter_table_cust_data.battery_profile_temperature[i] =
+							batt_meter_table_cust_data.battery_profile_t2[i];
+						batt_meter_table_cust_data.r_profile_temperature[i] =
+							batt_meter_table_cust_data.r_profile_t2[i];
+					}
+				}
+				batt_meter_table_cust_data.battery_profile_temperature_size = n;
+				batt_meter_table_cust_data.r_profile_temperature_size = n;
+				pr_notice("[FORGE_GAUGE] working-table probe mode=%d: filled %d entries, first=%d:%d\n",
+					  forge_fg_fill_wt, n,
+					  batt_meter_table_cust_data.battery_profile_temperature[0].percentage,
+					  batt_meter_table_cust_data.battery_profile_temperature[0].voltage);
+			}
+
+			/* apply the corner overrides here, so a daemon restart
+			 * re-reads them without a rebuild */
+			batt_meter_cust_data.temperature_t0 = forge_fg_t0;
+			batt_meter_cust_data.temperature_t1 = forge_fg_t1;
+			batt_meter_cust_data.temperature_t2 = forge_fg_t2;
+			batt_meter_cust_data.temperature_t3 = forge_fg_t3;
+			pr_notice("[FORGE_GAUGE] serve cmd28 corners: t0=%d t1=%d t2=%d t3=%d\n",
+				  forge_fg_t0, forge_fg_t1, forge_fg_t2, forge_fg_t3);
+
 			memcpy(ret_msg->fgd_data, &batt_meter_cust_data,
 			       sizeof(batt_meter_cust_data));
 			ret_msg->fgd_data_len += sizeof(batt_meter_cust_data);
 
+			/* Apply the profile-size override, serve, then put the
+			 * real sizes back. It cannot be left in the globals: it
+			 * has to land before this memcpy, and
+			 * battery_profile_t2_size is also the interpolation length
+			 * in forge_vbat_to_soc(), which drives the published
+			 * capacity; leaving it modified would corrupt the published
+			 * percentage, and "write 0 to revert" could not undo it. */
+			{
+				int sz_save[8] = { 0 };
+				/* Read the knob ONCE.  It is a module parameter, so a sysfs
+				 * write between the save and the restore would otherwise make
+				 * the two halves disagree and the restore would put back
+				 * values it never captured -- permanently corrupting the very
+				 * sizes this block exists to leave untouched. */
+				const int sz_req = forge_fg_prof_size;
+
+				if (sz_req > 0) {
+					sz_save[0] = batt_meter_table_cust_data.battery_profile_t0_size;
+					sz_save[1] = batt_meter_table_cust_data.battery_profile_t1_size;
+					sz_save[2] = batt_meter_table_cust_data.battery_profile_t2_size;
+					sz_save[3] = batt_meter_table_cust_data.battery_profile_t3_size;
+					sz_save[4] = batt_meter_table_cust_data.r_profile_t0_size;
+					sz_save[5] = batt_meter_table_cust_data.r_profile_t1_size;
+					sz_save[6] = batt_meter_table_cust_data.r_profile_t2_size;
+					sz_save[7] = batt_meter_table_cust_data.r_profile_t3_size;
+					batt_meter_table_cust_data.battery_profile_t0_size = sz_req;
+					batt_meter_table_cust_data.battery_profile_t1_size = sz_req;
+					batt_meter_table_cust_data.battery_profile_t2_size = sz_req;
+					batt_meter_table_cust_data.battery_profile_t3_size = sz_req;
+					batt_meter_table_cust_data.r_profile_t0_size = sz_req;
+					batt_meter_table_cust_data.r_profile_t1_size = sz_req;
+					batt_meter_table_cust_data.r_profile_t2_size = sz_req;
+					batt_meter_table_cust_data.r_profile_t3_size = sz_req;
+				}
+
 			memcpy(&ret_msg->fgd_data[ret_msg->fgd_data_len],
 			       &batt_meter_table_cust_data, sizeof(batt_meter_table_cust_data));
+
+			if (sz_req > 0) {
+					batt_meter_table_cust_data.battery_profile_t0_size = sz_save[0];
+					batt_meter_table_cust_data.battery_profile_t1_size = sz_save[1];
+					batt_meter_table_cust_data.battery_profile_t2_size = sz_save[2];
+					batt_meter_table_cust_data.battery_profile_t3_size = sz_save[3];
+					batt_meter_table_cust_data.r_profile_t0_size = sz_save[4];
+					batt_meter_table_cust_data.r_profile_t1_size = sz_save[5];
+					batt_meter_table_cust_data.r_profile_t2_size = sz_save[6];
+					batt_meter_table_cust_data.r_profile_t3_size = sz_save[7];
+				}
+			}
+
 			ret_msg->fgd_data_len += sizeof(batt_meter_table_cust_data);
+
+			/* Print the head of what this kernel serves, at serve
+			 * time (the daemon has dumped its received per-temperature
+			 * tables as all zeros while every scalar arrived intact).
+			 * q_max in the same line is the known non-zero control. */
+			/* All four corners, not just T2: at 33 C the daemon interpolates
+			 * T2..T3, and T3 has never actually been looked at.  A degenerate
+			 * corner would explain a degenerate result without any blob bug. */
+			pr_notice("[FORGE_GAUGE] serve corners: t0 sz=%d [0]=%d:%d | t1 sz=%d [0]=%d:%d | t2 sz=%d [0]=%d:%d | t3 sz=%d [0]=%d:%d\n",
+				  batt_meter_table_cust_data.battery_profile_t0_size,
+				  batt_meter_table_cust_data.battery_profile_t0[0].percentage,
+				  batt_meter_table_cust_data.battery_profile_t0[0].voltage,
+				  batt_meter_table_cust_data.battery_profile_t1_size,
+				  batt_meter_table_cust_data.battery_profile_t1[0].percentage,
+				  batt_meter_table_cust_data.battery_profile_t1[0].voltage,
+				  batt_meter_table_cust_data.battery_profile_t2_size,
+				  batt_meter_table_cust_data.battery_profile_t2[0].percentage,
+				  batt_meter_table_cust_data.battery_profile_t2[0].voltage,
+				  batt_meter_table_cust_data.battery_profile_t3_size,
+				  batt_meter_table_cust_data.battery_profile_t3[0].percentage,
+				  batt_meter_table_cust_data.battery_profile_t3[0].voltage);
+			pr_notice("[FORGE_GAUGE] serve r-corners: r0 sz=%d [0]=%d:%d | r1 sz=%d [0]=%d:%d | r2 sz=%d [0]=%d:%d | r3 sz=%d [0]=%d:%d\n",
+				  batt_meter_table_cust_data.r_profile_t0_size,
+				  batt_meter_table_cust_data.r_profile_t0[0].resistance,
+				  batt_meter_table_cust_data.r_profile_t0[0].voltage,
+				  batt_meter_table_cust_data.r_profile_t1_size,
+				  batt_meter_table_cust_data.r_profile_t1[0].resistance,
+				  batt_meter_table_cust_data.r_profile_t1[0].voltage,
+				  batt_meter_table_cust_data.r_profile_t2_size,
+				  batt_meter_table_cust_data.r_profile_t2[0].resistance,
+				  batt_meter_table_cust_data.r_profile_t2[0].voltage,
+				  batt_meter_table_cust_data.r_profile_t3_size,
+				  batt_meter_table_cust_data.r_profile_t3[0].resistance,
+				  batt_meter_table_cust_data.r_profile_t3[0].voltage);
+			pr_notice("[FORGE_GAUGE] serve cmd28: sizes cust=%zu table=%zu t2_size=%d t2[0]=%d:%d t2[1]=%d:%d t2[38]=%d:%d r2[0]=%d q_max=%d\n",
+				  sizeof(batt_meter_cust_data),
+				  sizeof(batt_meter_table_cust_data),
+				  batt_meter_table_cust_data.battery_profile_t2_size,
+				  batt_meter_table_cust_data.battery_profile_t2[0].percentage,
+				  batt_meter_table_cust_data.battery_profile_t2[0].voltage,
+				  batt_meter_table_cust_data.battery_profile_t2[1].percentage,
+				  batt_meter_table_cust_data.battery_profile_t2[1].voltage,
+				  batt_meter_table_cust_data.battery_profile_t2[38].percentage,
+				  batt_meter_table_cust_data.battery_profile_t2[38].voltage,
+				  batt_meter_table_cust_data.r_profile_t2[0].resistance,
+				  batt_meter_cust_data.q_max_pos_25);
 
 			bm_debug("k fgauge_construct_profile_init1 %d:%d %d:%d %d:%d %d:%d %d:%d\n",
 				 batt_meter_table_cust_data.battery_profile_t0[0].percentage,
@@ -4311,6 +4814,17 @@ void bmd_ctrl_cmd_from_user(void *nl_data, struct fgd_nl_msg_t *ret_msg)
 			signed int rtcvalue;
 
 			memcpy(&rtcvalue, &msg->fgd_data[0], sizeof(rtcvalue));
+			/*  P1: with the kernel SOC the field
+			 * holds the published percentage, not UI_SOC2 */
+			if (forge_rtc_soc_owned()) {
+				static bool logged;
+
+				if (!logged)
+					bm_notice("[FORGE_BAT] daemon RTC write %d not applied: the field holds the published percentage\n",
+						  rtcvalue);
+				logged = true;
+				break;
+			}
 			set_rtc_spare_fg_value(rtcvalue);
 			bm_notice("[fg_res] set rtc = %d\n", rtcvalue);
 		}
@@ -4318,8 +4832,17 @@ void bmd_ctrl_cmd_from_user(void *nl_data, struct fgd_nl_msg_t *ret_msg)
 
 	case FG_DAEMON_CMD_SET_POWEROFF:
 		{
+			/* The userspace GM20 gauge daemon commanding a power-off
+			 * over NETLINK_FGD: same forge_chg_poweroff knob, same
+			 * log-and-refuse semantics as the charging_hw gate. */
+			extern int forge_chg_poweroff;
 
-			bm_debug("[fg_res] FG_DAEMON_CMD_SET_POWEROFF\n");
+			if (!forge_chg_poweroff) {
+				pr_emerg("[FORGE_CHG][FGD] REFUSED FG_DAEMON_CMD_SET_POWEROFF (g_fgd_pid=%u, forge_chg_poweroff=0)\n",
+					 g_fgd_pid);
+				break;
+			}
+			bm_err("[fg_res] FG_DAEMON_CMD_SET_POWEROFF\n");
 			kernel_power_off();
 		}
 		break;
@@ -4366,6 +4889,19 @@ void bmd_ctrl_cmd_from_user(void *nl_data, struct fgd_nl_msg_t *ret_msg)
 
 			memcpy(&UI_SOC, &msg->fgd_data[0], sizeof(UI_SOC));
 			bm_debug("[fg_res] UI_SOC2 = %d\n", UI_SOC);
+			/* The only runtime writer of BMT_status.UI_SOC2 that can
+			 * carry a 0 in this build (the smooth variant is #ifdef'd
+			 * out, the mtk_battery.c writer is not compiled at
+			 * CONFIG_MTK_GAUGE_VERSION=20, the sysfs writer stores 50,
+			 * DLPT's 0 bypasses this path), and bm_debug is
+			 * level-gated off. Log changes only: the daemon repeats its
+			 * value every cycle, so this is a few lines per hour. */
+			if (BMT_status.UI_SOC2 != UI_SOC)
+				bm_err("[FORGE_BAT] daemon UI_SOC2 %d -> %d (vbat=%d chr=%d SOC=%d)\n",
+				       BMT_status.UI_SOC2, UI_SOC,
+				       BMT_status.bat_vol,
+				       BMT_status.charger_exist,
+				       BMT_status.SOC);
 #ifdef USING_SMOOTH_UI_SOC2
 			temp_UI_SOC2 = UI_SOC;
 #else
@@ -4398,6 +4934,10 @@ void bmd_ctrl_cmd_from_user(void *nl_data, struct fgd_nl_msg_t *ret_msg)
 		{
 			memcpy(&g_fgd_pid, &msg->fgd_data[0], sizeof(g_fgd_pid));
 			bm_debug("[fg_res] g_fgd_pid = %d\n", g_fgd_pid);
+			/* first command every daemon sends: capture the FG init
+			 * data now, before any of its D0 seed queries can see the
+			 * uninitialised defaults */
+			forge_fg_lazy_init();
 		}
 		break;
 

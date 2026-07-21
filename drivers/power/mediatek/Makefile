@@ -31,6 +31,14 @@ ifeq ($(CONFIG_MTK_GAUGE_VERSION),30)
 else
 	ifeq ($(CONFIG_MTK_SWCHR_SUPPORT),y)
 		obj-$(CONFIG_MTK_SMART_BATTERY) += switch_charging.o
+	else ifeq ($(CONFIG_MTK_SM5414_SUPPORT),y)
+		# SM5414 is a switching charger; the stock 3.10 Makefile selects
+		# switch_charging for it while MTK_SWCHR_SUPPORT stays unset.
+		obj-$(CONFIG_MTK_SMART_BATTERY) += switch_charging.o
+	else ifeq ($(CONFIG_MTK_BQ24196_SUPPORT),y)
+		# L681: BQ24196 switching charger, same selection as the SM5414
+		# branch above (switch_charging without MTK_SWCHR_SUPPORT).
+		obj-$(CONFIG_MTK_SMART_BATTERY) += switch_charging.o
 	else
 		obj-$(CONFIG_MTK_SMART_BATTERY) += linear_charging.o
 	endif

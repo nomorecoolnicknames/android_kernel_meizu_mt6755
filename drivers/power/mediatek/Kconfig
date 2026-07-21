@@ -132,6 +132,16 @@ config MTK_FAN5405_SUPPORT
 	  and config MTK_SWCHR_SUPPORT,
 	  Set to Yes if FAN5405 is used.
 
+config MTK_SM5414_SUPPORT
+	bool "MediaTek Battery driver for Siliconmitus SM5414 charger IC"
+	default n
+	help
+	  This is to enable MediaTek supports to SM5414.
+	  It depends on config MTK_SMART_BATTERY.
+	  m681 (Meizu M3 Note) uses this switching charger on i2c1 @ 0x49
+	  (F4 port from the 3.10 m681 stock kernel).
+	  Set to Yes if SM5414 is used.
+
 config MTK_DUAL_INPUT_CHARGER_SUPPORT
 	bool "MTK support dual charger IC charging"
 	default n

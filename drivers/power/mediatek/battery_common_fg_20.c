@@ -56,6 +56,7 @@
 #include <linux/time.h>
 #include <linux/mutex.h>
 #include <linux/kthread.h>
+#include <linux/workqueue.h>	/* deferred battery-stack start */
 #include <linux/proc_fs.h>
 #include <linux/platform_device.h>
 #include <linux/seq_file.h>
@@ -107,6 +108,7 @@
 #if defined(CONFIG_MTK_DUAL_INPUT_CHARGER_SUPPORT)
 #include <mach/diso.h>
 #endif
+#include <linux/m3note_board.h>
 
 /* ////////////////////////////////////////////////////////////////////////////// */
 /* Battery Logging Entry */
@@ -150,6 +152,360 @@ static int battery_charging_control_dummy(CHARGING_CTRL_CMD cmd, void *data)
 {
 	battery_log(BAT_LOG_CRTI, "%s: no charger is ready\n", __func__);
 	return -ENOTSUPP;
+}
+
+/* forge_chg_disable=1 keeps the whole battery/charger stack quiescent
+ * after probe: no battery threads, no hv-detect, no BC1.1 charger-type
+ * walk, no charging-enable writes. Charging itself stays active through the
+ * SM5414 hardware defaults (CTRL.CHGEN boot state = enabled); only
+ * kernel-side management/metering is off. cmdline: short alias "fchg=1"
+ * (core_param, no module prefix; LK truncates the cmdline at ~99
+ * characters) or battery_common_fg_20.forge_chg_disable=1; runtime-writable
+ * at /sys/module/battery_common_fg_20/parameters/forge_chg_disable, and a
+ * 1 -> 0 change after boot starts the stack (30 s re-check). */
+static int forge_chg_disable;
+module_param(forge_chg_disable, int, 0644);
+MODULE_PARM_DESC(forge_chg_disable,
+	"m681: 1 = keep battery/charger stack quiescent (HW-default charging only)");
+core_param(fchg, forge_chg_disable, int, 0644);
+
+/* Do not report "full" from the UI percentage alone. Two sites in this
+ * file make "full" from UI_SOC2 and never consult the charger IC:
+ *   - the cable-in path sets bat_charging_state = CHR_BATFULL and
+ *     bat_full = KAL_TRUE when (UI_SOC2 == 100 && charger_exist);
+ *   - battery_update() reports POWER_SUPPLY_STATUS_FULL on the same
+ *     predicate.
+ * The daemon then reads bat_full back over netlink and holds UI_SOC2 at
+ * 100: a closed loop with no measurement in it (seen as "Full" at 3760 mV
+ * with ~2 A flowing into the cell). charging_hw_sm5414.c's
+ * forge_full_min_mv (4250) rejects a "full" reading below CV proximity in
+ * charging_get_charging_status(); these two sites bypass it, so the same
+ * floor applies here, as a separate knob (the two guards protect different
+ * paths). 0 disables the guard. bat_vol == 0 means "not measured yet", not
+ * "empty"; never gate on it.
+ */
+static int forge_uifull_min_mv = 4250;
+module_param(forge_uifull_min_mv, int, 0644);
+MODULE_PARM_DESC(forge_uifull_min_mv,
+	"m681: refuse to manufacture FULL from UI_SOC2==100 below this cell mV (0 = off)");
+
+/* L681 only: FULL from the charger. With forge_kernel_soc the capacity is
+ * the kernel's curve, but FULL came from the daemon's UI_SOC2 == 100, so
+ * L681 showed "Full" at 90-93 %: the cell charged to CV 4.336 V rests near
+ * 4.29 V, which the curve of a 4.4 V cell reads as ~91 %.
+ * 1: on L681, FULL is the charger's termination as switch_charging latches
+ * it in bat_full (charging_full_check(): BQ24196 CHRG_STAT 3,
+ * FULL_CHECK_TIMES in a row, vetoed below forge_full_min_mv) with the cable
+ * in, never UI_SOC2; and there the kernel SOC is anchored at 100 % (stock
+ * resets the gauge to full on termination, g_charging_full_reset_bat_meter),
+ * so the coulomb tracker counts down from 100 after the cable is pulled.
+ * 0: as before. M681 is never affected.
+ */
+static int forge_l681_chg_full;
+module_param(forge_l681_chg_full, int, 0644);
+MODULE_PARM_DESC(forge_l681_chg_full,
+	"l681: 1 = FULL and 100 %% from the charger's termination instead of UI_SOC2, 0 = as before (default)");
+
+static bool forge_l681_full_on(void)
+{
+	return forge_l681_chg_full && m3note_board_known_is(M3NOTE_BOARD_L681);
+}
+
+/* the charger terminated and the cable is still in */
+static bool forge_l681_at_full(void)
+{
+	return forge_l681_full_on() && BMT_status.bat_full == KAL_TRUE &&
+	       BMT_status.charger_exist == KAL_TRUE &&
+	       BMT_status.bat_charging_state != CHR_ERROR;
+}
+
+/* Publish battery data before the userspace gauge daemon's first netlink
+ * SET_UI_SOC2: mt_battery_update_status() otherwise returns early, and
+ * /sys/class/power_supply/battery shows the static initialisers (capacity
+ * 50, batt_vol 0, batt_temp 0) until the daemon reports. battery_update()
+ * sources BAT_batt_vol and BAT_batt_temp from BMT_status, which the kernel
+ * samples from boot, and with this knob the capacity comes from
+ * BMT_status.SOC until the daemon speaks.
+ *
+ * Default 0, on both boards: mt_battery_update_EM publishes BMT_status.SOC
+ * while !g_battery_soc_ready, and SOC is still uninitialised that early, so
+ * userspace saw capacity 0 and Android shut the phone down (also on L681,
+ * at 4334 mV, ~20 s into boot, with the stack started at probe). The static
+ * 50 until the daemon's first report (~30 s) is the safe state. Set to 1
+ * only to study the failure.
+ */
+static int forge_early_publish;		/* 0 = off, see above */
+module_param(forge_early_publish, int, 0644);
+MODULE_PARM_DESC(forge_early_publish,
+	"m681: 1 = publish kernel-measured battery data before the gauge daemon's first report (0 = stock, static 50/0/0)");
+
+/* The bounded estimate for the pre-daemon window. In FG2.0 BMT_status.SOC
+ * init = 0 (battery_probe), gFG_capacity_by_c init = -1, and the only
+ * writer of either is the daemon's netlink SET; the kernel computes no SOC
+ * of its own. So the early-publish branch must not publish BMT_status.SOC
+ * raw; with forge_vbat_floor=1 it publishes forge_vbat_to_soc(bat_vol) (see
+ * battery_meter_fg_20.c), clamped to [1,99], until the daemon speaks.
+ * forge_vbat_floor=0 publishes the raw SOC (diagnostic only; that is the
+ * combination that shut the phone off). Both knobs are runtime-writable. */
+static int forge_vbat_floor = 1;
+module_param(forge_vbat_floor, int, 0644);
+MODULE_PARM_DESC(forge_vbat_floor,
+	"m681: 1 = pre-daemon capacity from a bounded vbat estimate, 0 = raw BMT_status.SOC (diagnostic)");
+
+/* Capacity 0 is a shutdown order to Android (BatteryService powers the
+ * phone off at level 0 unplugged). Never issue it while the ADC
+ * contradicts it: below the threshold a 0 passes through unchanged, so a
+ * genuinely empty battery still shuts down cleanly. Counterpart of
+ * forge_uifull_min_mv (fake FULL). 0 disables the gate. bat_vol == 0 means
+ * "not measured yet"; never gate on it (same rule as forge_uifull_ok). */
+static int forge_soc0_min_mv = 3450;
+module_param(forge_soc0_min_mv, int, 0644);
+MODULE_PARM_DESC(forge_soc0_min_mv,
+	"m681: refuse to publish capacity 0 while bat_vol >= this mV (0 = off)");
+
+/* What the guard above publishes when it fires: 0 = a constant 1 (a daemon
+ * 0 at a healthy voltage then shows a sticky "1 %"); 1 = the kernel's own
+ * curve estimate, the number the non-zero path publishes.
+ * This cannot keep an empty phone alive: it only runs inside the
+ * forge_soc0_min_mv guard, i.e. while bat_vol >= 3450 mV. Below that the 0
+ * passes through and orders a clean shutdown, and 3450 mV is 50 mV above
+ * the daemon's own FG_shutdown_system_voltage (3400 mV), so this kernel
+ * shuts down earlier than the userspace gauge would, never later. */
+static int forge_soc0_ksoc;
+module_param(forge_soc0_ksoc, int, 0644);
+MODULE_PARM_DESC(forge_soc0_ksoc,
+	"m681: 1 = when vetoing a daemon capacity-0 above forge_soc0_min_mv, publish the vbat-curve estimate instead of the constant 1 (default 0)");
+
+/* Make the kernel's own OCV estimate authoritative permanently, instead of
+ * handing over to the daemon once it speaks. The battery and r-profiles
+ * reach the daemon intact (77 entries each, monotonic and physical), but
+ * fuelgauged_static builds an all-zero working table and answers 100 % at
+ * every voltage. forge_vbat_to_soc() interpolates the real T2 curve and is
+ * already used for the pre-daemon window; this only stops the handover.
+ * The framework only needs a health HAL reading a sane capacity.
+ * Bounded by the existing guards: forge_soc0_min_mv refuses to publish 0
+ * while the ADC reads >= 3450 mV, so a bad estimate cannot order a
+ * shutdown. Runtime-reversible with `echo 0`, which restores the daemon's
+ * UI_SOC2. */
+/* file scope, not a function static: this is only a log-rate limiter, but a
+ * function static in a routine with more than one caller is a needless
+ * interleaving hazard for zero benefit. */
+static int forge_ksoc_last = -1;
+static int forge_kernel_soc = 1;
+module_param(forge_kernel_soc, int, 0644);
+MODULE_PARM_DESC(forge_kernel_soc,
+	"m681: 1 = publish the kernel's own OCV estimate as capacity (default; the userspace gauge answers 100%% at every voltage), 0 = hand over to the daemon's UI_SOC2");
+
+/* The vbat -> SoC table is a rest-OCV curve, but bat_vol is the loaded
+ * terminal voltage: while charging vbat sits I*R above OCV and the
+ * published %% reads high. Subtract ICharging*R before the lookup,
+ * charging only (on discharge ICharging is 0: the HW FG discharge current
+ * is not plumbed). As the charge current tapers toward CV the correction
+ * goes to zero, so the top of charge is unaffected. Default 0 = off;
+ * runtime, `echo 0` disables. */
+static int forge_soc_ir_mohm;
+module_param(forge_soc_ir_mohm, int, 0644);
+MODULE_PARM_DESC(forge_soc_ir_mohm,
+	"m681: pack impedance in mOhm for IR-compensating the kernel vbat->SoC estimate while charging (0 = off)");
+
+/* Coulomb-tracked capacity.
+ *
+ * The vbat curve is a rest-OCV table and bat_vol is the loaded terminal
+ * voltage, so under charge the published percentage runs far ahead of the
+ * real charge (about 17x in one measured window). The fuel gauge's coulomb
+ * counter agrees with the FG current register and with the charger's input
+ * limit; battery_meter_get_car() returns mAh, and 1 mAh is 0.037 %% of a
+ * 2719 mAh pack, ample resolution for a 1 %% display.
+ *
+ * Physics anchors, coulombs move:
+ *   seed   - the first pass takes the vbat estimate and remembers (car, soc);
+ *   track  - afterwards soc = seed_soc + 100 * (car - seed_car) / qmax;
+ *   resync - if the tracker and the vbat curve disagree by more than
+ *            forge_csoc_resync points, or the counter jumps by more than a
+ *            quarter of the pack (it was reset), the seed is retaken.
+ * The resync bound stops a slow integration error from drifting off.
+ *
+ * Nothing here touches the zero path: it runs inside the existing
+ * `soc != 0` branch, so a genuine 0 from the daemon still reaches the
+ * forge_soc0_min_mv guard, and the DLPT and 60 C hardware zeros never come
+ * through here. The published value stays bounded to [1,100] by the same
+ * clamp as before.
+ *
+ * `echo 0 > /sys/module/battery_common_fg_20/parameters/forge_csoc`
+ * (0644, live) restores the vbat-curve behaviour.
+ */
+static int forge_csoc = 1;
+module_param(forge_csoc, int, 0644);
+MODULE_PARM_DESC(forge_csoc,
+	"m681: 1 = track capacity with the coulomb counter anchored to the vbat curve (default), 0 = plain vbat curve");
+
+static int forge_csoc_resync = 15;
+module_param(forge_csoc_resync, int, 0644);
+MODULE_PARM_DESC(forge_csoc_resync,
+	"m681: re-anchor the coulomb tracker when it disagrees with the vbat curve by more than this many points AND the pack is at rest");
+
+/* Two rules for the tracker:
+ *
+ * 1. The anchor may only be trusted at rest. The vbat curve is a rest-OCV
+ *    table, so while current flows it reads high; re-anchoring on
+ *    disagreement alone would drag the count back onto the curve after
+ *    every long charge. Drift may re-anchor only when |IBattery| is below
+ *    this threshold; absurd counter jumps and out-of-range results still
+ *    re-anchor unconditionally (those are counter failures).
+ *
+ * 2. The seed must not be taken from a transient (bat_vol not yet at its
+ *    steady value right after the stack starts). A seed is taken only once
+ *    the curve has given the same value twice in a row, within
+ *    forge_csoc_seed_tol points, above a plausible voltage.
+ */
+static int forge_csoc_rest = 600;	/* 0.1 mA, i.e. 60 mA */
+module_param(forge_csoc_rest, int, 0644);
+MODULE_PARM_DESC(forge_csoc_rest,
+	"m681: |battery current| in 0.1 mA below which the vbat curve is trusted enough to re-anchor the tracker");
+
+static int forge_csoc_seed_tol = 2;
+module_param(forge_csoc_seed_tol, int, 0644);
+MODULE_PARM_DESC(forge_csoc_seed_tol,
+	"m681: the vbat curve must repeat within this many points before it is used as the tracker's seed");
+
+static int forge_csoc_prev_ksoc = -1;
+static int forge_csoc_prev_qmax = -1;
+
+static int forge_csoc_seeded;
+/* The previous pass, for the jump and frozen-counter checks below. CAR is
+ * signed and usually negative on a discharge, so "none yet" is its own
+ * flag, not a CAR value. */
+static bool forge_csoc_have_prev;
+static int forge_csoc_prev_car;
+static int forge_csoc_prev_milli;	/* the tracker on that pass, 0.001 % */
+static ktime_t forge_csoc_prev_t;
+static ktime_t forge_csoc_prev_mono;	/* CLOCK_MONOTONIC: awake time only */
+/* frozen counter: while |I| stays above the rest threshold, the signed
+ * current summed over awake time says how far CAR should have moved; once
+ * that sum reaches forge_csoc_frozen_mah either way and CAR moved by less
+ * than a tenth of it, the counter is not counting and the tracker goes
+ * back to the curve */
+static int forge_csoc_frozen_mah = 30;
+module_param(forge_csoc_frozen_mah, int, 0644);
+MODULE_PARM_DESC(forge_csoc_frozen_mah,
+		 "re-anchor when the gauge current should have moved CAR by this many mAh and it moved by under a tenth of it (0 = off)");
+static int forge_csoc_frz_car;
+static s64 forge_csoc_frz_uah;
+/* mt_battery_update_EM runs from bat_update_thread under bat_update_mutex
+ * and from do_chrdet_int_task (PMIC IRQ thread) without it */
+static DEFINE_MUTEX(forge_csoc_lock);
+static int forge_csoc_seed_car;		/* mAh, from battery_meter_get_car() */
+static int forge_csoc_seed_milli;	/* seed SoC in 0.001 %% */
+static unsigned int forge_csoc_reseeds;
+module_param(forge_csoc_reseeds, uint, 0444);
+MODULE_PARM_DESC(forge_csoc_reseeds, "m681: how many times the coulomb tracker re-anchored");
+
+extern int forge_vbat_to_soc(int vbat_mv);	/* battery_meter_fg_20.c */
+
+/*
+ * The published percentage survives a reboot, as on stock. Without it the
+ * tracker is seeded from the curve of the loaded voltage on every boot, so
+ * each reboot under load showed a lower value. Stock L681H keeps it in the
+ * RTC spare FG field (RTC_AL_HOU bits 14:8, 3.10 rtc/mt6755/mtk_rtc_hal.c
+ * hal_rtc_set_spare_fg_value; here rtc_spare_reg[RTC_FGSOC] = {RTC_AL_HOU,
+ * 0x7f, 8}), and the gauge daemon takes it back at power-on when it agrees
+ * with the voltage (cust_battery_meter.h
+ * CUST_POWERON_DELTA_CAPACITY_TOLRANCE 40).
+ * forge_rtc_soc=1 (default), with forge_kernel_soc:
+ *  - battery_probe reads the field before the daemon runs;
+ *  - the tracker's first seed is that saved value when it is 1..100, VBAT
+ *    is at least 3400 mV (stock SHUTDOWN_SYSTEM_VOLTAGE) and it is within
+ *    forge_rtc_soc_tol points of the curve; otherwise the curve;
+ *  - every change of the published percentage (1..100) is written back;
+ *  - the daemon's FG_DAEMON_CMD_SET_RTC is not applied
+ *    (battery_meter_fg_20.c): its UI_SOC2 is not the published value.
+ * The zero path is untouched: nothing here runs for a published 0, and the
+ * forge_soc0_min_mv gate below still decides it. Every other RTC writer
+ * (alarm time: bits 4:0 of RTC_AL_HOU; forge_ar's rtc_mark_recovery:
+ * RTC_PDN1 bit 4) leaves bits 14:8 alone, and all go under rtc_lock.
+ * 0: as before.
+ */
+static int forge_rtc_soc = 1;
+module_param(forge_rtc_soc, int, 0644);
+MODULE_PARM_DESC(forge_rtc_soc,
+	"keep the published percentage in the RTC spare FG field and seed from it after a reboot (1, default)");
+
+static int forge_rtc_soc_tol = 40;	/* stock CUST_POWERON_DELTA_CAPACITY_TOLRANCE */
+module_param(forge_rtc_soc_tol, int, 0644);
+MODULE_PARM_DESC(forge_rtc_soc_tol,
+	"largest distance in points between the saved percentage and the curve for the saved one to be used (40)");
+
+static int forge_rtc_soc_boot = -1;	/* the field at probe, -1 once used */
+static int forge_rtc_soc_written = -1;
+
+bool forge_rtc_soc_owned(void)
+{
+	return forge_kernel_soc && forge_rtc_soc;
+}
+
+/* the tracker's first seed: the saved percentage, if it is plausible */
+static int forge_rtc_seed_pick(int saved, int curve, int vbat_mv, int tol,
+			       const char **why)
+{
+	if (saved < 1 || saved > 100) {
+		*why = "no saved value";
+		return curve;
+	}
+	if (vbat_mv < 3400) {
+		*why = "battery below 3400 mV";
+		return curve;
+	}
+	if (abs(saved - curve) > tol) {
+		*why = "saved value too far from the curve";
+		return curve;
+	}
+	*why = "saved value";
+	return saved;
+}
+
+static bool forge_uifull_ok(void)
+{
+	if (forge_uifull_min_mv <= 0)
+		return true;			/* guard disabled */
+	if (BMT_status.bat_vol == 0)
+		return true;			/* unmeasured: do not gate on it */
+	if (BMT_status.bat_vol >= (unsigned int)forge_uifull_min_mv)
+		return true;
+	battery_log(BAT_LOG_CRTI,
+		    "[FORGE_CHG] refusing UI-manufactured FULL: bat_vol=%d < %d mV (UI_SOC2=%d)\n",
+		    BMT_status.bat_vol, forge_uifull_min_mv, BMT_status.UI_SOC2);
+	return false;
+}
+
+/* The IR-compensated voltage the vbat -> SoC lookup is fed, the same as in
+ * mt_battery_update_EM()'s kernel SOC block, so the forge_soc0_ksoc
+ * substitute below asks the curve the same question as the normal path;
+ * with forge_soc_ir_mohm = 0 (the default) both reduce to plain bat_vol.
+ * *ir_mv_out, if given, receives the correction applied (0 when none). */
+static int forge_soc_vbat(int *ir_mv_out)
+{
+	int kvbat = (int)BMT_status.bat_vol;
+	int ir_mv = 0;
+
+	/*
+	 * 1. the current is in 0.1 mA, not mA, so mA*mOhm/1000 -> /10000;
+	 * 2. ICharging is a magnitude and is non-zero while the pack
+	 *    discharges under load with a charger attached; IBattery carries
+	 *    the sign, so correct only when it is positive (into the pack).
+	 */
+	if (forge_soc_ir_mohm > 0 &&
+	    BMT_status.charger_exist == KAL_TRUE &&
+	    BMT_status.IBattery > 0) {
+		ir_mv = (int)BMT_status.IBattery *
+			forge_soc_ir_mohm / 10000;
+		if (ir_mv > 0 && ir_mv < kvbat)
+			kvbat -= ir_mv;
+		else
+			ir_mv = 0;
+	}
+	if (ir_mv_out)
+		*ir_mv_out = ir_mv;
+	return kvbat;
 }
 
 struct wake_lock battery_suspend_lock, battery_meter_lock;
@@ -323,6 +679,13 @@ static enum power_supply_property battery_props[] = {
 	POWER_SUPPLY_PROP_PRESENT,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
 	POWER_SUPPLY_PROP_CAPACITY,
+	/* Standard sysfs names that healthd probes (BatteryMonitor.cpp knows
+	 * voltage_now/current_now/temp/charge_full etc., with no batt_vol
+	 * fallback). Without them dumpsys battery reads 0 V / 0.0 C. */
+	POWER_SUPPLY_PROP_VOLTAGE_NOW,
+	POWER_SUPPLY_PROP_CURRENT_NOW,
+	POWER_SUPPLY_PROP_TEMP,
+	POWER_SUPPLY_PROP_CHARGE_FULL,
 	/* Add for Battery Service */
 	POWER_SUPPLY_PROP_batt_vol,
 	POWER_SUPPLY_PROP_batt_temp,
@@ -646,6 +1009,46 @@ static int battery_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CAPACITY:
 		val->intval = data->BAT_CAPACITY;
 		break;
+	/* Served live from BMT_status, not the cached bat_data copies: those
+	 * refresh only behind the g_battery_soc_ready gate (battery_update()'s
+	 * caller mt_battery_update_status() returns early until the daemon's
+	 * first SET_UI_SOC2). BMT_status is refreshed by the battery thread
+	 * regardless. */
+	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+		/* BMT_status.bat_vol is mV; healthd divides by 1000 (uV) */
+		val->intval = BMT_status.bat_vol * 1000;
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_NOW:
+		/*
+		 * Unit: ICharging is in 0.1 mA, not mA (the vendor log string
+		 * in fgauge_read_current() says "mA", but dvalue = raw *
+		 * UNIT_FGCURRENT / 100000 with UNIT_FGCURRENT = 158122 =
+		 * 158.122 uA per LSB, i.e. raw * 1.58122, while the true current
+		 * is raw * 0.158122 mA; this file's telemetry prints
+		 * IBattery / 10 as mA).
+		 *
+		 * Sign: ICharging is a magnitude (fgauge_read_current() makes the
+		 * raw two's-complement value positive and puts the direction in a
+		 * separate flag), so it reads "charging" even while the pack
+		 * drains. BMT_status.IBattery is the same measurement with the
+		 * sign applied (battery_meter_get_battery_current_sign()).
+		 *
+		 * 0.1 mA -> uA is therefore x100, signed.
+		 */
+		val->intval = BMT_status.IBattery * 100;
+		break;
+	case POWER_SUPPLY_PROP_TEMP:
+		/* degC -> deci-degC, same conversion battery_update() uses */
+		val->intval = BMT_status.temperature * 10;
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_FULL:
+	{
+		/* aging-corrected Q_MAX from the FG core, mAh -> uAh */
+		extern signed int gFG_BATT_CAPACITY_aging;
+
+		val->intval = gFG_BATT_CAPACITY_aging * 1000;
+		break;
+	}
 	case POWER_SUPPLY_PROP_batt_vol:
 		val->intval = data->BAT_batt_vol;
 		break;
@@ -1668,7 +2071,277 @@ static DEVICE_ATTR(Pump_Express, 0664, show_Pump_Express, store_Pump_Express);
 
 static void mt_battery_update_EM(struct battery_data *bat_data)
 {
-	bat_data->BAT_CAPACITY = BMT_status.UI_SOC2;
+	/* UI_SOC2 is written only by the userspace gauge daemon; until its
+	 * first netlink SET_UI_SOC2 it is meaningless. The kernel's own meter
+	 * has an answer in BMT_status.SOC by then; use it until the daemon
+	 * speaks (forge_early_publish), then hand over. */
+	if (!g_battery_soc_ready && forge_early_publish) {
+		int soc = BMT_status.SOC;
+
+		/* SOC is daemon-fed only: 0 at init, -1 via the chrdet
+		 * path.  Publish the bounded vbat estimate instead of an
+		 * uninitialised value (see forge_vbat_floor above). */
+		if ((soc <= 0 || soc > 100) && forge_vbat_floor &&
+		    BMT_status.bat_vol > 0)
+			soc = forge_vbat_to_soc((int)BMT_status.bat_vol);
+		if (soc < 0 || soc > 100)
+			soc = bat_data->BAT_CAPACITY; /* keep last published */
+		bat_data->BAT_CAPACITY = soc;
+	} else {
+		int soc = BMT_status.UI_SOC2;
+
+		/* The daemon's answer is a constant 100 on this device (see
+		 * forge_kernel_soc), so prefer the kernel curve, but not at the
+		 * two endpoints.
+		 *
+		 * soc == 0 is not a reading, it is a shutdown order to Android.
+		 * forge_vbat_to_soc() clamps to [1,99], so substituting it for a
+		 * genuine 0 would mean a truly empty cell never gets an orderly
+		 * shutdown and the phone drops at PMIC UVLO with /data mounted
+		 * rw. A zero is passed through untouched and left to the
+		 * forge_soc0_min_mv guard below.
+		 *
+		 * The 99 clamp is the other endpoint: with the override always
+		 * on, capacity could never reach 100. Publish 100 only when the
+		 * cell is at full voltage; forge_uifull_min_mv is the existing
+		 * threshold for that question, which keeps one definition of
+		 * "full".
+		 */
+		if (forge_kernel_soc && forge_vbat_floor && BMT_status.bat_vol > 0 &&
+		    soc != 0) {
+			int ir_mv;
+			int kvbat = forge_soc_vbat(&ir_mv);
+			int ksoc = forge_vbat_to_soc(kvbat);
+
+			/* Coulombs move it, the curve anchors it. qmax is the
+			 * aging-corrected pack capacity the FG core maintains;
+			 * a zero or absurd qmax means the gauge has not settled
+			 * yet, so the tracker stays out of the way. */
+			if (forge_csoc) {
+				extern signed int gFG_BATT_CAPACITY_aging;
+				int qmax = (int)gFG_BATT_CAPACITY_aging;
+				int car = (int)battery_meter_get_car();
+
+				mutex_lock(&forge_csoc_lock);
+				if (qmax < 500 || qmax > 10000) {
+					forge_csoc_seeded = 0;
+				} else if (forge_l681_at_full()) {
+					/* l681: the charger says full, the
+					 * tracker starts from 100 % here */
+					if (!forge_csoc_seeded ||
+					    forge_csoc_seed_milli != 100000)
+						battery_log(BAT_LOG_CRTI,
+							    "[FORGE_BAT] l681 charger full: csoc anchored at 100%% (car=%d mAh qmax=%d, curve %d%%)\n",
+							    car, qmax, ksoc);
+					forge_csoc_seed_car = car;
+					forge_csoc_seed_milli = 100000;
+					forge_csoc_seeded = 1;
+				} else if (!forge_csoc_seeded) {
+					/* seed only off a curve reading that has
+					 * settled: same answer twice running,
+					 * above a plausible voltage */
+					int d = ksoc - forge_csoc_prev_ksoc;
+					int seed = ksoc;
+					const char *why = "curve";
+
+					if (d < 0)
+						d = -d;
+					/*  the curve alone is not enough
+					 * to declare the gauge settled -- the
+					 * first device run seeded while qmax
+					 * still read its 1200 default instead
+					 * of 2719, and the curve was steadily
+					 * wrong at the same time.  Require BOTH
+					 * to repeat. */
+					if (forge_csoc_prev_ksoc >= 0 &&
+					    forge_csoc_prev_qmax == qmax &&
+					    d <= forge_csoc_seed_tol &&
+					    BMT_status.bat_vol > 3300) {
+						if (forge_rtc_soc_owned() &&
+						    forge_rtc_soc_boot >= 0) {
+							seed = forge_rtc_seed_pick(forge_rtc_soc_boot,
+										   ksoc, (int)BMT_status.bat_vol,
+										   forge_rtc_soc_tol, &why);
+							forge_rtc_soc_boot = -1;
+						}
+						forge_csoc_seed_car = car;
+						forge_csoc_seed_milli = seed * 1000;
+						forge_csoc_seeded = 1;
+						battery_log(BAT_LOG_CRTI,
+							    "[FORGE_BAT] csoc seed %d%% (%s; curve %d%%) at car=%d mAh qmax=%d mAh (vbat=%d mV, curve settled within %d)\n",
+							    seed, why, ksoc, car, qmax, kvbat, d);
+						ksoc = seed;
+					}
+					forge_csoc_prev_ksoc = ksoc;
+					forge_csoc_prev_qmax = qmax;
+				} else {
+					int dcar = car - forge_csoc_seed_car;
+					int milli = forge_csoc_seed_milli +
+						    (dcar * 100000) / qmax;
+					int csoc = milli / 1000;
+					int drift = csoc - ksoc;
+					int ibat = (int)BMT_status.IBattery;
+					/* signed, as CAR: charging up, discharging
+					 * down (IBattery has the sign applied) */
+					int ibat_s = ibat;
+					int at_rest;
+					/* A counter reset shows as a jump within
+					 * one pass. Measuring dcar from the seed would
+					 * throw the tracker back onto the loaded-voltage
+					 * curve after any honest charge or discharge of
+					 * more than a quarter of the pack, and miss a
+					 * smaller reset. A jump beyond what the pack can
+					 * move in the time since the last pass rebases
+					 * the counter and keeps the percentage of the
+					 * previous pass. */
+					int jump = forge_csoc_have_prev ?
+						   car - forge_csoc_prev_car : 0;
+					s64 dt_ms = forge_csoc_have_prev ?
+						    ktime_ms_delta(ktime_get_boottime(),
+								   forge_csoc_prev_t) : 0;
+					/* the most a pack can move between two passes:
+					 * 50 mAh plus 4 A over the time between them
+					 * (CLOCK_BOOTTIME, so a suspend counts). After
+					 * a sleep of about an hour this exceeds qmax:
+					 * a reset during a long sleep is not caught
+					 * here (nor by the frozen check, which only
+					 * counts awake passes). */
+					int jump_max = 50 + (int)(dt_ms / 900);
+					/* the frozen check integrates the awake time
+					 * only: a current sampled awake says nothing
+					 * about a suspend */
+					s64 dt_awake = forge_csoc_have_prev ?
+						       ktime_ms_delta(ktime_get(),
+								      forge_csoc_prev_mono) : 0;
+					int frozen = 0;
+
+					/* this file builds
+					 * -Werror=declaration-after-statement,
+					 * so every local is declared here */
+					if (drift < 0)
+						drift = -drift;
+					if (ibat < 0)
+						ibat = -ibat;
+					at_rest = (ibat <= forge_csoc_rest);
+
+					/* expected net movement in uAh, signed as CAR
+					 * is: IBattery is 0.1 mA, so mA * ms / 3600 =
+					 * ibat * ms / 36000; a pass counts at most 60 s
+					 * of awake time, the current is a snapshot. A
+					 * current swinging around 0 (charging under a
+					 * load) sums to about nothing, as CAR does. */
+					if (at_rest || !forge_csoc_have_prev ||
+					    forge_csoc_frozen_mah <= 0) {
+						forge_csoc_frz_car = car;
+						forge_csoc_frz_uah = 0;
+					} else {
+						s64 uah;
+
+						forge_csoc_frz_uah += (s64)ibat_s *
+							min_t(s64, dt_awake, 60000) / 36000;
+						uah = forge_csoc_frz_uah < 0 ?
+						      -forge_csoc_frz_uah : forge_csoc_frz_uah;
+						if (uah >= (s64)forge_csoc_frozen_mah * 1000) {
+							int moved = car - forge_csoc_frz_car;
+
+							if (moved < 0)
+								moved = -moved;
+							frozen = moved * 10 <
+								 forge_csoc_frozen_mah;
+							if (frozen)
+								battery_log(BAT_LOG_CRTI,
+									    "[FORGE_BAT] csoc counter frozen: moved %d mAh where the current should have moved %lld\n",
+									    moved,
+									    forge_csoc_frz_uah / 1000);
+							forge_csoc_frz_car = car;
+							forge_csoc_frz_uah = 0;
+						}
+					}
+
+					if (jump > jump_max || jump < -jump_max) {
+						forge_csoc_reseeds++;
+						battery_log(BAT_LOG_CRTI,
+							    "[FORGE_BAT] csoc counter jumped %d mAh in one pass (limit %d, qmax=%d): rebased, keeps %d%%\n",
+							    jump, jump_max, qmax,
+							    forge_csoc_prev_milli / 1000);
+						forge_csoc_seed_car = car;
+						forge_csoc_seed_milli = forge_csoc_prev_milli;
+						ksoc = forge_csoc_prev_milli / 1000;
+						/* the counter's history ends here */
+						forge_csoc_frz_car = car;
+						forge_csoc_frz_uah = 0;
+					} else if (frozen || csoc < 1 || csoc > 100 ||
+					    (at_rest && forge_csoc_resync > 0 &&
+					     drift > forge_csoc_resync)) {
+						forge_csoc_reseeds++;
+						battery_log(BAT_LOG_CRTI,
+							    "[FORGE_BAT] csoc RE-ANCHOR: tracker %d%% vs curve %d%% (dcar=%d mAh, qmax=%d, |I|=%d rest=%d) -> %d%%\n",
+							    csoc, ksoc, dcar, qmax, ibat, at_rest, ksoc);
+						forge_csoc_seed_car = car;
+						forge_csoc_seed_milli = ksoc * 1000;
+					} else {
+						ksoc = csoc;
+					}
+				}
+				forge_csoc_have_prev = forge_csoc_seeded;
+				if (forge_csoc_seeded) {
+					/* what the tracker stands at now, with
+					 * this pass's qmax, for a rebase on the
+					 * next one */
+					int pm = forge_csoc_seed_milli +
+						 ((car - forge_csoc_seed_car) *
+						  100000) / qmax;
+
+					forge_csoc_prev_car = car;
+					forge_csoc_prev_milli = clamp(pm, 1000, 100000);
+				}
+				forge_csoc_prev_t = ktime_get_boottime();
+				forge_csoc_prev_mono = ktime_get();
+				mutex_unlock(&forge_csoc_lock);
+			}
+
+			if (ksoc >= 99 && forge_uifull_min_mv > 0 &&
+			    BMT_status.bat_vol >= (unsigned int)forge_uifull_min_mv)
+				ksoc = 100;
+			if (forge_l681_at_full())
+				ksoc = 100;
+
+			if (ksoc >= 1 && ksoc <= 100) {
+				if (forge_ksoc_last != ksoc) {
+					battery_log(BAT_LOG_CRTI,
+						    "[FORGE_BAT] kernel SOC %d%% from vbat=%d mV (ir -%d mV @ %d mA) (daemon UI_SOC2=%d) FG %d mA\n",
+						    ksoc, kvbat, ir_mv,
+						    BMT_status.ICharging,
+						    BMT_status.UI_SOC2,
+						    (int)BMT_status.IBattery / 10);
+					forge_ksoc_last = ksoc;
+				}
+				soc = ksoc;
+			}
+		}
+
+		if (soc == 0 && forge_soc0_min_mv > 0 &&
+		    BMT_status.bat_vol >= (unsigned int)forge_soc0_min_mv) {
+			static unsigned int soc0_gate_cnt;
+			int sub = 1;
+
+			/* see forge_soc0_ksoc: default 0 keeps the constant 1 */
+			if (forge_soc0_ksoc)
+				sub = forge_vbat_to_soc(forge_soc_vbat(NULL));
+			if (soc0_gate_cnt++ % 100 == 0)
+				battery_log(BAT_LOG_CRTI,
+					    "[FORGE_BAT] refusing capacity 0: bat_vol=%d >= %d mV -> publish %d (n=%u)\n",
+					    BMT_status.bat_vol,
+					    forge_soc0_min_mv, sub, soc0_gate_cnt);
+			soc = sub;
+		}
+		bat_data->BAT_CAPACITY = soc;
+		if (forge_rtc_soc_owned() && soc >= 1 && soc <= 100 &&
+		    soc != forge_rtc_soc_written) {
+			set_rtc_spare_fg_value(soc);
+			forge_rtc_soc_written = soc;
+		}
+	}
 	bat_data->BAT_TemperatureR = BMT_status.temperatureR;	/* API */
 	bat_data->BAT_TempBattVoltage = BMT_status.temperatureV;	/* API */
 	bat_data->BAT_InstatVolt = BMT_status.bat_vol;	/* VBAT */
@@ -1682,8 +2355,13 @@ static void mt_battery_update_EM(struct battery_data *bat_data)
 	bat_data->present_smb = g_present_smb;
 	battery_log(BAT_LOG_FULL, "status_smb = %d, capacity_smb = %d, present_smb = %d\n",
 		    bat_data->status_smb, bat_data->capacity_smb, bat_data->present_smb);
-	if ((BMT_status.UI_SOC2 == 100) && (BMT_status.charger_exist == KAL_TRUE)
-	    && (BMT_status.bat_charging_state != CHR_ERROR))
+	if (forge_l681_full_on()) {
+		/* see forge_l681_chg_full: the charger, not UI_SOC2 */
+		if (forge_l681_at_full())
+			bat_data->BAT_STATUS = POWER_SUPPLY_STATUS_FULL;
+	} else if ((BMT_status.UI_SOC2 == 100) && (BMT_status.charger_exist == KAL_TRUE)
+	    && (BMT_status.bat_charging_state != CHR_ERROR)
+	    && forge_uifull_ok())	/* see forge_uifull_min_mv */
 		bat_data->BAT_STATUS = POWER_SUPPLY_STATUS_FULL;
 
 #ifdef CONFIG_MTK_DISABLE_POWER_ON_OFF_VOLTAGE_LIMITATION
@@ -1757,8 +2435,21 @@ static void battery_update(struct battery_data *bat_data)
 				    "[DLPT_POWER_OFF_EN] SOC=%d to power off , cnt=%d\n",
 				    bat_data->BAT_CAPACITY, cnt);
 
-			if (cnt >= 4)
-				kernel_restart("DLPT reboot system");
+			if (cnt >= 4) {
+				/* kernel_restart here is gated by
+				 * forge_chg_poweroff; SOC can be a pre-daemon 0 %
+				 * on the first passes after a deferred stack
+				 * start. */
+				extern int forge_chg_poweroff;
+
+				if (!forge_chg_poweroff) {
+					pr_emerg("[FORGE_CHG][DLPT] REFUSED kernel_restart (SOC=%d cnt=%d, forge_chg_poweroff=0)\n",
+						 bat_data->BAT_CAPACITY, cnt);
+					cnt = 0;
+				} else {
+					kernel_restart("DLPT reboot system");
+				}
+			}
 
 		} else {
 			cnt = 0;
@@ -2345,6 +3036,19 @@ static void mt_battery_CheckBatteryStatus(void)
 		BMT_status.bat_charging_state = CHR_ERROR;
 		return;
 	}
+
+	/* On this config CHR_ERROR is a one-way latch: the only stock
+	 * recovery back to CHR_PRE (in BAT_BatteryStatusFailAction) is under
+	 * CONFIG_MTK_JEITA_STANDARD_SUPPORT, which is unset, so one transient
+	 * trip (a bad temperature/VCHR sample) would leave "Not charging"
+	 * forever while the battery drains. Reaching this point means every
+	 * check above passed this cycle: un-latch, as the JEITA build would. A
+	 * persistent fault re-trips within one 10 s cycle. */
+	if (BMT_status.bat_charging_state == CHR_ERROR) {
+		battery_log(BAT_LOG_CRTI,
+			"[FORGE_CHG] CHR_ERROR un-latch: checks healthy -> CHR_PRE\n");
+		BMT_status.bat_charging_state = CHR_PRE;
+	}
 }
 
 
@@ -2574,7 +3278,7 @@ void mt_battery_update_status(void)
 #if defined(CONFIG_POWER_EXT)
 	battery_log(BAT_LOG_CRTI, "[BATTERY] CONFIG_POWER_EXT, no update Android.\n");
 #else
-	if (g_battery_soc_ready) {
+	if (g_battery_soc_ready || forge_early_publish) {
 		wireless_update(&wireless_main);
 		battery_update(&battery_main);
 		ac_update(&ac_main);
@@ -2764,6 +3468,14 @@ void do_chrdet_int_task(void)
 {
 	u32 plug_out_aicr = 50000; /* 10uA */
 
+	/* Stack disabled: ignore cable events entirely (no BC1.1 walk, no
+	 * charger-type detect, no CMD_SET_INPUT_CURRENT). The USB gadget does
+	 * not depend on this notification. */
+	if (forge_chg_disable) {
+		pr_emerg("[FORGE_CHG] chrdet event IGNORED (forge_chg_disable=1)\n");
+		return;
+	}
+
 	if (g_bat_init_flag == KAL_TRUE) {
 #if !defined(CONFIG_MTK_DUAL_INPUT_CHARGER_SUPPORT)
 		if (upmu_is_chr_det() == KAL_TRUE) {
@@ -2851,7 +3563,9 @@ void do_chrdet_int_task(void)
 
 		mt_battery_charger_detect_check();
 		if (BMT_status.UI_SOC2 == 100 && BMT_status.charger_exist == KAL_TRUE
-		    && BMT_status.bat_charging_state != CHR_ERROR) {
+		    && BMT_status.bat_charging_state != CHR_ERROR
+		    && !forge_l681_full_on()	/* l681: the charger decides */
+		    && forge_uifull_ok()) {	/* see forge_uifull_min_mv */
 			BMT_status.bat_charging_state = CHR_BATFULL;
 			BMT_status.bat_full = KAL_TRUE;
 			g_charging_full_reset_bat_meter = KAL_TRUE;
@@ -2911,6 +3625,22 @@ void BAT_thread(void)
 	}
 	mt_battery_charger_detect_check();
 	mt_battery_GetBatteryData();
+	{
+		/* First-pass raw values to dmesg: junk vbat/temp/SOC points at
+		 * the meter/AUXADC path; sane values and a later power-off
+		 * point at the BATON check. */
+		static int forge_bat_logn;
+
+		if (forge_bat_logn < 5) {
+			forge_bat_logn++;
+			pr_emerg("[FORGE_CHG] pass#%d chr_exist=%d type=%d vbat=%d I=%d T=%d SOC=%d chr_vol=%d boot_mode=%d\n",
+				 forge_bat_logn, BMT_status.charger_exist,
+				 BMT_status.charger_type, BMT_status.bat_vol,
+				 BMT_status.ICharging, BMT_status.temperature,
+				 BMT_status.SOC, BMT_status.charger_vol,
+				 g_platform_boot_mode);
+		}
+	}
 	if (BMT_status.charger_exist == KAL_TRUE)
 		check_battery_exist();
 
@@ -3254,6 +3984,16 @@ static const struct file_operations adc_cali_fops = {
 	.release = adc_cali_release,
 };
 
+/* Runtime equivalent of CONFIG_DIS_CHECK_BATTERY. The BATON "battery
+ * absent" verdict is the only path in this file that commands a PMIC
+ * power-off; 0 disables the check (battery assumed present, as the stock
+ * compile-time option) without a reflash. Default 1 = stock behaviour, the
+ * check runs. */
+static int forge_bat_exist_check = 1;
+module_param(forge_bat_exist_check, int, 0644);
+MODULE_PARM_DESC(forge_bat_exist_check,
+	"m681 chg-fix: 1=run the BATON battery-exist check (default), 0=skip it (runtime DIS_CHECK_BATTERY)");
+
 void check_battery_exist(void)
 {
 #if defined(CONFIG_DIS_CHECK_BATTERY)
@@ -3264,10 +4004,29 @@ void check_battery_exist(void)
 	unsigned int battery_status;
 	unsigned int i;
 
+	if (!forge_bat_exist_check) {
+		static int forge_skip_logged;
+
+		if (!forge_skip_logged) {
+			forge_skip_logged = 1;
+			pr_emerg("[FORGE_CHG] check_battery_exist DISABLED (forge_bat_exist_check=0)\n");
+		}
+		return;
+	}
+
 	for (i = 0; i < 3; i++) {
 		battery_charging_control(CHARGING_CMD_GET_BATTERY_STATUS, &battery_status);
 		baton_count += battery_status;
+		{
+			/* per-read BATON verdict (capped) */
+			static int forge_baton_logn;
 
+			if (forge_baton_logn < 30) {
+				forge_baton_logn++;
+				pr_emerg("[FORGE_CHG] check_battery_exist read#%u status=%u (1=absent)\n",
+					 i, battery_status);
+			}
+		}
 	}
 
 	if (baton_count >= 3) {
@@ -3409,7 +4168,11 @@ void battery_kthread_hrtimer_init(void)
 static void get_charging_control(void)
 {
 	battery_log(BAT_LOG_CRTI, "%s: starts\n", __func__);
-	BUG_ON(battery_charging_control == battery_charging_control_dummy);
+	/* The 4.4 code had BUG_ON(control == dummy), asserting that the
+	 * charging HAL hooked battery_charging_control before this point,
+	 * which holds only in the newer charger architecture; in this
+	 * old-framework port it is still the dummy here. The 3.10 stock does a
+	 * plain assignment, as below. */
 	battery_charging_control = chr_control_interface;
 }
 
@@ -3838,9 +4601,69 @@ static int __batt_init_cust_data_from_dt(void)
 }
 #endif
 
+/* L681 only: the stock L681 charging values. This kernel builds the M681
+ * cust header (mach/mtk_charging.h) for both boards and
+ * BATTERY_DTS_SUPPORT is off, so L681 would get M681's AC 2500 mA (BQ24196
+ * ICHG 2240 mA, above the stock 1728), AC input 1875 mA (IINLIM 1500),
+ * Apple 2.1 A 500 mA and resume below 46 C. The L681 stock (3.10
+ * hq6755_66_b1a_l cust_charging.h) is AC 1750 mA, input 3200 mA, Apple
+ * 2.1 A 800 mA, stop above 45 C and resume below 45 C.
+ * forge_l681_stock_chg=1 (default): AC 1750 mA and resume below 45 C (the
+ * AC current is only reached with forge_bc11_skip=0); the Meizu current
+ * zones in charging_hw_bq24196.c follow this knob too. 0: the M681 header
+ * values.
+ * forge_l681_stock_input=1 (default): the stock AC input 3200 mA and Apple
+ * 2.1 A 800 mA; 0: the header's 1875 / 500 mA.
+ */
+int forge_l681_stock_chg = 1;
+static int forge_l681_stock_input = 1;
+
+static void forge_l681_cust_apply(void)
+{
+	if (!m3note_board_known_is(M3NOTE_BOARD_L681))
+		return;
+	batt_cust_data.ac_charger_current = forge_l681_stock_chg ?
+		CHARGE_CURRENT_1750_00_MA : AC_CHARGER_CURRENT;
+	batt_cust_data.max_charge_temperature_minus_x_degree = forge_l681_stock_chg ?
+		45 : MAX_CHARGE_TEMPERATURE_MINUS_X_DEGREE;
+	batt_cust_data.ac_charger_input_current = forge_l681_stock_input ?
+		CHARGE_CURRENT_3200_00_MA : AC_CHARGER_INPUT_CURRENT;
+	batt_cust_data.apple_2_1a_charger_current = forge_l681_stock_input ?
+		CHARGE_CURRENT_800_00_MA : APPLE_2_1A_CHARGER_CURRENT;
+	battery_log(BAT_LOG_CRTI,
+		    "[FORGE_BAT] l681 charging values %s: AC %d mA, input %d mA, Apple 2.1A %d mA, stop >= %d C, resume < %d C\n",
+		    forge_l681_stock_chg ? "stock" : "m681 header",
+		    batt_cust_data.ac_charger_current / 100,
+		    batt_cust_data.ac_charger_input_current / 100,
+		    batt_cust_data.apple_2_1a_charger_current / 100,
+		    batt_cust_data.max_charge_temperature,
+		    batt_cust_data.max_charge_temperature_minus_x_degree);
+}
+
+static int forge_l681_cust_set(const char *val, const struct kernel_param *kp)
+{
+	int ret = param_set_int(val, kp);
+
+	if (!ret)
+		forge_l681_cust_apply();
+	return ret;
+}
+
+static const struct kernel_param_ops forge_l681_cust_ops = {
+	.set = forge_l681_cust_set,
+	.get = param_get_int,
+};
+module_param_cb(forge_l681_stock_chg, &forge_l681_cust_ops, &forge_l681_stock_chg, 0644);
+MODULE_PARM_DESC(forge_l681_stock_chg,
+	"l681: stock AC 1750 mA, resume below 45 C and the Meizu current zones (1, default), or the m681 header (0)");
+module_param_cb(forge_l681_stock_input, &forge_l681_cust_ops, &forge_l681_stock_input, 0644);
+MODULE_PARM_DESC(forge_l681_stock_input,
+	"l681: stock AC input 3200 mA and Apple 2.1 A 800 mA (1, default), or the header's 1875 / 500 mA (0)");
+
 int batt_init_cust_data(void)
 {
 	__batt_init_cust_data_from_cust_header();
+	forge_l681_cust_apply();
 
 #if defined(BATTERY_DTS_SUPPORT) && defined(CONFIG_OF)
 	battery_log(BAT_LOG_CRTI, "battery custom init by DTS\n");
@@ -3849,12 +4672,62 @@ int batt_init_cust_data(void)
 	return 0;
 }
 
+/* Deferred battery stack start: the three battery threads start
+ * forge_bat_delay_s after probe (M681 default 90 s), so a failure at the
+ * stack start happens with adb and the kernel log already up. 0 = stock
+ * immediate start (L681 default: there the delay only left Android at a
+ * static 50 % and "not charging" for the first 90 s; a crash at the stack
+ * start is covered by forge_ar_rtc). Runtime-writable:
+ * battery_common_fg_20.forge_bat_delay_s. */
+#if defined(CONFIG_M3NOTE_UNIFIED)
+/* -1 = the board's own default, resolved at probe: l681 0, m681 90 */
+static int forge_bat_delay_s = -1;
+#elif defined(CONFIG_MTK_BQ24196_SUPPORT)
+static int forge_bat_delay_s;
+#else
+static int forge_bat_delay_s = 90;
+#endif
+module_param(forge_bat_delay_s, int, 0644);
+MODULE_PARM_DESC(forge_bat_delay_s,
+	"m681 chg-diag: delay battery thread start by N seconds (0 = stock)");
+
+static struct delayed_work forge_bat_start_work;
+
+static void forge_bat_start_fn(struct work_struct *work)
+{
+	/* Suppress the stack start while forge_chg_disable is set; re-check
+	 * every 30 s, so a runtime 1 -> 0 change starts the stack without a
+	 * reflash. */
+	if (forge_chg_disable) {
+		static bool suppress_logged;
+
+		if (!suppress_logged) {
+			suppress_logged = true;
+			pr_emerg("[FORGE_CHG] battery-stack start SUPPRESSED (forge_chg_disable=1; echo 0 > /sys/module/battery_common_fg_20/parameters/forge_chg_disable to start)\n");
+		}
+		schedule_delayed_work(&forge_bat_start_work, 30 * HZ);
+		return;
+	}
+	pr_emerg("[FORGE_CHG] deferred battery-stack START (delay was %ds)\n",
+		 forge_bat_delay_s);
+	battery_kthread_hrtimer_init();
+	kthread_run(bat_routine_thread, NULL, "bat_routine_thread");
+	kthread_run(bat_update_thread, NULL, "bat_update_thread");
+	charger_hv_detect_sw_workaround_init();
+	pr_emerg("[FORGE_CHG] battery threads + hv-detect armed\n");
+}
+
 static int battery_probe(struct platform_device *dev)
 {
 	struct class_device *class_dev = NULL;
 	int ret = 0;
 
 	battery_log(BAT_LOG_CRTI, "******** battery driver probe!! ********\n");
+	if (forge_rtc_soc_owned()) {
+		forge_rtc_soc_boot = get_rtc_spare_fg_value();
+		battery_log(BAT_LOG_CRTI, "[FORGE_BAT] saved percentage in the RTC: %d\n",
+			    forge_rtc_soc_boot);
+	}
 
 	get_monotonic_boottime(&batteryThreadRunTime);
 
@@ -3875,9 +4748,14 @@ static int battery_probe(struct platform_device *dev)
 							 adc_cali_devno, NULL, ADC_CALI_DEVNAME);
 	battery_log(BAT_LOG_CRTI, "[BAT_probe] adc_cali prepare : done !!\n ");
 
+	pr_emerg("[FORGE_CHG] probe: get_charging_control...\n");
 	get_charging_control();
 
+	/* markers around batt_init_cust_data, so a probe-time death lands in
+	 * the FLOG DRAM ring */
+	pr_emerg("[FORGE_CHG] probe: batt_init_cust_data...\n");
 	batt_init_cust_data();
+	pr_emerg("[FORGE_CHG] probe: batt_init_cust_data done\n");
 
 	battery_charging_control(CHARGING_CMD_GET_PLATFORM_BOOT_MODE, &g_platform_boot_mode);
 	battery_log(BAT_LOG_CRTI, "[BAT_probe] g_platform_boot_mode = %d\n ", g_platform_boot_mode);
@@ -4022,13 +4900,22 @@ static int battery_probe(struct platform_device *dev)
 
 	/* battery kernel thread for 10s check and charger in/out event */
 	/* Replace GPT timer by hrtime */
-	battery_kthread_hrtimer_init();
-
-	kthread_run(bat_routine_thread, NULL, "bat_routine_thread");
-	kthread_run(bat_update_thread, NULL, "bat_update_thread");
+	/* thread start deferred (see forge_bat_start_fn);
+	 * forge_bat_delay_s=0 restores the stock immediate start */
+	INIT_DELAYED_WORK(&forge_bat_start_work, forge_bat_start_fn);
+	if (forge_bat_delay_s < 0)
+		forge_bat_delay_s = m3note_board_is(M3NOTE_BOARD_L681) ? 0 : 90;
+	if (forge_bat_delay_s > 0) {
+		/* forge_chg_disable printed here (~2 s), so a cmdline "fchg=1"
+		 * that did not arrive (truncated) is visible early */
+		pr_emerg("[FORGE_CHG] battery-stack start DEFERRED +%ds (forge_chg_disable=%d)\n",
+			 forge_bat_delay_s, forge_chg_disable);
+		schedule_delayed_work(&forge_bat_start_work,
+				      forge_bat_delay_s * HZ);
+	} else {
+		forge_bat_start_fn(&forge_bat_start_work.work);
+	}
 	battery_log(BAT_LOG_CRTI, "[battery_probe] battery kthread init done\n");
-
-	charger_hv_detect_sw_workaround_init();
 
 	/* LOG System Set */
 	init_proc_log();
