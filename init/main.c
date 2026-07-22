@@ -88,6 +88,8 @@
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
 
+#include "forge_m681_marker.h"
+
 #ifdef CONFIG_MTK_RAM_CONSOLE
 #include <mt-plat/mtk_ram_console.h>
 #endif
@@ -528,7 +530,9 @@ asmlinkage __visible void __init start_kernel(void)
 	boot_cpu_init();
 	page_address_init();
 	pr_notice("%s", linux_banner);
+	forge_m681_mark(FORGE_STAGE_START_KERNEL_ENTRY);	/* 0x01 */
 	setup_arch(&command_line);
+	forge_m681_mark(FORGE_STAGE_POST_SETUP_ARCH);		/* 0x07 */
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
@@ -560,6 +564,8 @@ asmlinkage __visible void __init start_kernel(void)
 	sort_main_extable();
 	trap_init();
 	mm_init();
+	forge_m681_marker_late_init();
+	forge_m681_mark(FORGE_STAGE_POST_MM_INIT);		/* 0x0C */
 
 	/*
 	 * Set up the scheduler prior starting any interrupts (such as the
@@ -586,13 +592,16 @@ asmlinkage __visible void __init start_kernel(void)
 	/* init some links before init_ISA_irqs() */
 	early_irq_init();
 	init_IRQ();
+	forge_m681_mark(FORGE_STAGE_POST_INIT_IRQ);		/* 0x0F */
 	tick_init();
 	rcu_init_nohz();
 	init_timers();
 	hrtimers_init();
 	softirq_init();
 	timekeeping_init();
+	forge_m681_mark(FORGE_STAGE_PRE_TIME_INIT);		/* 0x10 */
 	time_init();
+	forge_m681_mark(FORGE_STAGE_POST_TIME_INIT);		/* 0x11 */
 	sched_clock_postinit();
 	perf_event_init();
 	profile_init();
@@ -609,6 +618,7 @@ asmlinkage __visible void __init start_kernel(void)
 	 * this. But we do want output early, in case something goes wrong.
 	 */
 	console_init();
+	forge_m681_mark(FORGE_STAGE_POST_CONSOLE_INIT);		/* 0x12 */
 	if (panic_later)
 		panic("Too many boot %s vars at `%s'", panic_later,
 		      panic_param);
@@ -682,6 +692,7 @@ asmlinkage __visible void __init start_kernel(void)
 
 	ftrace_init();
 
+	forge_m681_mark(FORGE_STAGE_ABOUT_TO_REST_INIT);	/* 0x18 */
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();
 }
@@ -804,11 +815,13 @@ int __init_or_module do_one_initcall(initcall_t fn)
 #ifdef CONFIG_MTK_RAM_CONSOLE
 	aee_rr_rec_last_init_func((unsigned long)fn);
 #endif
+	forge_m681_mark_aux(0xE0, (u32)(unsigned long)fn);	/* initcall enter */
 	TIME_LOG_START();
 	if (initcall_debug)
 		ret = do_one_initcall_debug(fn);
 	else
 		ret = fn();
+	forge_m681_mark_aux(0xE1, (u32)(unsigned long)fn);	/* initcall done */
 	TIME_LOG_END();
 	msgbuf[0] = 0;
 
@@ -967,6 +980,9 @@ static int __ref kernel_init(void *unused)
 #ifdef CONFIG_MTPROF
 	log_boot("Kernel_init_done");
 #endif
+
+	/* Userspace reached: about to exec /init from the ramdisk. */
+	forge_m681_mark(FORGE_STAGE_PRE_INIT_EXEC);	/* 0xD0 */
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);

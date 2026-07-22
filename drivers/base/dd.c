@@ -301,6 +301,7 @@ static int really_probe(struct device *dev, struct device_driver *drv)
 	dev->driver = drv;
 
 	/* If using pinctrl, bind pins now before probing */
+	if (drv->name && strstr(drv->name, "mtkfb")) pr_emerg("[FORGE_DISP] really_probe: ENTRY for %s dev=%s\n", drv->name, dev_name(dev));
 	ret = pinctrl_bind_pins(dev);
 	if (ret)
 		goto probe_failed;
@@ -333,8 +334,11 @@ static int really_probe(struct device *dev, struct device_driver *drv)
 		if (ret)
 			goto probe_failed;
 	} else if (drv->probe) {
+		if (drv->name && strstr(drv->name, "mtkfb")) pr_emerg("[FORGE_DISP] really_probe: calling drv->probe=%p for %s dev=%s\n", drv->probe, drv->name, dev_name(dev));
 		TIME_LOG_START();
 		ret = drv->probe(dev);
+		if (drv->name && strstr(drv->name, "mtkfb")) { pr_emerg("[FORGE_DISP] really_probe: drv->probe ptr=%pK\n", drv->probe); }
+		if (drv->name && strstr(drv->name, "mtkfb")) pr_emerg("[FORGE_DISP] really_probe: drv->probe returned %d for %s\n", ret, drv->name);
 		TIME_LOG_END();
 		bootprof_probe(ts, dev, drv, (unsigned long)drv->probe);
 		if (ret)
@@ -353,6 +357,7 @@ static int really_probe(struct device *dev, struct device_driver *drv)
 	goto done;
 
 probe_failed:
+	if (drv->name && strstr(drv->name, "mtkfb")) pr_emerg("[FORGE_DISP] really_probe: PROBE_FAILED ret=%d for %s\n", ret, drv->name);
 	devres_release_all(dev);
 	driver_sysfs_remove(dev);
 	dev->driver = NULL;

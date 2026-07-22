@@ -17,6 +17,9 @@
 #include <linux/syscore_ops.h>
 #include <linux/uaccess.h>
 
+/* Reboot black-box stamp (init/forge_m681_marker.c) */
+extern void forge_m681_emergency_mark(void);
+
 /*
  * this indicates whether you can reboot with ctrl-alt-del: the default is yes
  */
@@ -44,6 +47,9 @@ int reboot_cpu;
 enum reboot_type reboot_type = BOOT_ACPI;
 int reboot_force;
 
+/* Defined in init/forge_m681_marker.c (obj-y). */
+extern int forge_poweroff_veto;
+
 /*
  * If set, this is used for preparing the system to power off.
  */
@@ -60,6 +66,10 @@ void (*pm_power_off_prepare)(void);
  */
 void emergency_restart(void)
 {
+	/* Stamp the reboot black box: this path skips the reboot notifier
+	 * chain, so without this an emergency restart leaves no record at
+	 * 0x44810000 (init/forge_m681_marker.c). */
+	forge_m681_emergency_mark();
 	kmsg_dump(KMSG_DUMP_EMERG);
 	machine_emergency_restart();
 }
@@ -284,6 +294,11 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	char buffer[256];
 	int ret = 0;
 
+	/* Name the reboot(2) caller in the console log too, in case the
+	 * black-box write later races the reset. */
+	pr_emerg("[FORGE_M681] #118 sys_reboot: comm=%s pid=%d cmd=0x%x\n",
+		 current->comm, task_pid_nr(current), cmd);
+
 	/* We only trust the superuser with rebooting the system. */
 	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
 		return -EPERM;
@@ -295,6 +310,20 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 			magic2 != LINUX_REBOOT_MAGIC2B &&
 			magic2 != LINUX_REBOOT_MAGIC2C))
 		return -EINVAL;
+
+	/* Userspace power-off veto. The charger shutdown gates cannot see an
+	 * orderly Android shutdown (BatteryService/healthd -> init ->
+	 * reboot(2) POWER_OFF). With the veto on, POWER_OFF/HALT return
+	 * -EPERM; the caller stays alive and is named by the line above.
+	 * RESTART/RESTART2 stay allowed, so "adb reboot recovery" keeps
+	 * working. Runtime knob:
+	 * /sys/module/forge_m681_marker/parameters/forge_poweroff_veto. */
+	if (forge_poweroff_veto &&
+	    (cmd == LINUX_REBOOT_CMD_POWER_OFF || cmd == LINUX_REBOOT_CMD_HALT)) {
+		pr_emerg("[FORGE_M681] P4b VETO sys_reboot power-off: comm=%s pid=%d cmd=0x%x -> -EPERM\n",
+			 current->comm, task_pid_nr(current), cmd);
+		return -EPERM;
+	}
 
 	/*
 	 * If pid namespaces are enabled and the current task is in a child

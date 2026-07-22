@@ -62,6 +62,7 @@
 #include <asm/memblock.h>
 #include <asm/efi.h>
 #include <asm/xen/hypervisor.h>
+#include "../../../init/forge_m681_marker.h"
 
 phys_addr_t __fdt_pointer __initdata;
 
@@ -291,6 +292,8 @@ u64 __cpu_logical_map[NR_CPUS] = { [0 ... NR_CPUS-1] = INVALID_HWID };
 
 void __init setup_arch(char **cmdline_p)
 {
+	forge_m681_mark(FORGE_STAGE_ARCH_SETUP_ENTRY);		/* 0x32 */
+
 	pr_info("Boot CPU: AArch64 Processor [%08x]\n", read_cpuid_id());
 
 	sprintf(init_utsname()->machine, ELF_PLATFORM);
@@ -300,11 +303,20 @@ void __init setup_arch(char **cmdline_p)
 	init_mm.brk	   = (unsigned long) _end;
 
 	*cmdline_p = boot_command_line;
+	forge_m681_mark(FORGE_STAGE_ARCH_CMDLINE_PARSED);	/* 0x33 */
 
 	early_fixmap_init();
 	early_ioremap_init();
+	/* Enable cpuxgpt (arch timer) and map the marker base. Must run right
+	 * after early_ioremap_init() so udelay() has a running CNTVCT_EL0. */
+	forge_m681_marker_early_init();
+	forge_m681_mark(FORGE_STAGE_ARCH_POST_EARLY_IOREMAP);	/* 0x35 */
 
 	setup_machine_fdt(__fdt_pointer);
+	/* Earliest point the flat DT is readable: on "linux,dummy-virt"
+	 * (QEMU) skip all MTK hardware access. No-op on the device. */
+	forge_m681_virt_detect();
+	forge_m681_mark(FORGE_STAGE_ARCH_POST_MACHINE_FDT);	/* 0x34 */
 
 	parse_early_param();
 
@@ -321,6 +333,7 @@ void __init setup_arch(char **cmdline_p)
 	acpi_boot_table_init();
 
 	paging_init();
+	forge_m681_mark(FORGE_STAGE_ARCH_POST_PAGING_INIT);	/* 0x39 */
 	relocate_initrd();
 
 	kasan_init();
@@ -335,6 +348,7 @@ void __init setup_arch(char **cmdline_p)
 	} else {
 		psci_acpi_init();
 	}
+	forge_m681_mark(FORGE_STAGE_ARCH_POST_PSCI_INIT);	/* 0x3B */
 	xen_early_init();
 
 	cpu_read_bootcpu_ops();
@@ -354,6 +368,7 @@ void __init setup_arch(char **cmdline_p)
 			"This indicates a broken bootloader or old kernel\n",
 			boot_args[1], boot_args[2], boot_args[3]);
 	}
+	forge_m681_mark(FORGE_STAGE_ARCH_SETUP_EXIT);		/* 0x3D */
 }
 
 static int __init arm64_device_init(void)
