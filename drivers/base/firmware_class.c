@@ -275,8 +275,14 @@ static void fw_free_buf(struct firmware_buf *buf)
 
 /* direct firmware loading support */
 static char fw_path_para[256];
+/* Android keeps firmware in /vendor/firmware. Without this entry (and no
+ * firmware_class.path on the cmdline) every request_firmware() falls back
+ * to the user helper, and the firmware cache re-requests its images on
+ * each suspend attempt, which can abort suspend. Searched right after the
+ * cmdline/sysfs path, before the /lib/firmware entries. */
 static const char * const fw_path[] = {
 	fw_path_para,
+	"/vendor/firmware",
 	"/lib/firmware/updates/" UTS_RELEASE,
 	"/lib/firmware/updates",
 	"/lib/firmware/" UTS_RELEASE,
