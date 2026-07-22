@@ -30,6 +30,13 @@
 #include "base.h"
 #include "power/power.h"
 
+/* Runtime override of the forge_deny[] probe denylist for the camera blocks:
+ * bit0 = "ispsys", bit1 = "fdvt". Default 0. camera_isp's forge_isp_enable
+ * parameter sets bit0 before it registers the ISP driver; this one is also
+ * writable as /sys/module/kernel/parameters/forge_isp_undeny. */
+unsigned int forge_isp_undeny __read_mostly;
+core_param(forge_isp_undeny, forge_isp_undeny, uint, 0644);
+
 /* For automatically allocated device IDs */
 static DEFINE_IDA(platform_devid_ida);
 
@@ -524,6 +531,75 @@ static int platform_drv_probe(struct device *_dev)
 	struct platform_driver *drv = to_platform_driver(_dev->driver);
 	struct platform_device *dev = to_platform_device(_dev);
 	int ret;
+
+	/* Record the probe function of the device being probed, so a hang in a
+	 * driver probe can be resolved against System.map from the marker. */
+	{ extern void forge_m681_mark_aux(unsigned char, unsigned int);
+	  forge_m681_mark_aux(0xC0, (unsigned int)(unsigned long)(drv->probe)); }
+
+	/* Probe denylist: drivers whose blocks sit in power/clock domains that
+	 * are not brought up on this board; touching an unclocked block stalls
+	 * the AXI bus. Only named matches are skipped; each skip marks 0xCD with
+	 * the skipped probe function as aux. */
+	{
+		static const char * const forge_deny[] = {
+			"mt-eem", "ptp_fsm",
+			/* "ispsys"/"fdvt" can be lifted at runtime with
+			 * forge_isp_undeny. Entries match the compatible as well as
+			 * the driver name: the ISP driver is "camera-isp", but its
+			 * device has compatible "mediatek,ispsys". */
+			"ispsys", "fdvt", "venc", "vdec", "vcodec",
+			/* Do not deny "consys", "wmt" or "wifi": with mtk_wmt_probe
+			 * skipped, clk_scp_conn_main stays NULL, clk_prepare_enable(NULL)
+			 * returns 0, and the CONN domain looks powered while it is not.
+			 * Both connectivity probes do no MMIO and no power-on. */
+			"mdp", "jpeg", "jpg",
+			/* mtk-thermal must probe: it provides the tscpu zones and the
+			 * HW overtemp reset. */
+			"mediatek,gps", "devapc", "systracker",
+			/* musb must probe (it is the UDC for adb); it needs the
+			 * usb3_phy SSUSB clock provider enabled in mt6755.dtsi. */
+			"watchpoint", "freqhop", "wdt", NULL };
+		extern void forge_m681_mark_aux(unsigned char, unsigned int);
+		/* Codec gate, defined in drivers/of/platform.c. */
+		extern unsigned int forge_codec_undeny;
+		/* Camera gate: bit0 = ispsys, bit1 = fdvt. Defined above. */
+		extern unsigned int forge_isp_undeny;
+		const char *src = (_dev->driver && _dev->driver->name) ? _dev->driver->name : "";
+		const char *cmp = NULL;
+		char nm[48], cb[72];
+		int k, j;
+
+		for (k = 0; k < 47 && src[k]; k++) { char c = src[k]; nm[k] = (c >= 'A' && c <= 'Z') ? c + 32 : c; }
+		nm[k] = 0;
+		cb[0] = 0;
+		if (_dev->of_node && of_property_read_string(_dev->of_node, "compatible", &cmp) == 0 && cmp) {
+			for (j = 0; j < 71 && cmp[j]; j++) { char c = cmp[j]; cb[j] = (c >= 'A' && c <= 'Z') ? c + 32 : c; }
+			cb[j] = 0;
+		}
+		for (k = 0; forge_deny[k]; k++) {
+			/* Codec gate: bit0 revives "vdec" (vdec_gcon), bit1 "venc",
+			 * bit2 "vcodec" (the "Vcodec" driver name, lowercased). The
+			 * vdec_gcon device matches both "vdec" and "vcodec", so a
+			 * full probe needs bits 0 and 2 (= 5). */
+			if ((forge_codec_undeny & 0x1) && !strcmp(forge_deny[k], "vdec"))
+				continue;
+			if ((forge_codec_undeny & 0x2) && !strcmp(forge_deny[k], "venc"))
+				continue;
+			if ((forge_codec_undeny & 0x4) && !strcmp(forge_deny[k], "vcodec"))
+				continue;
+			/* Camera gate: bit0 revives the ISP (mediatek,ispsys), bit1
+			 * the FDVT face detector. */
+			if ((forge_isp_undeny & 0x1) && !strcmp(forge_deny[k], "ispsys"))
+				continue;
+			if ((forge_isp_undeny & 0x2) && !strcmp(forge_deny[k], "fdvt"))
+				continue;
+			if (strstr(nm, forge_deny[k]) || (cb[0] && strstr(cb, forge_deny[k]))) {
+				forge_m681_mark_aux(0xCD, (unsigned int)(unsigned long)(drv->probe));
+				return -ENODEV;
+			}
+		}
+	}
 
 	ret = of_clk_set_defaults(_dev->of_node, false);
 	if (ret < 0)

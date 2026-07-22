@@ -22,6 +22,10 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+/* clk API for the staged audio power-on below */
+#include <linux/clk.h>
+#include <linux/clk-provider.h>
+#include <dt-bindings/clock/mt6755-clk.h>
 
 const struct of_device_id of_default_bus_match_table[] = {
 	{ .compatible = "simple-bus", },
@@ -177,20 +181,26 @@ static struct platform_device *of_platform_device_create_pdata(
 	    of_node_test_and_set_flag(np, OF_POPULATED))
 		return NULL;
 
+	/* Sub-step markers inside the device create, so a hang is pinned to
+	 * alloc (IRQ map) vs add. */
+	{ extern void forge_m681_mark(unsigned char); forge_m681_mark(0xD1); }
 	dev = of_device_alloc(np, bus_id, parent);
 	if (!dev)
 		goto err_clear_flag;
+	{ extern void forge_m681_mark(unsigned char); forge_m681_mark(0xD2); }
 
 	dev->dev.bus = &platform_bus_type;
 	dev->dev.platform_data = platform_data;
 	of_dma_configure(&dev->dev, dev->dev.of_node);
 	of_msi_configure(&dev->dev, dev->dev.of_node);
 
+	{ extern void forge_m681_mark(unsigned char); forge_m681_mark(0xD3); }
 	if (of_device_add(dev) != 0) {
 		of_dma_deconfigure(&dev->dev);
 		platform_device_put(dev);
 		goto err_clear_flag;
 	}
+	{ extern void forge_m681_mark(unsigned char); forge_m681_mark(0xD4); }
 
 	return dev;
 
@@ -314,6 +324,159 @@ static const struct of_dev_auxdata *of_dev_lookup(const struct of_dev_auxdata *l
 	return NULL;
 }
 
+/* Codec gate: bit0 (=1) revives the vdec* OF nodes below, bit1 (=2) venc*,
+ * bit2 (=4) the vcodec driver probe (consumed in drivers/base/platform.c
+ * and in videocodec_kernel_driver.c's DT compatible fallback). core_param,
+ * not module_param: this file and drivers/base/platform.c share
+ * KBUILD_MODNAME "platform" (two module_params would collide), and
+ * core_param gives the unprefixed cmdline token forge_codec_undeny=N.
+ * Default 7 (vdec | venc | vcodec): LK truncates the cmdline at ~99
+ * characters and the parameter is 0444, so the default is what applies.
+ * If reviving the vdec nodes breaks video decode, use 6 (venc | vcodec). */
+unsigned int forge_codec_undeny __read_mostly = 7;
+core_param(forge_codec_undeny, forge_codec_undeny, uint, 0444);
+
+#if IS_ENABLED(CONFIG_MTK_SND_SOC_NEW_ARCH)
+/* [FORGE_AUDIO] staged audio device creation. The audio DT devices can be
+ * held back at boot and created later in waves through the sysfs knob
+ * mtk_soc_machine.forge_audio_stage: 1 = AFE/pcm platforms (CCF clocks,
+ * AFE MMIO, audgpio pinctrl), 2 = codec (first PMIC writes), 3 = machine
+ * card. Compiled out in audio-off builds. Nodes are classified by
+ * compatible, not by a substring of the name: "mediatek,audiosys" (CCF
+ * provider) and "mediatek,audio_sram" (mapped via of_find_compatible_node,
+ * no driver) are left alone; accdet is separate.
+ * Boot default 3: all audio nodes are populated at boot in DT order. At
+ * that point the LK-left state and the Clk_On hold (mtk-soc-afe-control.c
+ * forge_audio_hold) keep the audio bus alive; a later runtime population
+ * hits the clk_disable_unused audio bus gating (see
+ * forge_audio_stage1_power()). The knob still accepts values above the
+ * current stage (set the default to 0 for a staged build). */
+int forge_audio_stage_current = 3;
+
+static int forge_audio_node_stage(struct device_node *np)
+{
+	const char *c = NULL;
+
+	if (of_device_is_compatible(np, "mediatek,audio"))
+		return 3;
+	if (of_device_is_compatible(np, "mediatek,mt_soc_codec_63xx"))
+		return 2;
+	/* btcvsd is excluded: its reg spans CONN space (0x18000000 PKV +
+	 * SRAM_BANK2), unpowered until wmt_loader; BT-SCO is not needed for
+	 * audio. */
+	if (of_device_is_compatible(np, "mediatek,audio_bt_cvsd"))
+		return 0;
+	if (!of_property_read_string(np, "compatible", &c) && c &&
+	    !strncmp(c, "mediatek,mt_soc_btcvsd", 22))
+		return 0;
+	if (c && !strncmp(c, "mediatek,mt_soc_", 16))
+		return 1;
+	return 0;
+}
+
+/* Restore the boot-time power/clock state before creating the stage-1
+ * devices at runtime. The probe path (dl1 -> InitAfeControl ->
+ * AudDrv_Bus_Init -> Afe_Set_Reg AUDIO_TOP_CON0) does raw AFE MMIO and
+ * skips the AUD MTCMOS ("don't prepare MTCMOS in probe"), relying on the
+ * boot-time state; at boot the probes run before clk_disable_unused /
+ * domain cleanup, but at runtime the AUD MTCMOS / INFRA_AUDIO CG are gated
+ * and the first AFE access hangs the AXI bus. One enable at a time, each
+ * with a pr_emerg breadcrumb (it reaches console-ramoops), so a hang names
+ * the failing layer. */
+static void forge_audio_stage1_power(void)
+{
+	static const struct {
+		const char *compat;
+		int idx;
+		const char *tag;
+	} pre[] = {
+		{ "mediatek,mt6755-scpsys",   SCP_SYS_AUD,
+		  "SCP_SYS_AUD mtcmos" },
+		{ "mediatek,mt6755-infrasys", INFRA_AUDIO,
+		  "INFRA_AUDIO cg" },
+		{ "mediatek,mt6755-infrasys", INFRA_AUDIO_26M_BCLK,
+		  "INFRA_AUDIO_26M_BCLK cg" },
+		{ "mediatek,mt6755-audiosys", AUDIO_AFE,
+		  "AUDIO_AFE cg" },
+	};
+	static bool done;
+	struct of_phandle_args a;
+	struct clk *clk;
+	int i, ret;
+
+	if (done)
+		return;
+	done = true;
+	for (i = 0; i < ARRAY_SIZE(pre); i++) {
+		a.np = of_find_compatible_node(NULL, NULL, pre[i].compat);
+		if (!a.np) {
+			pr_emerg("[FORGE_AUDIO] pre-power: no node %s\n",
+				 pre[i].compat);
+			continue;
+		}
+		a.args_count = 1;
+		a.args[0] = pre[i].idx;
+		clk = of_clk_get_from_provider(&a);
+		if (IS_ERR(clk)) {
+			pr_emerg("[FORGE_AUDIO] pre-power: %s get=%ld\n",
+				 pre[i].tag, PTR_ERR(clk));
+			continue;
+		}
+		pr_emerg("[FORGE_AUDIO] pre-power: enabling %s\n", pre[i].tag);
+		ret = clk_prepare_enable(clk);
+		pr_emerg("[FORGE_AUDIO] pre-power: %s ret=%d\n",
+			 pre[i].tag, ret);
+	}
+}
+
+static void forge_audio_create_node(struct device_node *np,
+				    struct device *parent)
+{
+	extern void forge_m681_mark_ofnode(const char *name);
+	struct platform_device *pd;
+	struct device_node *child;
+
+	if (of_node_check_flag(np, OF_POPULATED))
+		return;
+	/* DRAM survivor marker + console-ramoops line BEFORE the create: on a
+	 * hard wedge the last marker/breadcrumb names the dying node. */
+	forge_m681_mark_ofnode(np->full_name);
+	pr_emerg("[FORGE_AUDIO] creating %s\n", np->full_name);
+	pd = of_platform_device_create(np, NULL, parent);
+	pr_emerg("[FORGE_AUDIO] stage-create %s -> %s\n", np->full_name,
+		 pd ? dev_name(&pd->dev) : "FAILED");
+	for_each_child_of_node(np, child)
+		forge_audio_create_node(child, pd ? &pd->dev : parent);
+}
+
+int forge_audio_stage_populate(int stage)
+{
+	struct device_node *np;
+	struct platform_device *ppd;
+	int s;
+
+	if (stage > 3)
+		stage = 3;
+	if (stage <= forge_audio_stage_current)
+		return 0;
+	pr_emerg("[FORGE_AUDIO] stage %d -> %d populate enter\n",
+		 forge_audio_stage_current, stage);
+	if (forge_audio_stage_current < 1)
+		forge_audio_stage1_power();
+	for_each_of_allnodes(np) {
+		s = forge_audio_node_stage(np);
+		if (s > forge_audio_stage_current && s <= stage) {
+			ppd = np->parent ?
+				of_find_device_by_node(np->parent) : NULL;
+			forge_audio_create_node(np, ppd ? &ppd->dev : NULL);
+		}
+	}
+	forge_audio_stage_current = stage;
+	pr_emerg("[FORGE_AUDIO] stage %d populate DONE\n", stage);
+	return 0;
+}
+#endif /* CONFIG_MTK_SND_SOC_NEW_ARCH */
+
 /**
  * of_platform_bus_create() - Create a device for a node and its children.
  * @bus: device node of the bus to instantiate
@@ -359,6 +522,84 @@ static int of_platform_bus_create(struct device_node *bus,
 		return 0;
 	}
 
+	/* Node-create skip for non-essential peripherals whose blocks sit in
+	 * power/clock domains that are not up: a register access during
+	 * of_device_alloc/device_add, before any driver probe, hangs the bus
+	 * (no fault). Kept: mmc0 (eMMC), uart, i2c, pwrap (PMIC),
+	 * pinctrl/gpio, rtc, clk controllers, gic/timer/cpuxgpt, usb (adb).
+	 * Each skip marks 0xBC. */
+	{ extern void forge_m681_mark_aux(unsigned char, unsigned int);
+	  extern int forge_should_skip_display(void);
+	  /* always-deny: non-display peripherals that wedge the bus / are unused */
+	  static const char * const forge_of_deny[] = {
+		/* Not denied: reg-less nodes (touch, fingerprint, sensors) do
+		 * no MMIO in of_device_alloc/device_add and cannot stall the
+		 * bus; denying them only stops their platform_device creation. */
+		"nfc", "irq_nfc",
+		"md_ccif", "ccci",
+		/* "consys" is not denied: wmt_detect needs consys@18070000, and
+		 * consys is not powered until userspace wmt_loader.
+		 * "thermal"/"tscpu"/"wmt" match no real node. "fmradio" stays
+		 * denied. */
+		"thermal", "tscpu", "wmt", "fmradio",
+		/* msdc1 (the external microSD host, mediatek,mt6755-mmc at
+		 * 0x11240000) is not denied: the MSDC clock domain is always on
+		 * (no MTCMOS). msdc2 = SDIO host, denied; msdc3 has no node. */
+		"msdc2", "msdc3", "fdvt",
+		"jpeg", "vcodec", "venc", "vdec",
+		"irtx",
+		"mrdump_ext_rst", "eint_wpc", "usb_typec", "swtp",
+		"ext_buck_oc", "ext_buck_vmd1", "rt5081_pmu_eint", "rt5081_pd",
+		/* rf_clock_buffer/pmic_clock_buffer are not denied: both nodes
+		 * are reg-less (no MMIO at device_add), and clk_buf_init() finds
+		 * them with of_find_compatible_node in any case. */
+		"cpuhvfs", "vcorefs", "eem", "ptp_fsm", "devapc",
+		"systracker", "watchpoint", "freqhop", "freqhopping",
+		"toprgu",
+		NULL };
+	  /* the WHOLE display stack -- denied ONLY when the self-healing gate says
+	   * to skip (i.e. the previous boot wedged here). */
+	  static const char * const forge_display_deny[] = {
+		NULL };
+	  const char *ofn = bus->full_name ? bus->full_name : "";
+	  int dk;
+#if IS_ENABLED(CONFIG_MTK_SND_SOC_NEW_ARCH)
+	  /* [FORGE_AUDIO] staged audio device creation: audio nodes held
+	   * back at boot are created later by forge_audio_stage_populate().
+	   * The subtree skip also covers btcvsd children. Marks 0xBA + the
+	   * wanted stage. */
+	  { int as = forge_audio_node_stage(bus);
+	    if (as > 0 && as > forge_audio_stage_current) {
+		forge_m681_mark_aux(0xBA, (unsigned int)as);
+		return 0;
+	    } }
+#endif
+	  for (dk = 0; forge_of_deny[dk]; dk++) {
+		/* Codec gate: bit0 revives the vdec* nodes (vdec_gcon@16000000
+		 * + vdec_full_top@16020000), bit1 venc* (venc_gcon@17000000 +
+		 * venc@17002000). "jpeg" stays denied; the jpgenc/jpgdec node
+		 * names contain neither substring. */
+		if ((forge_codec_undeny & 0x1) && !strcmp(forge_of_deny[dk], "vdec"))
+			continue;
+		if ((forge_codec_undeny & 0x2) && !strcmp(forge_of_deny[dk], "venc"))
+			continue;
+		if (strstr(ofn, forge_of_deny[dk])) {
+			forge_m681_mark_aux(0xBC, (unsigned int)dk);
+			return 0;
+		}
+	  }
+	  if (forge_should_skip_display())
+		for (dk = 0; forge_display_deny[dk]; dk++)
+			if (strstr(ofn, forge_display_deny[dk])) {
+				forge_m681_mark_aux(0xBD, (unsigned int)dk);
+				return 0;
+			}
+	}
+
+	/* Name the node about to be created, so a hang inside
+	 * of_device_alloc/device_add (no driver probe 0xC0) is located. */
+	{ extern void forge_m681_mark_ofnode(const char *name);
+	  forge_m681_mark_ofnode(bus->full_name); }
 	dev = of_platform_device_create_pdata(bus, bus_id, platform_data, parent);
 	if (!dev || !of_match_node(matches, bus))
 		return 0;
