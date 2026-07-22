@@ -1610,14 +1610,13 @@ SYSCALL_DEFINE3(getrandom, char __user *, buf, size_t, count,
 	if (flags & GRND_RANDOM)
 		return _random_read(flags & GRND_NONBLOCK, buf, count);
 
-	if (unlikely(nonblocking_pool.initialized == 0)) {
-		if (flags & GRND_NONBLOCK)
-			return -EAGAIN;
-		wait_event_interruptible(urandom_init_wait,
-					 nonblocking_pool.initialized);
-		if (signal_pending(current))
-			return -ERESTARTSYS;
-	}
+	/* Do not block getrandom() on an uninitialised pool: the board has no
+	 * hw_random and little interrupt entropy, so the nonblocking pool may
+	 * never initialise and zygote would block forever. Returns
+	 * urandom-quality bytes, which are not crypto-strong. */
+	if (unlikely(nonblocking_pool.initialized == 0))
+		pr_notice_once("m681: getrandom served pre-init (entropy starved) comm=%s\n",
+			       current->comm);
 	return urandom_read(NULL, buf, count, NULL);
 }
 
