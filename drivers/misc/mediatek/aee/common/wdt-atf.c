@@ -599,6 +599,10 @@ static int __init aee_wdt_init(void)
 	int i;
 	phys_addr_t atf_aee_debug_phy_addr;
 
+	/* QEMU virt: the MTK_SIP_KERNEL_WDT SMC below (FID 0x82000204) is
+	 * undefined without EL3/ATF. */
+	{ extern int forge_virt; if (forge_virt) return 0; }
+
 	atomic_set(&wdt_enter_fiq, 0);
 	atomic_set(&aee_wdt_zap_lock, 1);
 

@@ -28,6 +28,7 @@ endif
 # cond_syscall is currently not LTO compatible
 CFLAGS_sys_ni.o = $(DISABLE_LTO)
 
+obj-y += forge_autorecovery.o
 obj-y += sched/
 obj-y += locking/
 obj-y += power/

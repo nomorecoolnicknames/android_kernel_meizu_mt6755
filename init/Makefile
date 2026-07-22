@@ -10,6 +10,12 @@ ccflags-y += -Idrivers/misc/mediatek/include/mt-plat/
 endif
 
 obj-y                          := main.o version.o mounts.o
+# Early boot stage markers that survive a WDT reset (SPM/DRAM breadcrumbs)
+# and the forge_enable_cpuxgpt timer start.
+obj-y                          += forge_m681_marker.o
+# Boot banner printed at late_initcall_sync with live data
+# (kernel/CPU/RAM/eMMC/DT model), to the console and pstore/ramoops.
+obj-y                          += forge_m681_fetch.o
 obj-y                          += noinitramfs.o
 obj-$(CONFIG_BLK_DEV_INITRD)   += initramfs.o
 obj-$(CONFIG_GENERIC_CALIBRATE_DELAY) += calibrate.o

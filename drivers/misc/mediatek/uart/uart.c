@@ -1016,7 +1016,14 @@ static struct console mtk_uart_console = {
 /*---------------------------------------------------------------------------*/
 static int __init mtk_uart_console_init(void)
 {
-	int err = mtk_uart_init_ports();
+	int err;
+
+	/* QEMU virt has no MTK UART; mtk_uart_init_ports() would dereference
+	 * the unmapped fixed UART base from console_init(). The virt console
+	 * is the PL011 (ttyAMA0). No effect on the real device. */
+	{ extern int forge_virt; if (forge_virt) return 0; }
+
+	err = mtk_uart_init_ports();
 
 	if (!err)
 		register_console(&mtk_uart_console);
@@ -1028,6 +1035,9 @@ console_initcall(mtk_uart_console_init);
 /*---------------------------------------------------------------------------*/
 static int __init mtk_late_console_init(void)
 {
+	/* see mtk_uart_console_init: no MTK UART under QEMU virt */
+	{ extern int forge_virt; if (forge_virt) return 0; }
+
 	if (!(mtk_uart_console.flags & CON_ENABLED))
 		register_console(&mtk_uart_console);
 

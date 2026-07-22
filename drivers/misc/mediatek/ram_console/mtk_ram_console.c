@@ -582,6 +582,13 @@ static int __init ram_console_early_init(void)
 #ifdef CONFIG_OF
 	struct mem_desc_t sram = { 0 };
 
+	/* QEMU virt: /chosen has no "ram_console" property, so the fallback
+	 * hardcodes SRAM 0x0011D000 (virt pflash) with size 0x800, and the RR
+	 * record offsets lie past that small ioremap (paging fault in
+	 * aee_rr_rec_last_init_func). Leave ram_console_init_done=0 so every
+	 * aee_rr_rec_* is a no-op. */
+	{ extern int forge_virt; if (forge_virt) return 0; }
+
 	if (of_scan_flat_dt(dt_get_ram_console, &sram)) {
 		if (sram.start == 0) {
 			sram.start = CONFIG_MTK_RAM_CONSOLE_ADDR;

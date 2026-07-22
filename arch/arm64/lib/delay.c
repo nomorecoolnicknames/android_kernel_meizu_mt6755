@@ -27,9 +27,19 @@
 void __delay(unsigned long cycles)
 {
 	cycles_t start = get_cycles();
+	/*
+	 * Guard against a frozen CNTVCT_EL0: if cpuxgpt was never enabled
+	 * (forge_enable_cpuxgpt(), SMC 0x82000201) this loop would never exit.
+	 * On a running counter the real condition exits first; on a frozen
+	 * one the cap gives an over-long, never too short, delay.
+	 */
+	unsigned long guard = (cycles << 8) + 0x10000UL;
 
-	while ((get_cycles() - start) < cycles)
+	while ((get_cycles() - start) < cycles) {
 		cpu_relax();
+		if (!guard--)
+			break;
+	}
 }
 EXPORT_SYMBOL(__delay);
 
