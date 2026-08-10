@@ -23,6 +23,11 @@
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 
+/* The mt6755 V1 clk sources gate debug/test blocks with #if on these;
+ * define them to 0, or -Werror=undef fires. */
+#define CLK_DEBUG		0
+#define DUMMY_REG_TEST		0
+
 extern int mtk_is_mtcmos_enable(void);
 extern spinlock_t *get_mtk_clk_lock(void);
 

@@ -107,6 +107,17 @@ config COMMON_CLK_MT6758
 	  This driver supports Mediatek MT6758 clocks.
 	  Use the config to support CCF on MT6758,
 	  instead of old clkmgr architecture.
+
+config COMMON_CLK_MT6755
+	bool "Clock driver for Mediatek MT6755"
+	depends on COMMON_CLK
+	select COMMON_CLK_MEDIATEK
+	default y if MACH_MT6755 && !MTK_CLKMGR
+	---help---
+	  This driver supports Mediatek MT6755 (Helio P10) clocks.
+	  Carried from the device-proven m681 4.4 tree (same V1 CCF
+	  infra as MT6758/MT6761). Use the config to support CCF on
+	  MT6755, instead of old clkmgr architecture.
 	  MT6758 default will use CCF.
 
 config COMMON_CLK_MT6765

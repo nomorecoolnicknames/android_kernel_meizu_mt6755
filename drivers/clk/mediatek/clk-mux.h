@@ -21,6 +21,10 @@ struct mtk_mux_upd {
 	int id;
 	const char *name;
 	const char * const *parent_names;
+	u32 flags; /* ALPS-lc base bug: MUX_UPD sets .flags = 0 but the struct
+			    * lacked the field (never expanded by mt676x builds,
+			    * which use only MUX_CLR_SET_UPD). Same position as
+			    * struct mtk_mux_clr_set_upd below. */
 
 	u32 mux_ofs;
 	u32 upd_ofs;
