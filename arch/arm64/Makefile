@@ -136,6 +136,13 @@ all:	$(KBUILD_IMAGE) $(KBUILD_DTBS)
 MTK_PLATFORM := $(CONFIG_MTK_PLATFORM:"%"=%)
 MTK_PROJECT := $(CONFIG_ARCH_MTK_PROJECT:"%"=%)
 export MTK_PLATFORM MTK_PROJECT MTK_TARGET_PROJECT
+# mt6735-class platform headers live under mt-plat/<plat>/include (mach/...);
+# arch/arm/Makefile adds this path for arm32, mirror it here for arm64
+# (MACH_MT6735M, MACH_MT6755). Later MTK platforms (mt6765+) do not use
+# mach/ paths.
+ifneq ($(filter y,$(CONFIG_MACH_MT6735M) $(CONFIG_MACH_MT6755)),)
+KBUILD_CPPFLAGS += -I$(srctree)/drivers/misc/mediatek/include/mt-plat/$(MTK_PLATFORM)/include
+endif
 -include $(srctree)/scripts/drvgen/drvgen.mk
 
 boot := arch/arm64/boot

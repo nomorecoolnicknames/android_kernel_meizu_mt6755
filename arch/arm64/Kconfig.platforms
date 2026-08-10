@@ -284,6 +284,73 @@ config MACH_MT6580
 	  thin-design smartphones. MT6580 also offers significant multitasking and
 	  multimedia improvements.
 
+config MACH_MT6735M
+	bool "MediaTek MT6735M"
+	select GENERIC_CLOCKEVENTS
+	select ARM_AMBA
+	select IRQ_DOMAIN
+	select IRQ_DOMAIN_DEBUG
+	select GENERIC_SCHED_CLOCK
+	select MTK_SYSTRACKER
+	select MTK_SYS_CIRQ
+	select MTK_EIC
+	select MTK_GPIO
+	select MTK_GIC
+	select PINCTRL
+	select PINCTRL_MT6735
+	select MFD_SYSCON
+	select CPU_IDLE
+	select MTK_BASE_POWER
+	select MTK_IRQ_NEW_DESIGN
+	select MTK_POWER_GS
+	select HW_RANDOM
+	select HW_RANDOM_MT67XX
+	select SDCARD_FS
+	select OVERLAY_FS
+	help
+	  This enables support for MediaTek MT6735M / MT6737M on aarch64.
+	  arm64 graft of the arm32 MACH_MT6735M platform entry: arm32-only
+	  selects (CPU_V7, VFP_OPT, NEED_MACH_MEMORY_H, ARM crypto, errata,
+	  ARM_MT6735_CPUIDLE) dropped; the rest matches arch/arm/Kconfig.
+	  Support for k37mv1 (MT6737M) class boards such as the Meizu M5c.
+
+# m681/mt6755: the carried platform code is gated on CONFIG_ARCH_MT6755
+# (the 3.18 symbol) in several dispatch headers (mt_spm_reg.h etc).
+# Define ARCH_MT6755 to track MACH_MT6755 — same trick as the 4.4 tree.
+config ARCH_MT6755
+	bool
+	default y if MACH_MT6755
+
+config MACH_MT6755
+	bool "MediaTek MT6755"
+	select GENERIC_CLOCKEVENTS
+	select ARM_AMBA
+	select IRQ_DOMAIN
+	select IRQ_DOMAIN_DEBUG
+	select GENERIC_SCHED_CLOCK
+	select MTK_SYSTRACKER
+	select MTK_SYS_CIRQ
+	select MTK_EIC
+	select MTK_GPIO
+	select MTK_GIC
+	select PINCTRL
+	select PINCTRL_MT6755
+	select MFD_SYSCON
+	select CPU_IDLE
+	select MTK_BASE_POWER
+	select MTK_IRQ_NEW_DESIGN
+	select HW_RANDOM
+	select HW_RANDOM_MT67XX
+	select SDCARD_FS
+	select OVERLAY_FS
+	help
+	  This enables support for MediaTek MT6755 / Helio P10 on aarch64,
+	  grafted the same way as MACH_MT6735M (same 3.18-era platform
+	  generation): vendor GICv2 (irq-mt-gic), legacy clkmgr lineage,
+	  pinctrl-mtk-common. 64-bit octa-core (4+4) Cortex-A53.
+	  Support for wt6755 (MT6755) class boards such as the Meizu M3
+	  Note (m681); MT6750 (m6/m6t) is the same die class.
+
 config MACH_MT3887
 	bool "MediaTek MT3887"
 	select GENERIC_TIME
