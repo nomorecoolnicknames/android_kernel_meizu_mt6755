@@ -54,6 +54,15 @@ enum _ENUM_BTIF_OP_ERROR_CODE_ {
 	E_BTIF_INVAL_STATE = -8,
 };
 
+/* 3.18 in-tree connectivity (wmt/stp) port compat: the 3.18 btif export
+ * header declared these enums as typedefs; the ported conn_soc code uses
+ * the typedef names. Enum tags live in a separate namespace, so these
+ * aliases are safe for existing enum-tag users. */
+typedef enum _ENUM_BTIF_DPIDLE_ ENUM_BTIF_DPIDLE_CTRL;
+typedef enum _ENUM_BTIF_LPBK_MODE_ ENUM_BTIF_LPBK_MODE;
+typedef enum _ENUM_BTIF_DBG_ID_ ENUM_BTIF_DBG_ID;
+typedef enum _ENUM_BTIF_OP_ERROR_CODE_ ENUM_BTIF_OP_ERROR_CODE;
+
 /*--------------End of Enum Defination---------------*/
 
 /*--------------Type Definition---------------*/

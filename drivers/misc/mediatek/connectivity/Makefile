@@ -1,35 +1,35 @@
-#
-# Copyright (C) 2015 MediaTek Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License version 2 as
-# published by the Free Software Foundation.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-
 # Connectivity combo driver
-# If KERNELRELEASE is defined, we've been invoked from the
-# kernel build system and can use its language.
+# In-tree port of the 3.18 (android_kernel_meizu_m5c) connectivity stack:
+#   common/common_detect + common/conn_soc (wmt/stp core for SOC_CONSYS) + gps
+# The 4.9 BSP moved connectivity to a standalone repo (connadp shims); that
+# repo is not available, so the 3.18 in-tree driver is ported instead.
+# The connadp shim objects (common/connectivity_build_in_adapter.o,
+# common/wmt_build_in_adapter.o) are intentionally NOT linked: they duplicate
+# symbols (e.g. gConEmiPhyBase) provided by the real driver.
 ifneq ($(KERNELRELEASE),)
-    subdir-ccflags-y += -I$(srctree)/
-    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/include
-    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/include/clkbuf_v1
-    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/include/clkbuf_v1/$(MTK_PLATFORM)
-    subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/include/mt-plat/$(MTK_PLATFORM)/include
-    subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/include/mt-plat
-    subdir-ccflags-y += -I$(srctree)/drivers/mmc/core
-    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/eccci/$(MTK_PLATFORM)
-    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/eccci/
+subdir-ccflags-y += -D MTK_WCN_REMOVE_KERNEL_MODULE
+ifeq ($(CONFIG_ARM64), y)
+subdir-ccflags-y += -D CONFIG_MTK_WCN_ARM64
+endif
 
-    # Do Nothing, move to standalone repo
-    MODULE_NAME := connadp
-    obj-y += $(MODULE_NAME).o
-    $(MODULE_NAME)-objs += common/connectivity_build_in_adapter.o
-    $(MODULE_NAME)-objs += common/wmt_build_in_adapter.o
+ifeq ($(CONFIG_MTK_CONN_LTE_IDC_SUPPORT),y)
+    subdir-ccflags-y += -D WMT_IDC_SUPPORT=1
+else
+    subdir-ccflags-y += -D WMT_IDC_SUPPORT=0
+endif
+    subdir-ccflags-y += -D MTK_WCN_WMT_STP_EXP_SYMBOL_ABSTRACT
+
+    # Include paths needed by the ported code. mt6735 uses the eccci1 CCCI:
+    # port_ipc.h / ccci_ipc_task_ID.h / ccci_config.h live there.
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/eccci1/$(MTK_PLATFORM)
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/eccci1/
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/eemcs/
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/conn_md/include
+
+    obj-y += common/
+    obj-$(CONFIG_MTK_COMBO_WIFI) += wlan/
+    obj-$(CONFIG_MTK_COMBO_GPS) += gps/
+    obj-n := dummy.o
 
 # Otherwise we were called directly from the command line;
 # invoke the kernel build system.

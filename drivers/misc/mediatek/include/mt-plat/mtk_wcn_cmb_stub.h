@@ -71,6 +71,13 @@ enum CMB_STUB_AIF_CTRL {
 	CMB_STUB_AIF_CTRL_MAX = 2,
 };
 
+/* Compatibility typedefs for the in-tree 3.18 connectivity (wmt/stp) port:
+ * the 3.18 header declared these enums as typedefs, and the ported code
+ * uses them as plain type names. Enum tags live in a separate namespace,
+ * so these aliases are safe for existing enum-tag users. */
+typedef enum CMB_STUB_AIF_X CMB_STUB_AIF_X;
+typedef enum CMB_STUB_AIF_CTRL CMB_STUB_AIF_CTRL;
+
 enum COMBO_FUNC_TYPE {
 	COMBO_FUNC_TYPE_BT = 0,
 	COMBO_FUNC_TYPE_FM = 1,
@@ -87,6 +94,9 @@ enum COMBO_IF {
 	COMBO_IF_BTIF = 2,
 	COMBO_IF_MAX,
 };
+
+/* 3.18 in-tree connectivity port compat: typedef alias (see above) */
+typedef enum COMBO_IF COMBO_IF;
 
 typedef void (*wmt_bgf_eirq_cb) (void);
 typedef int (*wmt_aif_ctrl_cb) (enum CMB_STUB_AIF_X, enum CMB_STUB_AIF_CTRL);
@@ -126,6 +136,9 @@ struct _CMB_STUB_CB_ {
 #endif
 	wmt_clock_fail_dump_cb clock_fail_dump_cb;
 };
+
+/* 3.18 in-tree connectivity port compat: typedef aliases */
+typedef struct _CMB_STUB_CB_ CMB_STUB_CB, *P_CMB_STUB_CB;
 
 /*******************************************************************************
 *                            P U B L I C   D A T A

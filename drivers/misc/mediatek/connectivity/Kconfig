@@ -123,6 +123,14 @@ config MTK_COMBO_CHIP_CONSYS_6735
 	  is
 	  MT6735(BT/WIFI/GPS/FM combo chip)
 
+config MTK_COMBO_CHIP_CONSYS_6755
+	bool "MTK MT6755 combo chip support"
+	help
+	  this config is used to decided SOC consys version
+	  in current platform
+	  is
+	  MT6755(BT/WIFI/GPS/FM combo chip)
+
 endchoice
 
 config MTK_COMBO_CHIP
@@ -137,6 +145,7 @@ config MTK_COMBO_CHIP
 	default "CONSYS_6758" if MTK_COMBO_CHIP_CONSYS_6758
 	default "CONSYS_6759" if MTK_COMBO_CHIP_CONSYS_6759
 	default "CONSYS_6735" if MTK_COMBO_CHIP_CONSYS_6735
+	default "CONSYS_6755" if MTK_COMBO_CHIP_CONSYS_6755
 	default "CONSYS_6580" if MTK_COMBO_CHIP_CONSYS_6580
 	default "CONSYS_6765" if MTK_COMBO_CHIP_CONSYS_6765
 	default "CONSYS_6761" if MTK_COMBO_CHIP_CONSYS_6761
