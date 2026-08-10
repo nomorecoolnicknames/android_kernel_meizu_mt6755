@@ -547,7 +547,8 @@ void mt_gic_cpu_init_for_low_power(void)
 
 static int mt_gic_irqs;
 
-#ifndef CONFIG_MTK_GIC
+/* CONFIG_MTK_IRQ (mt6735-class custom GIC driver) provides its own copy */
+#if !defined(CONFIG_MTK_GIC) && !defined(CONFIG_MTK_IRQ)
 int mt_get_supported_irq_num(void)
 {
 	return mt_gic_irqs;

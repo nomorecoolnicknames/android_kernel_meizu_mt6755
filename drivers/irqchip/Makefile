@@ -11,6 +11,7 @@ obj-$(CONFIG_ARCH_HIP04)		+= irq-hip04.o
 obj-$(CONFIG_ARCH_LPC32XX)		+= irq-lpc32xx.o
 obj-$(CONFIG_ARCH_MMP)			+= irq-mmp.o
 obj-$(CONFIG_IRQ_MXS)			+= irq-mxs.o
+obj-$(CONFIG_MTK_GIC)			+= irq-mt-gic.o
 obj-$(CONFIG_MTK_EIC)			+= irq-mtk-eic.o
 obj-$(CONFIG_ARCH_TEGRA)		+= irq-tegra.o
 obj-$(CONFIG_ARCH_S3C24XX)		+= irq-s3c24xx.o

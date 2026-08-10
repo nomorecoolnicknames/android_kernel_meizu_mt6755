@@ -308,6 +308,15 @@ config MTK_IRQ_NEW_DESIGN_DEBUG
 	  With this feature enabled, system would assert when an error occurs rather than
 	  output warning messages.
 
+config MTK_GIC
+	bool
+	help
+	  The mt6735-class arm64 GIC driver (irq-mt-gic.c), ported from our
+	  hardware-proven 3.18 arm64 m5c tree. Binds "mediatek,mt6735-gic".
+	  The alternative in this tree, CONFIG_MTK_IRQ
+	  (misc/mediatek/irq/mt6735/irq.c), only ever ran on arm32 and wedges
+	  in init_IRQ on arm64.
+
 config MTK_SYSIRQ
 	bool
 	default y if ARCH_MEDIATEK
