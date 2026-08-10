@@ -9,6 +9,8 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See http://www.gnu.org/licenses/gpl-2.0.html for more details.
 
+python ?= python3
+
 ifdef MTK_PLATFORM
 DRVGEN_PATH := drivers/misc/mediatek/dws/$(MTK_PLATFORM)
 
@@ -66,8 +68,12 @@ $(DRVGEN_FILE_LIST): $(DRVGEN_TOOL) $(DWS_FILE) $(DRVGEN_FIG) $(PROJ_DTS_FILES)
 		prj_path=$(DRVGEN_OUT)/$$base_prj ;\
 		dws_path=$(srctree)/$(DRVGEN_PATH)/$$base_prj.dws ;\
 		if [ -f $$dws_path ] ; then \
-			mkdir -p $$prj_path ;\
-			$(python) $(DRVGEN_TOOL) $$dws_path $$prj_path $$prj_path cust_dtsi;\
+			if [ -f $(srctree)/arch/$(SRCARCH)/boot/dts/$$base_prj/cust.dtsi ] ; then \
+				echo "drvgen: $$base_prj/cust.dtsi committed in-tree, using it (dws is reference)" ;\
+			else \
+				mkdir -p $$prj_path ;\
+				$(python) $(DRVGEN_TOOL) $$dws_path $$prj_path $$prj_path cust_dtsi;\
+			fi \
 		fi \
 	done
 

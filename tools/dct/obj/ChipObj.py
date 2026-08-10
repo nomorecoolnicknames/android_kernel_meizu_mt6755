@@ -1,45 +1,27 @@
 #! /usr/bin/python
 # -*- coding: utf-8 -*-
 
-# Copyright (C) 2016 MediaTek Inc.
-#
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License version 2 as
-# published by the Free Software Foundation.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-# See http://www.gnu.org/licenses/gpl-2.0.html for more details.
-
 import os, sys
 import collections
 import xml.dom.minidom
 
-from GpioObj import GpioObj
-from GpioObj import GpioObj_whitney
-from GpioObj import GpioObj_MT6759
-from GpioObj import GpioObj_MT6739
-from GpioObj import GpioObj_MT6771
-from GpioObj import GpioObj_MT6763
-from EintObj import EintObj
-from EintObj import EintObj_MT6750S
-from EintObj import EintObj_MT6739
-from AdcObj import AdcObj
-from ClkObj import ClkObj
-from ClkObj import ClkObj_Everest
-from ClkObj import ClkObj_Olympus
-from ClkObj import ClkObj_Rushmore
-from I2cObj import I2cObj
-from I2cObj import I2cObj_MT6759
-from I2cObj import I2cObj_MT6775
-from PmicObj import PmicObj
-from PmicObj import PmicObj_MT6758
-from Md1EintObj import Md1EintObj
-from Md1EintObj import Md1EintObj_MT6739
-from PowerObj import PowerObj
-from KpdObj import KpdObj
-from ModuleObj import ModuleObj
+from .GpioObj import GpioObj
+from .GpioObj import GpioObj_whitney
+from .GpioObj import GpioObj_MT6759
+from .EintObj import EintObj
+from .EintObj import EintObj_MT6750S
+from .AdcObj import AdcObj
+from .ClkObj import ClkObj
+from .ClkObj import ClkObj_Everest
+from .ClkObj import ClkObj_Olympus
+from .ClkObj import ClkObj_Rushmore
+from .I2cObj import I2cObj
+from .I2cObj import I2cObj_MT6759
+from .PmicObj import PmicObj
+from .Md1EintObj import Md1EintObj
+from .PowerObj import PowerObj
+from .KpdObj import KpdObj
+from .ModuleObj import ModuleObj
 
 from utility.util import log
 from utility.util import LogLevel
@@ -57,7 +39,6 @@ para_map = {'adc':['adc_h', 'adc_dtsi'],\
 
 class ChipObj:
     def __init__(self, path, dest):
-        self.__epFlag = False
         self.__path = path
         ModuleObj.set_genPath(dest)
         self.__objs = collections.OrderedDict()
@@ -78,7 +59,7 @@ class ChipObj:
         self.__objs["kpd"] = KpdObj()
 
     def replace_obj(self, tag, obj):
-        if not tag in self.__objs.keys():
+        if not tag in list(self.__objs.keys()):
             return False
 
         self.__objs[tag] = obj
@@ -90,7 +71,7 @@ class ChipObj:
         self.__objs['eint'].set_gpioObj(self.__objs['gpio'])
 
     def append_obj(self, tag, obj):
-        if tag in self.__objs.keys():
+        if tag in list(self.__objs.keys()):
             return False
 
         self.__objs[tag] = obj
@@ -121,11 +102,6 @@ class ChipObj:
         # get chip name and project name
         ModuleObj.set_chipId(node[0].getAttribute('chip'))
 
-        # get early porting flag
-        epNode = node[0].getElementsByTagName('ep')
-        if len(epNode) != 0 and epNode[0].childNodes[0].nodeValue=="True":
-            self.__epFlag = True
-
         msg = 'Chip ID : %s' %(node[0].getAttribute('chip'))
         log(LogLevel.info, msg)
         msg = 'Project Info: %s' %(node[0].getElementsByTagName('proj')[0].childNodes[0].nodeValue)
@@ -149,7 +125,7 @@ class ChipObj:
 
     def generate(self, paras):
         if len(paras) == 0:
-            for obj in self.__objs.values():
+            for obj in list(self.__objs.values()):
                 obj.gen_files()
 
             self.gen_custDtsi()
@@ -160,7 +136,7 @@ class ChipObj:
 
     def create_obj(self, tag):
         obj = None
-        if tag in self.__objs.keys():
+        if tag in list(self.__objs.keys()):
             obj = self.__objs[tag]
 
         return obj
@@ -179,9 +155,9 @@ class ChipObj:
             idx = 0
             name = ''
             if para.strip() != '':
-                for value in para_map.values():
+                for value in list(para_map.values()):
                     if para in value:
-                        name = para_map.keys()[idx]
+                        name = list(para_map.keys())[idx]
                         break
                     idx += 1
 
@@ -201,20 +177,13 @@ class ChipObj:
         fp = open(os.path.join(ModuleObj.get_genPath(), 'cust.dtsi'), 'w')
         gen_str = ModuleObj.writeComment()
 
-        # if early porting, gen empty dtsi file for kernel
-        if self.__epFlag:
-            fp.write(gen_str)
-            fp.close()
-            return
-
         #sorted_list = sorted(self.__objs.keys())
         #for tag in sorted_list:
-        for tag in self.__objs.keys():
+        for tag in list(self.__objs.keys()):
             if cmp(tag, 'gpio') == 0:
                 gpioObj = self.create_obj(tag)
                 gen_str += ModuleObj.writeHeader(gpioObj.get_dtsiFileName())
                 gen_str += gpioObj.fill_mapping_dtsiFile()
-                gen_str += gpioObj.fill_init_default_dtsiFile()
             else:
                 obj = self.create_obj(tag)
                 gen_str += ModuleObj.writeHeader(obj.get_dtsiFileName())
@@ -250,7 +219,6 @@ class Olympus(ChipObj):
     def init_objs(self):
         ChipObj.init_objs(self)
         ChipObj.replace_obj(self, 'clk', ClkObj_Olympus())
-        ChipObj.replace_obj(self, 'i2c', I2cObj_MT6759())
 
     def parse(self):
         return ChipObj.parse(self)
@@ -267,7 +235,6 @@ class MT6757_P25(ChipObj):
     def init_objs(self):
         ChipObj.init_objs(self)
         ChipObj.replace_obj(self, 'clk', ClkObj_Olympus())
-        ChipObj.replace_obj(self, 'i2c', I2cObj_MT6759())
 
     def parse(self):
         return ChipObj.parse(self)
@@ -298,7 +265,6 @@ class Whitney(ChipObj):
     def init_objs(self):
         ChipObj.init_objs(self)
         ChipObj.replace_obj(self, 'gpio', GpioObj_whitney())
-        ChipObj.replace_obj(self, 'i2c', I2cObj_MT6759())
         ChipObj.refresh_eintGpioMap(self)
 
     def parse(self):
@@ -324,52 +290,13 @@ class MT6759(ChipObj):
     def generate(self, paras):
         return ChipObj.generate(self, paras)
 
-class MT6758(ChipObj):
-    def __init__(self, dws_path, gen_path):
-        ChipObj.__init__(self, dws_path, gen_path)
-
-    def init_objs(self):
-        ChipObj.init_objs(self)
-        ChipObj.replace_obj(self, 'pmic', PmicObj_MT6758())
-        ChipObj.replace_obj(self, 'gpio', GpioObj_MT6739())
-        ChipObj.replace_obj(self, 'eint', EintObj_MT6739(ChipObj.get_gpioObj(self)))
-        ChipObj.replace_obj(self, 'i2c', I2cObj_MT6759())
-        ChipObj.replace_obj(self, 'md1_eint', Md1EintObj_MT6739())
-        ChipObj.refresh_eintGpioMap(self)
-
-    def parse(self):
-        return ChipObj.parse(self)
-
-    def generate(self, paras):
-        return ChipObj.generate(self, paras)
-
 class MT6763(ChipObj):
     def __init__(self, dws_path, gen_path):
         ChipObj.__init__(self, dws_path, gen_path)
 
     def init_objs(self):
         ChipObj.init_objs(self)
-        ChipObj.replace_obj(self, 'gpio', GpioObj_MT6763())
-        ChipObj.replace_obj(self, 'i2c', I2cObj_MT6759())
-        ChipObj.refresh_eintGpioMap(self)
-
-    def parse(self):
-        return ChipObj.parse(self)
-
-    def generate(self, paras):
-        return ChipObj.generate(self, paras)
-
-class MT6739(MT6763):
-    def __init__(self, dws_path, gen_path):
-        ChipObj.__init__(self, dws_path, gen_path)
-
-    def init_objs(self):
-        ChipObj.init_objs(self)
-        ChipObj.replace_obj(self, 'pmic', PmicObj_MT6758())
-        ChipObj.replace_obj(self, 'gpio', GpioObj_MT6739())
-        ChipObj.replace_obj(self, 'eint', EintObj_MT6739(ChipObj.get_gpioObj(self)))
-        ChipObj.replace_obj(self, 'md1_eint', Md1EintObj_MT6739())
-        ChipObj.replace_obj(self, 'i2c', I2cObj_MT6759())
+        ChipObj.replace_obj(self, 'gpio', GpioObj_MT6759())
         ChipObj.refresh_eintGpioMap(self)
 
     def parse(self):
@@ -393,46 +320,4 @@ class MT6750S(ChipObj):
 
     def generate(self, paras):
         return ChipObj.generate(self, paras)
-
-class MT8695(ChipObj):
-    def __init__(self, dws_path, gen_path):
-        ChipObj.__init__(self, dws_path, gen_path)
-
-    def init_objs(self):
-        ChipObj.init_objs(self)
-        ChipObj.replace_obj(self, 'gpio', GpioObj_whitney())
-        ChipObj.refresh_eintGpioMap(self)
-
-    def parse(self):
-        return ChipObj.parse(self)
-
-    def generate(self, paras):
-        return ChipObj.generate(self, paras)
-
-class MT6771(ChipObj):
-    def __init__(self, dws_path, gen_path):
-        ChipObj.__init__(self, dws_path, gen_path)
-
-    def init_objs(self):
-        ChipObj.init_objs(self)
-        ChipObj.replace_obj(self, 'pmic', PmicObj_MT6758())
-        ChipObj.replace_obj(self, 'gpio', GpioObj_MT6771())
-        ChipObj.replace_obj(self, 'eint', EintObj_MT6739(ChipObj.get_gpioObj(self)))
-        ChipObj.replace_obj(self, 'md1_eint', Md1EintObj_MT6739())
-        ChipObj.replace_obj(self, 'i2c', I2cObj_MT6775())
-        ChipObj.refresh_eintGpioMap(self)
-
-class MT6775(ChipObj):
-    def __init__(self, dws_path, gen_path):
-        ChipObj.__init__(self, dws_path, gen_path)
-
-    def init_objs(self):
-        ChipObj.init_objs(self)
-        ChipObj.replace_obj(self, 'pmic', PmicObj_MT6758())
-        ChipObj.replace_obj(self, 'gpio', GpioObj_MT6739())
-        ChipObj.replace_obj(self, 'eint', EintObj_MT6739(ChipObj.get_gpioObj(self)))
-        ChipObj.replace_obj(self, 'md1_eint', Md1EintObj_MT6739())
-        ChipObj.replace_obj(self, 'i2c', I2cObj_MT6775())
-        ChipObj.refresh_eintGpioMap(self)
-
 

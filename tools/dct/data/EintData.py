@@ -1,16 +1,6 @@
 #! /usr/bin/python
 # -*- coding: utf-8 -*-
 
-# Copyright (C) 2016 MediaTek Inc.
-#
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License version 2 as
-# published by the Free Software Foundation.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-# See http://www.gnu.org/licenses/gpl-2.0.html for more details.
 
 class EintData:
     _count = 0
@@ -66,14 +56,10 @@ class EintData:
         return EintData._map_table
 
     @staticmethod
-    def get_internalEint():
-        return EintData._int_eint
-
-    @staticmethod
     def get_modeName(gpio_num, mode_idx):
         key = 'gpio%s' %(gpio_num)
 
-        if key in EintData._mode_map.keys():
+        if key in list(EintData._mode_map.keys()):
             list =  EintData._mode_map[key]
             if mode_idx < len(list) and mode_idx >= 0:
                 return list[mode_idx]
@@ -82,7 +68,7 @@ class EintData:
 
     @staticmethod
     def set_modeMap(map):
-        for (key, value) in map.items():
+        for (key, value) in list(map.items()):
             list = []
             for item in value:
                 list.append(item[6:len(item)-1])
@@ -97,7 +83,7 @@ class EintData:
     @staticmethod
     def get_gpioNum(num):
         if len(EintData._map_table):
-            for (key,value) in EintData._map_table.items():
+            for (key,value) in list(EintData._map_table.items()):
                 if num == value:
                     return key
 
