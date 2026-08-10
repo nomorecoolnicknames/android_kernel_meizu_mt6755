@@ -52,6 +52,13 @@ ccflags-y += -I$(srctree)/drivers/mmc/host/mediatek/ComboA/mt6735
 obj-$(CONFIG_MMC_MTK_PRO) += ComboA/
 endif
 
+# MT6755 eMMC on the ComboA core (board layer ComboA/mt6755)
+ifeq ($(CONFIG_MTK_PLATFORM), "mt6755")
+ccflags-y += -I$(srctree)/drivers/mmc/host/mediatek/ComboA
+ccflags-y += -I$(srctree)/drivers/mmc/host/mediatek/ComboA/mt6755
+obj-$(CONFIG_MMC_MTK_PRO) += ComboA/
+endif
+
 ifeq ($(CONFIG_MTK_PLATFORM), "mt6739")
 ccflags-y += -I$(srctree)/drivers/mmc/host/mediatek/mt6799
 ccflags-y += -I$(srctree)/drivers/mmc/host/mediatek/mt6799/mt6739
