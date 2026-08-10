@@ -303,7 +303,13 @@ done
 if [ ! -z ${output_file} ]; then
 	if [ -z ${cpio_file} ]; then
 		timestamp=
-		if test -n "$KBUILD_BUILD_TIMESTAMP"; then
+		if test -n "$SOURCE_DATE_EPOCH"; then
+			# Prefer an explicit epoch: KBUILD_BUILD_TIMESTAMP is a
+			# human string ("... MSK 2026") that date -d cannot parse
+			# for many timezone abbreviations, silently falling back
+			# to time(NULL) and breaking build reproducibility.
+			timestamp="-t $SOURCE_DATE_EPOCH"
+		elif test -n "$KBUILD_BUILD_TIMESTAMP"; then
 			timestamp="$(date -d"$KBUILD_BUILD_TIMESTAMP" +%s || :)"
 			if test -n "$timestamp"; then
 				timestamp="-t $timestamp"

@@ -178,6 +178,7 @@ dtc_cpp_flags  = -Wp,-MD,$(depfile).pre.tmp -nostdinc                    \
 		 -I$(srctree)/arch/$(SRCARCH)/boot/dts/include           \
 		 -I$(srctree)/drivers/of/testcase-data                   \
  		 -I$(objtree)/include/					 \
+		 -I$(srctree)/include/					 \
 		 -Iarch/$(SRCARCH)/boot/dts 				 \
 		 -undef -D__DTS__
 
