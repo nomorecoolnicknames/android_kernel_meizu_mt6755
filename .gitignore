@@ -1,0 +1,53 @@
+# Build outputs and intermediate files
+*.o
+*.o.cmd
+.*.cmd
+*.ko
+*.mod.c
+*.order
+*.symvers
+*.tmp
+*.tmp_*
+.tmp_*
+.tmp_versions/
+vmlinux
+vmlinux.o
+vmlinux.bin
+System.map
+Module.symvers
+modules.order
+
+# Configuration and generated files
+.config
+.config.old
+.version
+.missing-syscalls.d
+.vmlinux.cmd
+*.s
+*.bc
+timeconst.h
+
+# Generated directories and files
+generated/
+/include/config/
+/include/generated/
+/arch/arm64/include/generated/
+
+# Compiled libraries and VDSO
+*.a
+vdso.so
+vdso.so.dbg
+
+# Build directories
+out/
+
+# Compiled kernel images
+arch/arm64/boot/Image
+arch/arm64/boot/Image.gz
+arch/arm64/boot/Image.gz-dtb
+
+# Initramfs
+.initramfs_data.cpio.d
+initramfs_data.cpio.gz
+
+build*.log
