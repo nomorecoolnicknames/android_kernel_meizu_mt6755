@@ -34,6 +34,7 @@ obj-$(CONFIG_MEDIATEK_SOLUTION) += sched/
 obj-$(CONFIG_MTK_FREQ_HOPPING) += freqhopping/
 obj-$(CONFIG_MMC_MTK_SDIO) += mtk_sdio/
 obj-$(CONFIG_MTK_COMBO) += connectivity/
+obj-$(CONFIG_MTK_FMRADIO) += fmradio/
 obj-$(CONFIG_MTK_CONN_MD) += conn_md/
 obj-$(CONFIG_MTK_BTIF) += btif/
 obj-$(CONFIG_MTK_UNIFIED_DEBUG_INTERFACE) += udi/
@@ -51,6 +52,7 @@ ifeq ($(CONFIG_MTK_I2C_EXTENSION),y)
 obj-$(CONFIG_MTK_I2C)  += i2c/
 endif
 obj-$(CONFIG_MTK_VIBRATOR)	+= vibrator/
+obj-$(CONFIG_MTK_M681_VIBRATOR)	+= vibrator/mt6755/
 obj-y += irtx/
 obj-$(CONFIG_MTK_MT6306_GPIO_SUPPORT) += gpio/
 obj-$(CONFIG_MTK_GPIO) += gpio/
@@ -58,6 +60,12 @@ obj-$(CONFIG_MTK_GIC_EXT) += ext_gic/
 obj-$(CONFIG_MTPROF)	+= mtprof/
 obj-$(CONFIG_MTK_PMIC_WRAP_HAL) += pmic_wrap/
 obj-$(CONFIG_USB_MTK_HDRC) += usb20/
+# MT6755 SSUSB device controller (mu3d) and in-SoC PHY (mu3phy/mt6755).
+# mu3phy must link before mu3d: both register at device_initcall, and the
+# usb3_phy probe gets and prepares the SSUSB clock ("sssub_clk") that
+# musb_init_controller enables before its first U3D register access.
+obj-$(CONFIG_MU3_PHY)	+= mu3phy/
+obj-$(CONFIG_USB_MU3D_DRV)	+= mu3d/
 obj-$(CONFIG_MTK_ECCCI_C2K) += c2k_usb/
 obj-$(CONFIG_MTK_LEDS)	+= leds/
 obj-$(CONFIG_MTK_BOOT) += boot/

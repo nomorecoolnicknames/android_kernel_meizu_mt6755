@@ -184,6 +184,12 @@ config CUSTOM_KERNEL_IMGSENSOR
 	  CUSTOM_KERNEL_MAIN_BACKUP_IMGSENSOR, CUSTOM_KERNEL_SUB_IMGSENSOR,
 	  and CUSTOM_KERNEL_SUB_BACKUP_IMGSENSOR
 
+config CUSTOM_KERNEL_CAM_CAL_DRV
+	string "Camera calibration driver"
+	help
+	  Kernel space camera calibration driver. Define  project used cam_cal
+	  driver .
+
 config MTK_SEC_VIDEO_PATH_SUPPORT
 	bool "Enable MTK Secure Video Path Support"
 	depends on MTK_IN_HOUSE_TEE_SUPPORT || TRUSTONIC_TEE_SUPPORT || TRUSTY
@@ -251,6 +257,7 @@ source "drivers/misc/mediatek/dual_ccci/Kconfig"
 source "drivers/misc/mediatek/eccci/Kconfig"
 source "drivers/misc/mediatek/conn_md/Kconfig"
 source "drivers/misc/mediatek/btif/Kconfig"
+source "drivers/misc/mediatek/fmradio/Kconfig"
 source "drivers/misc/mediatek/ssw/Kconfig"
 
 endmenu  # CONN
@@ -299,6 +306,7 @@ source "drivers/misc/mediatek/debug_latch/Kconfig"
 source "drivers/misc/mediatek/dfd/Kconfig"
 source "drivers/misc/mediatek/systracker/Kconfig"
 source "drivers/misc/mediatek/vibrator/Kconfig"
+source "drivers/misc/mediatek/vibrator/mt6755/Kconfig"
 source "drivers/misc/mediatek/boot/Kconfig"
 source "drivers/misc/mediatek/boot_reason/Kconfig"
 source "drivers/misc/mediatek/chip/Kconfig"
@@ -322,6 +330,8 @@ source "drivers/misc/mediatek/flashlight/richtek/Kconfig"
 source "drivers/misc/mediatek/rt-regmap/Kconfig"
 source "drivers/misc/mediatek/smartpa/Kconfig"
 source "drivers/misc/mediatek/usb20/Kconfig"
+source "drivers/misc/mediatek/mu3d/Kconfig"
+source "drivers/misc/mediatek/mu3phy/Kconfig"
 source "drivers/misc/mediatek/cirq/Kconfig"
 source "drivers/misc/mediatek/atf/Kconfig"
 source "drivers/misc/mediatek/vpu/Kconfig"

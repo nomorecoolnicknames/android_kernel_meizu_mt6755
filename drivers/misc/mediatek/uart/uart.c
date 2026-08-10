@@ -35,6 +35,7 @@
 #include <linux/scatterlist.h>
 #include <linux/platform_device.h>
 #include <linux/hrtimer.h>
+#include <linux/clk.h>
 #include <linux/uaccess.h>
 #include <linux/atomic.h>
 #include <linux/io.h>
@@ -2359,6 +2360,13 @@ static int mtk_uart_probe(struct platform_device *pdev)
 		if (err)
 			pr_info("[DTS] get skip_pinmux_clk property fail!!\n");
 	}
+#ifdef CONFIG_MTK_CLKMGR
+	/* legacy clkmgr platform (mt6735 class): UART clocks are handled by
+	 * platform_uart.c via enable_clock(); there are no CCF providers, so
+	 * the devm_clk_get() path below must not run (it would fail probe on
+	 * the stock DTB, which carries no skip_pinmux_clk property). */
+	skip_pinmux_clk = 1;
+#endif
 	if (pdev->id >= UART_NR) {
 		pr_info("DTS cell ID %d > UART nuber %d\n", pdev->id, UART_NR);
 		return -ENODEV;
@@ -2784,6 +2792,7 @@ static const struct of_device_id apuart_of_ids[] = {
 	{.compatible = "mediatek,AP_UART0",},
 	{.compatible = "mediatek,AP_UART1",},
 	{.compatible = "mediatek,mt6735-uart",},
+	{.compatible = "mediatek,mt6755-uart",},	/* MT6755 */
 	{}
 };
 
