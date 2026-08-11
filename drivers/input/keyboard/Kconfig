@@ -12,6 +12,15 @@ menuconfig INPUT_KEYBOARD
 
 if INPUT_KEYBOARD
 
+config KEYBOARD_M681_READONLY
+	tristate "Meizu M681 read-only physical keys"
+	depends on OF && MACH_MT6755 && MTK_PMIC_WRAP_HAL && KEYBOARD_MTK = n
+	select INPUT_POLLDEV
+	help
+	  Report M681 volume, power and home keys from bootloader-initialised
+	  keypad scan memory and checked MT6351 reads. No PMIC, scan or pin
+	  settings are changed. Polling provides awake input only, not wakeup.
+
 config KEYBOARD_ADC
 	tristate "ADC Ladder Buttons"
 	depends on IIO
