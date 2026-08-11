@@ -12,6 +12,7 @@
  */
 
 #include <linux/version.h>
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/dmi.h>
@@ -26,12 +27,11 @@
 #include <linux/syscalls.h>
 #include <linux/sched.h>
 #include <linux/writeback.h>
-#include <asm/uaccess.h>
-#include <asm/string.h>
+#include <linux/uaccess.h>
+#include <linux/string.h>
 #include <linux/spinlock.h>
 #include "mt-plat/mtk_thermal_monitor.h"
 #include "mt-plat/mtk_mdm_monitor.h"
-#include <mt-plat/mt_boot_common.h>
 #include <linux/uidgid.h>
 #include <linux/slab.h>
 
@@ -45,7 +45,7 @@
 #define mtk_mdm_dprintk(fmt, args...)   \
 do {                                    \
 	if (mtk_mdm_debug_log)                \
-		pr_debug("[MDM_TxPower/PA_Thermal]" fmt, ##args); \
+		pr_debug("[Thermal/TZ/MDM_TxPower]" fmt, ##args); \
 } while (0)
 
 #define DEFINE_MDM_CB(index)	\
@@ -88,10 +88,10 @@ static int mdinfoex_threshold[MAX_MDINFOEX_OPCODE] = { 0 };
 
 struct md_info g_pinfo_list[6] = { {"TXPWR_MD1", -127, "db", -127, 0},
 {"TXPWR_MD2", -127, "db", -127, 1},
-{"RFTEMP_2G_MD1", -127000, "mC", -127000, 2},
-{"RFTEMP_2G_MD2", -127000, "mC", -127000, 3},
-{"RFTEMP_3G_MD1", -127000, "mC", -127000, 4},
-{"RFTEMP_3G_MD2", -127000, "mC", -127000, 5}
+{"RFTEMP_2G_MD1", -127000, "m¢XC", -127000, 2},
+{"RFTEMP_2G_MD2", -127000, "m¢XC", -127000, 3},
+{"RFTEMP_3G_MD1", -127000, "m¢XC", -127000, 4},
+{"RFTEMP_3G_MD2", -127000, "m¢XC", -127000, 5}
 };
 
 int mtk_mdm_get_tx_power(void)
@@ -111,8 +111,8 @@ int mtk_mdm_get_md_info(struct md_info **p_inf, int *size)
 	mtk_mdm_dprintk("mtk_mdm_get_md_info+\n");
 
 	*p_inf = g_pinfo_list;
-	*size = sizeof(g_pinfo_list) / sizeof(g_pinfo_list[0]);
 
+	*size = ARRAY_SIZE(g_pinfo_list);
 	mtk_mdm_dprintk("mtk_mdm_get_md_info-\n");
 
 	return 0;
@@ -190,21 +190,21 @@ static void set_mdm_signal_period(void)
 {
 	int new_mdm_signal_period = 0;
 
-	if ((0 == md2_signal_period) && (0 == md1_signal_period))
+	if ((md2_signal_period == 0) && (md1_signal_period == 0))
 		;
-	else if (0 == md2_signal_period)
+	else if (md2_signal_period == 0)
 		new_mdm_signal_period = md1_signal_period;
-	else if (0 == md1_signal_period)
+	else if (md1_signal_period == 0)
 		new_mdm_signal_period = md2_signal_period;
 	else
 		new_mdm_signal_period = (md1_signal_period <= md2_signal_period) ?
 			md1_signal_period : md2_signal_period;
 
 	if (new_mdm_signal_period != mdm_signal_period) {
-		if (0 == new_mdm_signal_period) {
+		if (new_mdm_signal_period == 0) {
 			mtk_mdm_stop_query();
 		} else {
-			if (0 == mdm_signal_period) {
+			if (mdm_signal_period == 0) {
 				mtk_mdm_set_signal_period(new_mdm_signal_period);
 				mtk_mdm_start_query();
 			} else {
@@ -415,17 +415,17 @@ static ssize_t mtk_mdm_proc_mdinfo_write(struct file *file, const char *buf, siz
 		rf_temp = (rf_temp >= 32767) ? -127 : rf_temp;	/* 32767 means invalid temp */
 
 		/* fill into g_pinfo_list */
-		if (0 == sim) {	/* MD1 */
-			if (1 == rat) {
+		if (sim == 0) {	/* MD1 */
+			if (rat == 1) {
 				g_pinfo_list[2].value = rf_temp * 1000;
 			} else if (2 == rat || 3 == rat) {
 				g_pinfo_list[4].value = rf_temp * 1000;
 				g_pinfo_list[0].value = tx_power;
 			}
-		} else if (1 == sim) {	/* MD2 */
-			if (1 == rat) {
+		} else if (sim == 1) {	/* MD2 */
+			if (rat == 1) {
 				g_pinfo_list[3].value = rf_temp * 1000;
-			} else if (2 == rat || 3 == rat) {
+			} else if (rat == 2 || rat == 3) {
 				g_pinfo_list[5].value = rf_temp * 1000;
 				g_pinfo_list[1].value = tx_power;
 			}

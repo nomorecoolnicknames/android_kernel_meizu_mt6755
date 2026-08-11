@@ -16,7 +16,7 @@
 #include <linux/types.h>
 #include <linux/kobject.h>
 #include <linux/proc_fs.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/err.h>
 #include <linux/syscalls.h>
 #include <linux/timer.h>
@@ -33,12 +33,12 @@
 #define cl_type_lower               "cl-amdtxctrl-l"
 
 #define mtk_cooler_amdtxctrl_dprintk_always(fmt, args...) \
-pr_debug("thermal/cooler/amdtxctrl" fmt, ##args)
+pr_debug("[Thermal/TC/amdtxctrl]" fmt, ##args)
 
 #define mtk_cooler_amdtxctrl_dprintk(fmt, args...) \
 do { \
-	if (1 == cl_amdtxctrl_klog_on) { \
-		pr_debug("thermal/cooler/amdtxctrl" fmt, ##args); \
+	if (cl_amdtxctrl_klog_on == 1) { \
+		pr_debug("[Thermal/TC/amdtxctrl]" fmt, ##args); \
 	} \
 } while (0)
 
@@ -135,7 +135,7 @@ static int amdtxpwr_backoff(int level)
 
 static int down_throttle(adaptive_coolers *p, int step)
 {
-	if (NULL == p)
+	if (p == NULL)
 		return -1;
 	if (step <= 0)
 		return p->cur_level;
@@ -152,7 +152,7 @@ static int down_throttle(adaptive_coolers *p, int step)
 
 static int up_throttle(adaptive_coolers *p, int step)
 {
-	if (NULL == p)
+	if (p == NULL)
 		return -1;
 	if (step <= 0)
 		return p->cur_level;
@@ -169,7 +169,7 @@ static int up_throttle(adaptive_coolers *p, int step)
 
 static int rst_throttle(adaptive_coolers *p)
 {
-	if (NULL == p)
+	if (p == NULL)
 		return -1;
 
 	p->cur_level = 0;
@@ -574,7 +574,7 @@ ssize_t amdtxctrl_pid_write(struct file *filp, const char __user *buf, unsigned 
 
 	ret = kstrtouint(tmp, 10, &tm_input_pid);
 	if (ret)
-		WARN_ON(1);
+		WARN_ON_ONCE(1);
 
 	mtk_cooler_amdtxctrl_dprintk_always("[%s] %s = %d\n", __func__, tmp, tm_input_pid);
 

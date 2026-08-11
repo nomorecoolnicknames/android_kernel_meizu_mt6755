@@ -10,7 +10,6 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 * See http://www.gnu.org/licenses/gpl-2.0.html for more details.
 */
-
 #include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -24,7 +23,7 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include "mach/mt_thermal.h"
+#include "mach/mtk_thermal.h"
 #include "mt_dramc.h"
 #include <linux/uidgid.h>
 #include <linux/slab.h>
@@ -33,8 +32,8 @@ static kuid_t uid = KUIDT_INIT(0);
 static kgid_t gid = KGIDT_INIT(1000);
 static DEFINE_SEMAPHORE(sem_mutex);
 /*
-The thermal policy is meaningless here.
-We only use it to make this thermal zone work.
+*The thermal policy is meaningless here.
+*We only use it to make this thermal zone work.
 */
 static unsigned int interval;	/* seconds, 0 : no auto polling */
 static int trip_temp[10] = { 125000, 110000, 100000, 90000, 80000, 70000, 65000, 60000, 55000, 50000 };
@@ -66,33 +65,27 @@ static char g_bind9[20] = "";
 #define mtktsdram_dprintk(fmt, args...)			\
 do {								\
 	if (mtktsdram_debug_log)					\
-		pr_debug("[Power/dram_Thermal]" fmt, ##args);	\
+		pr_debug("[Thermal/TZ/DRAM]" fmt, ##args);	\
 } while (0)
 
 static int mtktsdram_get_temp(struct thermal_zone_device *thermal, unsigned long *t)
 {
-#if !defined(CONFIG_ARCH_MT6570)
 	unsigned char t1, t2;
-#endif
 	/*
-	The value getting from the read_dram_temperature api is only from 0 to 7.
-	000B: SDRAM Low temperature operating limit exceeded
-	001B: 4x tREFI, 4x tREFIpb, 4x tREFW
-	010B: 2x tREFI, 2x tREFIpb, 2x tREFW
-	011B: 1x tREFI, 1x tREFIpb, 1x tREFW (<=85°C)
-	100B: 0.5x tREFI, 0.5x tREFIpb, 0.5x tREFW, do not de-rate SDRAM AC timing
-	101B: 0.25x tREFI, 0.25x tREFIpb, 0.25x tREFW, do not de-rate SDRAM AC timing
-	110B: 0.25x tREFI, 0.25x tREFIpb, 0.25x tREFW, de-rate SDRAM
+	*The value getting from the read_dram_temperature api is only from 0 to 7.
+	*000B: SDRAM Low temperature operating limit exceeded
+	*001B: 4x tREFI, 4x tREFIpb, 4x tREFW
+	*010B: 2x tREFI, 2x tREFIpb, 2x tREFW
+	*011B: 1x tREFI, 1x tREFIpb, 1x tREFW (<=85°C)
+	*100B: 0.5x tREFI, 0.5x tREFIpb, 0.5x tREFW, do not de-rate SDRAM AC timing
+	*101B: 0.25x tREFI, 0.25x tREFIpb, 0.25x tREFW, do not de-rate SDRAM AC timing
+	*110B: 0.25x tREFI, 0.25x tREFIpb, 0.25x tREFW, de-rate SDRAM
 	*/
 	mtktsdram_dprintk("[mtktsdram_get_temp]\n");
-#if !defined(CONFIG_ARCH_MT6570)
 	t1 = read_dram_temperature(CHANNEL_A);
 	t2 = read_dram_temperature(CHANNEL_B);
 
 	*t = (t1 > t2) ? t1 : t2;
-#else
-	*t = read_dram_temperature();
-#endif
 
 	mtktsdram_dprintk("temp =%lu\n", *t);
 	return 0;
@@ -229,6 +222,11 @@ static int mtktsdram_sysrst_get_cur_state(struct thermal_cooling_device *cdev, u
 	return 0;
 }
 
+/* [lidebiao start]*/
+static int dram_sysrst_happened = 0;
+extern int send_sysrst_signal(unsigned int type);
+/* [lidebiao end] */
+
 static int mtktsdram_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state)
 {
 	mtktsdram_dprintk("mtktsdram_sysrst_set_cur_state = %d\n", cl_dev_sysrst_state);
@@ -240,7 +238,13 @@ static int mtktsdram_sysrst_set_cur_state(struct thermal_cooling_device *cdev, u
 		pr_debug("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
 
 
-		BUG();
+		/* [lidebiao start] */
+		if (0 == dram_sysrst_happened) {
+			send_sysrst_signal(0);
+			dram_sysrst_happened = 1;
+		}
+		//*(unsigned int *)0x0 = 0xdead; /* To trigger data abort to reset the system for thermal protection. */
+		/* [lidebiao end] */
 
 	}
 	return 0;
@@ -324,17 +328,9 @@ static ssize_t mtktsdram_write(struct file *file, const char __user *buffer, siz
 		&ptr_mtktsdram_data->trip[8], &ptr_mtktsdram_data->t_type[8], ptr_mtktsdram_data->bind8,
 		&ptr_mtktsdram_data->trip[9], &ptr_mtktsdram_data->t_type[9], ptr_mtktsdram_data->bind9,
 		&ptr_mtktsdram_data->time_msec) == 32) {
-		mtktsdram_dprintk("[mtktsdram_write] mtktsdram_unregister_thermal\n");
 		down(&sem_mutex);
+		mtktsdram_dprintk("[mtktsdram_write] mtktsdram_unregister_thermal\n");
 		mtktsdram_unregister_thermal();
-
-		if (num_trip < 0 || num_trip > 10) {
-			aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtktsdram_write",
-					"Bad argument");
-			mtktsdram_dprintk("mtktsdram_write bad argument\n");
-			kfree(ptr_mtktsdram_data);
-			return -EINVAL;
-		}
 
 		for (i = 0; i < num_trip; i++)
 			g_THERMAL_TRIP[i] = ptr_mtktsdram_data->t_type[i];

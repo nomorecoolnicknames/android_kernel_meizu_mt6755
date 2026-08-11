@@ -21,10 +21,22 @@
 #include <linux/err.h>
 #include <linux/syscalls.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include <mt_ccci_common.h>
+#include <mtk_ccci_common.h>
 #include <linux/uidgid.h>
-#include <mt_cooler_setting.h>
+#include <mtk_cooler_setting.h>
 #include <linux/debugfs.h>
+/* [lidebiao start] Add for config batt temp protect */
+#include <mt-plat/mtk_battery.h>
+/* [lidebiao end] */
+
+/* The battery driver (provider) may not be built; 0 = protect mode off,
+ * so the MD-throttle SIGIO notify path stays dormant. Weak: the real
+ * battery driver wins at link time. */
+int __attribute__ ((weak))
+get_Batt_Temp_Protect_Mode(void)
+{
+	return 0;
+}
 
 /* extern unsigned long ccci_get_md_boot_count(int md_id); */
 
@@ -90,12 +102,12 @@ exec_ccci_kern_func_by_md_id(int md_id, unsigned int id, char *buf, unsigned int
 }
 
 #define mtk_cooler_mutt_dprintk_always(fmt, args...) \
-pr_debug("thermal/cooler/mutt" fmt, ##args)
+pr_debug("[Thermal/TC/mutt]" fmt, ##args)
 
 #define mtk_cooler_mutt_dprintk(fmt, args...) \
 do { \
-	if (1 == cl_mutt_klog_on) \
-		pr_debug("[thermal/cooler/mutt]" fmt, ##args); \
+	if (cl_mutt_klog_on == 1) \
+		pr_debug("[Thermal/TC/mutt]" fmt, ##args); \
 } while (0)
 
 /* State of "MD off & noIMS" are not included. */
@@ -112,7 +124,7 @@ do { \
 
 #define MTK_CL_MUTT_SET_CURR_STATE(curr_state, state) \
 do { \
-	if (0 == curr_state) \
+	if (curr_state == 0) \
 		state &= ~0x1; \
 	else \
 		state |= 0x1; \
@@ -171,15 +183,19 @@ static int clmutt_send_tmd_signal(int level)
 		ptmd_task = get_pid_task(find_vpid(tmd_pid), PIDTYPE_PID);
 	}
 
-	if (ret == 0 && ptmd_task) {
-		siginfo_t info;
+	 /* [lidebiao start] Add for config batt temp protect */
+	if (get_Batt_Temp_Protect_Mode() == 1) {
+		if (ret == 0 && ptmd_task) {
+			siginfo_t info;
 
-		info.si_signo = SIGIO;
-		info.si_errno = 0;
-		info.si_code = level;
-		info.si_addr = NULL;
-		ret = send_sig_info(SIGIO, &info, ptmd_task);
+			info.si_signo = SIGIO;
+			info.si_errno = 0;
+			info.si_code = level;
+			info.si_addr = NULL;
+			ret = send_sig_info(SIGIO, &info, ptmd_task);
+		}
 	}
+	/* [lidebiao end] */
 
 	if (ret != 0)
 		mtk_cooler_mutt_dprintk_always(" %s ret=%d\n", __func__, ret);
@@ -207,7 +223,7 @@ static ssize_t clmutt_tmd_pid_write(struct file *filp, const char __user *buf, s
 
 	ret = kstrtouint(tmp, 10, &tmd_input_pid);
 	if (ret)
-		WARN_ON(1);
+		WARN_ON_ONCE(1);
 
 	mtk_cooler_mutt_dprintk("%s %s = %d\n", __func__, tmp, tmd_input_pid);
 
@@ -244,8 +260,9 @@ static const struct file_operations clmutt_tmd_pid_fops = {
  */
 enum {
 /*	TM_CLIENT_clwmt = 0,
-	TM_CLIENT_mdulthro =1,
-	TM_CLIENT_mddlthro =2,	*/
+*	TM_CLIENT_mdulthro =1,
+*	TM_CLIENT_mddlthro =2,
+*/
 	TM_CLIENT_clmutt = 3
 };
 static int clmutt_send_tm_signal(int level)
@@ -281,7 +298,7 @@ static int clmutt_send_tm_signal(int level)
 	if (ret != 0)
 		mtk_cooler_mutt_dprintk_always("[%s] ret=%d\n", __func__, ret);
 	else {
-		if (1 == level) {
+		if (level == 1) {
 			cl_dev_mdoff_state = level;
 			cl_dev_noIMS_state = 0;
 			cl_mutt_cur_limit = 0;
@@ -306,7 +323,7 @@ static ssize_t clmutt_tm_pid_write(struct file *filp, const char __user *buf, si
 
 	ret = kstrtouint(tmp, 10, &tm_input_pid);
 	if (ret)
-		WARN_ON(1);
+		WARN_ON_ONCE(1);
 
 	mtk_cooler_mutt_dprintk("[%s] %s = %d\n", __func__, tmp, tm_input_pid);
 
@@ -411,7 +428,7 @@ static void mtk_cl_mutt_set_onIMS(int level)
 	if (ret != 0)
 		mtk_cooler_mutt_dprintk_always("[%s] ret=%d\n", __func__, ret);
 	else {
-		if (1 == level)
+		if (level == 1)
 			cl_dev_noIMS_state = level;
 		else
 			cl_dev_noIMS_state = 0;
@@ -443,7 +460,7 @@ static int mtk_cl_noIMS_set_cur_state(struct thermal_cooling_device *cdev,
 				unsigned long state)
 {
 
-	if (1 == cl_dev_mdoff_state) {
+	if (cl_dev_mdoff_state == 1) {
 		mtk_cooler_mutt_dprintk("mtk_cl_noIMS_set_cur_state():  MD STILL OFF!!\n");
 		return 0;
 	}
@@ -480,7 +497,7 @@ static void mtk_cl_mutt_set_mutt_limit(void)
 
 		MTK_CL_MUTT_GET_CURR_STATE(curr_state, cl_mutt_state[i]);
 
-		if (1 == curr_state) {
+		if (curr_state == 1) {
 			unsigned int active;
 			unsigned int suspend;
 			int limit = 0;
@@ -534,11 +551,11 @@ static void mtk_cl_mutt_set_mutt_limit(void)
 		return;
 
 	if (ret != 0) {
-			cl_mutt_cur_limit = 0;
-			for (; j < MAX_NUM_INSTANCE_MTK_COOLER_MUTT; j++)
-				MTK_CL_MUTT_SET_CURR_STATE(0, cl_mutt_state[j]);
+		cl_mutt_cur_limit = 0;
+		for (; j < MAX_NUM_INSTANCE_MTK_COOLER_MUTT; j++)
+		MTK_CL_MUTT_SET_CURR_STATE(0, cl_mutt_state[j]);
 
-			mtk_cooler_mutt_dprintk_always("[%s] ret=%d\n", __func__, ret);
+		mtk_cooler_mutt_dprintk_always("[%s] ret=%d\n", __func__, ret);
 	}
 #if FEATURE_THERMAL_DIAG
 	else {
@@ -571,7 +588,7 @@ static int mtk_cl_mutt_get_cur_state(struct thermal_cooling_device *cdev, unsign
 static int mtk_cl_mutt_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state)
 {
 #if FEATURE_MUTT_V2
-	if ((1 == cl_dev_mdoff_state) || (1 == cl_dev_noIMS_state)) {
+	if ((cl_dev_mdoff_state == 1) || (cl_dev_noIMS_state == 1)) {
 		mtk_cooler_mutt_dprintk("mtk_cl_mutt_set_cur_state():  MD OFF or noIMS!!\n");
 		return 0;
 	}
@@ -598,9 +615,9 @@ static void decrease_mutt_limit(void)
 	if (curr_adp_mutt_level >= 0)
 		curr_adp_mutt_level--;
 
-	if (-1 == curr_adp_mutt_level)
+	if (curr_adp_mutt_level == -1)
 		cl_dev_adp_mutt_limit = 0;
-	else if (0 != cl_mutt_param[curr_adp_mutt_level])
+	else if (cl_mutt_param[curr_adp_mutt_level] != 0)
 		cl_dev_adp_mutt_limit = cl_mutt_param[curr_adp_mutt_level];
 }
 
@@ -610,7 +627,7 @@ static void increase_mutt_limit(void)
 	if (curr_adp_mutt_level < (MAX_NUM_INSTANCE_MTK_COOLER_MUTT - 1))
 		curr_adp_mutt_level++;
 
-	if (0 != cl_mutt_param[curr_adp_mutt_level])
+	if (cl_mutt_param[curr_adp_mutt_level] != 0)
 		cl_dev_adp_mutt_limit = cl_mutt_param[curr_adp_mutt_level];
 }
 
@@ -628,7 +645,8 @@ static int adaptive_tput_limit(long curr_temp)
 	MD_TARGET_T_LOW = MD_target_t - t_stable_range;
 
 	/* mtk_cooler_mutt_dprintk("%s : active= %d tirgger= %d curr_temp= %ld\n", __func__,
-		cl_dev_adp_mutt_state, triggered, curr_temp); */
+	*	cl_dev_adp_mutt_state, triggered, curr_temp);
+	*/
 
 	if (cl_dev_adp_mutt_state == 1) {
 		int tt_MD = MD_target_t - curr_temp;	/* unit: mC */
@@ -648,7 +666,8 @@ static int adaptive_tput_limit(long curr_temp)
 			MD_tput_limit += (tt_MD / tt_MD_low);
 
 		/* mtk_cooler_mutt_dprintk("%s MD T %d Tc %ld, MD_tput_limit %d\n",
-			       __func__, MD_target_t, curr_temp, MD_tput_limit); */
+		*	       __func__, MD_target_t, curr_temp, MD_tput_limit);
+		*/
 
 		/* Adjust MUTT level  */
 		{
@@ -696,7 +715,7 @@ static int mtk_cl_adp_mutt_set_cur_state(struct thermal_cooling_device *cdev,
 				unsigned long state)
 {
 #if FEATURE_MUTT_V2
-		if ((1 == cl_dev_mdoff_state) || (1 == cl_dev_noIMS_state)) {
+		if ((cl_dev_mdoff_state == 1) || (cl_dev_noIMS_state == 1)) {
 			mtk_cooler_mutt_dprintk("[%s]  MD OFF or noIMS!!\n", __func__);
 			return 0;
 		}
@@ -725,34 +744,35 @@ static struct thermal_cooling_device_ops mtk_cl_adp_mutt_ops = {
 };
 
 /* =======================
-#define debugfs_entry(name) \
-do { \
-		dentry_f = debugfs_create_u32(#name, S_IWUSR | S_IRUGO, _d, &name); \
-		if (IS_ERR_OR_NULL(dentry_f)) {	\
-			pr_warn("Unable to create debugfsfile: " #name "\n"); \
-			return; \
-		} \
-} while (0)
-
-static void create_debugfs_entries(void)
-{
-	struct dentry *dentry_f;
-	struct dentry *_d;
-
-	_d = debugfs_create_dir("cl_adp_mutt", NULL);
-	if (IS_ERR_OR_NULL(_d)) {
-		pr_info("unable to create debugfs directory\n");
-		return;
-	}
-
-	debugfs_entry(MD_target_t);
-	debugfs_entry(t_stable_range);
-	debugfs_entry(tt_MD_high);
-	debugfs_entry(tt_MD_low);
-}
-
-#undef debugfs_entry
-========================== */
+*#define debugfs_entry(name) \
+*do { \
+*		dentry_f = debugfs_create_u32(#name, S_IWUSR | S_IRUGO, _d, &name); \
+*		if (IS_ERR_OR_NULL(dentry_f)) {	\
+*			pr_warn("Unable to create debugfsfile: " #name "\n"); \
+*			return; \
+*		} \
+*} while (0)
+*
+*static void create_debugfs_entries(void)
+*{
+*	struct dentry *dentry_f;
+*	struct dentry *_d;
+*
+*	_d = debugfs_create_dir("cl_adp_mutt", NULL);
+*	if (IS_ERR_OR_NULL(_d)) {
+*		pr_info("unable to create debugfs directory\n");
+*		return;
+*	}
+*
+*	debugfs_entry(MD_target_t);
+*	debugfs_entry(t_stable_range);
+*	debugfs_entry(tt_MD_high);
+*	debugfs_entry(tt_MD_low);
+*}
+*
+*#undef debugfs_entry
+*==========================
+*/
 #endif
 
 static int mtk_cooler_mutt_register_ltf(void)
@@ -877,17 +897,21 @@ static ssize_t _mtk_cl_mutt_proc_write(struct file *filp, const char __user *buf
 	desc[len] = '\0';
 
     /**
-     * sscanf format <klog_on> <mtk-cl-mutt00 active (ms)> <mtk-cl-mutt00 suspended (ms)> <mtk-cl-mutt01 active (ms)> <mtk-cl-mutt01 suspended (ms)> <mtk-cl-mutt02 active (ms)> <mtk-cl-mutt02 suspended (ms)>...
+     * sscanf format <klog_on> <mtk-cl-mutt00 active (ms)>
+     *<mtk-cl-mutt00 suspended (ms)> <mtk-cl-mutt01 active (ms)>
+     *<mtk-cl-mutt01 suspended (ms)> <mtk-cl-mutt02 active (ms)>
+     *<mtk-cl-mutt02 suspended (ms)>...
      * <klog_on> can only be 0 or 1
-     * <mtk-cl-mutt* active/suspended (ms) > can only be positive integer or 0 to denote no limit
+     * <mtk-cl-mutt* active/suspended (ms) > can only be positive
+     *integer or 0 to denote no limit
      */
 
-	if (NULL == data) {
+	if (data == NULL) {
 		mtk_cooler_mutt_dprintk("[%s] null data\n", __func__);
 		return -EINVAL;
 	}
 	/* WARNING: Modify here if MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS is changed to other than 4 */
-#if (4 == MAX_NUM_INSTANCE_MTK_COOLER_MUTT)
+#if (MAX_NUM_INSTANCE_MTK_COOLER_MUTT == 4)
 	/* cl_mutt_param[0] = 0; */
 	/* cl_mutt_param[1] = 0; */
 	/* cl_mutt_param[2] = 0; */
@@ -896,7 +920,7 @@ static ssize_t _mtk_cl_mutt_proc_write(struct file *filp, const char __user *buf
 			&klog_on, &mutt0_a, &mutt0_s, &mutt1_a, &mutt1_s, &mutt2_a, &mutt2_s,
 			&mutt3_a, &mutt3_s, &amutt_target_temp);
 
-	if (1 <= scan_count) {
+	if (scan_count >= 1) {
 		if (klog_on == 0 || klog_on == 1)
 			cl_mutt_klog_on = klog_on;
 

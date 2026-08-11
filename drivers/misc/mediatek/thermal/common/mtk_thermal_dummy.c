@@ -11,8 +11,8 @@
  * GNU General Public License for more details.
  */
 
-#include <asm/uaccess.h>
-/* #include <asm/system.h> */
+#include <linux/uaccess.h>
+#include <linux/system.h>
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -25,7 +25,7 @@
 
 unsigned long (*mtk_thermal_get_gpu_loading_fp)(void) = NULL;
 /*EXPORT_SYMBOL(mtk_thermal_get_gpu_loading_fp);
-Should open, but I turn it off for coding style
+*Should open, but I turn it off for coding style
 */
 
 /* Init */

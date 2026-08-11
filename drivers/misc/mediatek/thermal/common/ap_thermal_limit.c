@@ -21,27 +21,29 @@
 #include <linux/seq_file.h>
 #include <linux/time.h>
 #include <linux/jiffies.h>
-#include <mach/mt_thermal.h> /* needed by tscpu_settings.h */
+#include <mach/mtk_thermal.h> /* needed by tscpu_settings.h */
 #include <tscpu_settings.h> /* needed by tscpu_warn */
 #include <ap_thermal_limit.h>
 #include <mt-plat/aee.h>
 
 
 #if defined(ATM_USES_PPM)
-#include "mach/mt_ppm_api.h"
+#include "mach/mtk_ppm_api.h"
 #else
 #include "mt_cpufreq.h"
 #endif
-#include "mt_gpufreq.h"
+#include "mtk_gpufreq.h"
 
 /*=============================================================
- * Local variable definition
- *=============================================================*/
+* Local variable definition
+*=============================================================
+*/
 #define AP_THERMO_LMT_MAX_USERS				(3)
 
 /*=============================================================
- * Local variable definition
- *=============================================================*/
+* Local variable definition
+*=============================================================
+*/
 static unsigned int apthermolmt_prev_cpu_pwr_lim;
 static unsigned int apthermolmt_curr_cpu_pwr_lim = 0x7FFFFFFF;
 static unsigned int apthermolmt_prev_gpu_pwr_lim;
@@ -70,8 +72,9 @@ static unsigned int gp_curr_gpu_pwr_limit;
 static DEFINE_MUTEX(apthermolmt_cpu_mutex);
 
 /*=============================================================
- * Weak functions
- *=============================================================*/
+* Weak functions
+*=============================================================
+*/
 #if defined(ATM_USES_PPM)
 void __attribute__ ((weak))
 mt_ppm_cpu_thermal_protect(unsigned int limited_power)
@@ -86,13 +89,23 @@ mt_cpufreq_thermal_protect(unsigned int limited_power)
 }
 #endif
 
-/*=============================================================
- * Local function prototype
- *=============================================================*/
+
+void __attribute__ ((weak))
+mt_gpufreq_thermal_protect(unsigned int limited_power)
+{
+	pr_err(TSCPU_LOG_TAG "E_WF: %s doesn't exist\n", __func__);
+}
+
 
 /*=============================================================
- * Function definitions
- *=============================================================*/
+* Local function prototype
+*=============================================================
+*/
+
+/*=============================================================
+* Function definitions
+*=============================================================
+*/
 int apthermolmt_register_user(struct apthermolmt_user *handle, char *log)
 {
 	int i = 1;

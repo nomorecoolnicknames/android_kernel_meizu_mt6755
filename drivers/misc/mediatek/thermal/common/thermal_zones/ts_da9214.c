@@ -10,7 +10,6 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 * See http://www.gnu.org/licenses/gpl-2.0.html for more details.
 */
-
 #include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -24,13 +23,14 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include "mach/mt_thermal.h"
+#include "mach/mtk_thermal.h"
 #include "da9214.h"
 #include <linux/uidgid.h>
 #include <linux/slab.h>
 
 static kuid_t uid = KUIDT_INIT(0);
 static kgid_t gid = KGIDT_INIT(1000);
+static DEFINE_SEMAPHORE(sem_mutex);
 
 static unsigned int interval;	/* seconds, 0 : no auto polling */
 static int trip_temp[10] = { 125000, 110000, 100000, 90000, 80000, 70000, 65000, 60000, 55000, 50000 };
@@ -63,7 +63,7 @@ static char g_bind9[20] = "";
 #define tsda9214_dprintk(fmt, args...)			\
 do {								\
 	if (tsda9214_debug_log)					\
-		pr_debug("[Power/da9214_Thermal]" fmt, ##args);	\
+		pr_debug("[Thermal/TZ/DA9214]" fmt, ##args);	\
 } while (0)
 
 static int tsda9214_get_temp(struct thermal_zone_device *thermal, unsigned long *t)
@@ -231,6 +231,11 @@ static int tsda9214_sysrst_get_cur_state(struct thermal_cooling_device *cdev, un
 	return 0;
 }
 
+/* [lidebiao start] */
+static int tsda9214_sysrst_happened = 0;
+extern int send_sysrst_signal(unsigned int type);
+/* [lidebiao end] */
+
 static int tsda9214_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state)
 {
 	tsda9214_dprintk("tsda9214_sysrst_set_cur_state = %d\n", cl_dev_sysrst_state);
@@ -241,11 +246,15 @@ static int tsda9214_sysrst_set_cur_state(struct thermal_cooling_device *cdev, un
 		pr_debug("*****************************************");
 		pr_debug("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
 
-#ifndef CONFIG_ARM64
-		BUG();
-#else
-		*(unsigned int *)0x0 = 0xdead;	/* To trigger data abort to reset the system for thermal protection. */
-#endif
+
+		/* [lidebiao start] */
+		if (0 == tsda9214_sysrst_happened) {
+			send_sysrst_signal(0);
+			tsda9214_sysrst_happened = 1;
+		}
+		//*(unsigned int *)0x0 = 0xdead; /* To trigger data abort to reset the system for thermal protection. */
+		/* [lidebiao end] */
+
 	}
 	return 0;
 }
@@ -328,16 +337,9 @@ static ssize_t tsda9214_write(struct file *file, const char __user *buffer, size
 		&ptr_tsda9214_data->trip[8], &ptr_tsda9214_data->t_type[8], ptr_tsda9214_data->bind8,
 		&ptr_tsda9214_data->trip[9], &ptr_tsda9214_data->t_type[9], ptr_tsda9214_data->bind9,
 		&ptr_tsda9214_data->time_msec) == 32) {
+		down(&sem_mutex);
 		tsda9214_dprintk("[tsda9214_write] tsda9214_unregister_thermal\n");
 		tsda9214_unregister_thermal();
-
-		if (num_trip < 0 || num_trip > 10) {
-			aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "tsda9214_write",
-					"Bad argument");
-			tsda9214_dprintk("tsda9214_write bad argument\n");
-			kfree(ptr_tsda9214_data);
-			return -EINVAL;
-		}
 
 		for (i = 0; i < num_trip; i++)
 			g_THERMAL_TRIP[i] = ptr_tsda9214_data->t_type[i];
@@ -382,6 +384,7 @@ static ssize_t tsda9214_write(struct file *file, const char __user *buffer, size
 
 		tsda9214_dprintk("[tsda9214_write] tsda9214_register_thermal\n");
 		tsda9214_register_thermal();
+		up(&sem_mutex);
 
 		kfree(ptr_tsda9214_data);
 		return count;

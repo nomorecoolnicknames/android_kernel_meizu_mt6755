@@ -91,7 +91,6 @@ typedef short *LPWSTR;
 #endif
 
 #ifndef NULL
-#define NULL  (0)
 #endif
 
 /* enum boolean {false, true}; */
@@ -195,14 +194,15 @@ typedef enum {
 /* Assertions */
 /* --------------------------------------------------------------------------- */
 
-#ifndef ASSERT
-#define ASSERT(expr)        BUG_ON(!(expr))
-#endif
-
-#ifndef NOT_IMPLEMENTED
-#define NOT_IMPLEMENTED()   BUG_ON(1)
-#endif
-
+/*
+*#ifndef ASSERT
+*#define ASSERT(expr)        BUG_ON(!(expr))
+*#endif
+*
+*#ifndef NOT_IMPLEMENTED
+*#define NOT_IMPLEMENTED()   BUG_ON(1)
+*#endif
+*/
 #define STATIC_ASSERT(pred)         STATIC_ASSERT_X(pred, __LINE__)
 #define STATIC_ASSERT_X(pred, line) STATIC_ASSERT_XX(pred, line)
 #define STATIC_ASSERT_XX(pred, line) \

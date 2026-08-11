@@ -24,14 +24,16 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include "mach/mt_thermal.h"
+#include "mach/mtk_thermal.h"
+#include "mtk_thermal_timer.h"
 #include <mt-plat/upmu_common.h>
 #include <tspmic_settings.h>
 #include <linux/slab.h>
 
 /*=============================================================
  *Local variable definition
- *=============================================================*/
+ *=============================================================
+ */
 /**
  * If curr_temp >= polling_trip_temp1, use interval
  * else if cur_temp >= polling_trip_temp2 && curr_temp < polling_trip_temp1, use interval*polling_factor1
@@ -39,11 +41,11 @@
  */
 
 /*=============================================================*/
+
 static kuid_t uid = KUIDT_INIT(0);
 static kgid_t gid = KGIDT_INIT(1000);
 static DEFINE_SEMAPHORE(sem_mutex);
 static int isTimerCancelled;
-
 
 static unsigned int interval;	/* seconds, 0 : no auto polling */
 static unsigned int trip_temp[10] = { 120000, 110000, 100000, 90000, 80000, 70000, 65000, 60000, 55000, 50000 };
@@ -256,7 +258,7 @@ static int tstsx_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsig
 		mtktstsx_info("*****************************************");
 		mtktstsx_info("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
 
-		BUG();
+		*(unsigned int *)0x0 = 0xdead;	/* To trigger data abort to reset the system for thermal protection. */
 		/* arch_reset(0,NULL); */
 	}
 	return 0;
@@ -309,7 +311,7 @@ static ssize_t mtktstsx_write(struct file *file, const char __user *buffer, size
 
 	struct mtktstsx_data *ptr_mtktstsx_data;
 
-	ptr_mtktstsx_data = kmalloc(sizeof(*ptr_mtktstsx_data) , GFP_KERNEL);
+	ptr_mtktstsx_data = kmalloc(sizeof(*ptr_mtktstsx_data), GFP_KERNEL);
 
 	if (ptr_mtktstsx_data == NULL)
 		return -ENOMEM;
@@ -343,8 +345,10 @@ static ssize_t mtktstsx_write(struct file *file, const char __user *buffer, size
 		mtktstsx_unregister_thermal();
 
 		if (num_trip < 0 || num_trip > 10) {
+			#ifdef CONFIG_MTK_AEE_FEATURE
 			aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtktstsx_write",
 					"Bad argument");
+			#endif
 			mtktspmic_dprintk("[mtktstsx_write] bad argument\n");
 			kfree(ptr_mtktstsx_data);
 			up(&sem_mutex);
@@ -407,7 +411,7 @@ static ssize_t mtktstsx_write(struct file *file, const char __user *buffer, size
 	return -EINVAL;
 }
 
-void mtkts_tsx_cancel_thermal_timer(void)
+static void mtkts_tsx_cancel_thermal_timer(void)
 {
 	/* cancel timer */
 	/* pr_debug("mtkts_tsx_cancel_thermal_timer\n"); */
@@ -425,10 +429,11 @@ void mtkts_tsx_cancel_thermal_timer(void)
 }
 
 
-void mtkts_tsx_start_thermal_timer(void)
+static void mtkts_tsx_start_thermal_timer(void)
 {
 	/* pr_debug("mtkts_tsx_start_thermal_timer\n"); */
 	/* resume thermal framework polling when leaving deep idle */
+
 	if (!isTimerCancelled)
 		return;
 
@@ -438,18 +443,19 @@ void mtkts_tsx_start_thermal_timer(void)
 		return;
 
 	if (thz_dev != NULL && interval != 0)
-		mod_delayed_work(system_freezable_wq, &(thz_dev->poll_queue), round_jiffies(msecs_to_jiffies(1000)));
+		mod_delayed_work(system_freezable_wq, &(thz_dev->poll_queue),
+			round_jiffies(msecs_to_jiffies(1000)));
 
 	up(&sem_mutex);
 }
 
 /*
-int mtktstsx_register_cooler(void)
-{
-	cl_dev_sysrst = mtk_thermal_cooling_device_register("mtktstsx-sysrst", NULL,
-							    &mtktstsx_cooling_sysrst_ops);
-	return 0;
-}
+*int mtktstsx_register_cooler(void)
+*{
+*	cl_dev_sysrst = mtk_thermal_cooling_device_register("mtktstsx-sysrst", NULL,
+*							    &mtktstsx_cooling_sysrst_ops);
+*	return 0;
+*}
 */
 
 static int mtktstsx_register_thermal(void)
@@ -575,6 +581,8 @@ static int __init mtktstsx_init(void)
 				&mtktstsx_log_fops);
 	}
 
+	mtkTTimer_register("mtktstsx", mtkts_tsx_start_thermal_timer, mtkts_tsx_cancel_thermal_timer);
+
 	return 0;
 
 err_unreg:
@@ -587,6 +595,7 @@ static void __exit mtktstsx_exit(void)
 	mtktstsx_info("[mtktstsx_exit]\n");
 	mtktstsx_unregister_thermal();
 	mtktstsx_unregister_cooler();
+	mtkTTimer_unregister("mtktstsx");
 }
 module_init(mtktstsx_init);
 module_exit(mtktstsx_exit);

@@ -16,7 +16,7 @@
 #endif
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
@@ -39,9 +39,11 @@
 #include <mt-plat/mtk_thermal_monitor.h>
 #include <mt-plat/mtk_thermal_platform.h>
 #include <linux/uidgid.h>
+
 /*#ifdef CONFIG_MD32_SUPPORT
-#define CONFIG_MTK_THERMAL_EXT_CONTROL
-#endif*/
+*#define CONFIG_MTK_THERMAL_EXT_CONTROL
+*#endif
+*/
 
 /* ************************************ */
 /* Definition */
@@ -102,7 +104,8 @@ struct mtk_thermal_tz_data {
 #endif
 	long fake_temp;
 	/* to store the Tfake, range from -275000 to MAX positive of int...
-	-275000 is a special number to turn off Tfake */
+	*-275000 is a special number to turn off Tfake
+	*/
 	struct mutex ma_lock;	/* protect moving avg. vars... */
 };
 
@@ -127,10 +130,10 @@ static struct proc_dir_entry *proc_drv_therm_dir_entry;
 static int nBattCurrentCnsmpt;
 static int nCPU_loading_sum;
 /* 64bit */
-static unsigned long long g_check_cpu_info_flag = 0x0;
-static unsigned long long g_check_batt_info_flag = 0x0;
-static unsigned long long g_check_wifi_info_flag = 0x0;
-static unsigned long long g_check_mobile_info_flag = 0x0;
+static unsigned long long g_check_cpu_info_flag;
+static unsigned long long g_check_batt_info_flag;
+static unsigned long long g_check_wifi_info_flag;
+static unsigned long long g_check_mobile_info_flag;
 
 static int nWifi_throughput;
 static int nMobile_throughput;
@@ -163,6 +166,7 @@ do { \
 #else
 #define THRML_STORAGE_LOG(msg_id, func_name, ...)
 #endif
+
 
 #define THRML_LOG(fmt, args...) \
 do { \
@@ -197,7 +201,7 @@ static int last_batt_raw_temp;
 
 static int mtk_thermal_monitor_get_battery_timeout_time(void)
 {
-	if (NULL != tz_last_values[MTK_THERMAL_SENSOR_BATTERY]) {
+	if (tz_last_values[MTK_THERMAL_SENSOR_BATTERY] != NULL) {
 		int batt_temp = last_batt_raw_temp;	/* *tz_last_values[MTK_THERMAL_SENSOR_BATTERY]; */
 
 		if (batt_temp <= 25000)
@@ -248,9 +252,10 @@ static int mtk_thermal_monitor_suspend(struct platform_device *dev, pm_message_t
 static int mtk_thermal_monitor_resume(struct platform_device *dev)
 {
 	/* take wake lock */
-	if (NULL != tz_last_values[MTK_THERMAL_SENSOR_BATTERY]) {
+	if (tz_last_values[MTK_THERMAL_SENSOR_BATTERY] != NULL) {
 		/* check if phone call on going...if yes,
-		we need to confirm battery temp. if not, we don't need this. */
+		*we need to confirm battery temp. if not, we don't need this.
+		*/
 		if (g_mtm_phone_call_ongoing) {
 			unsigned int GPT5_cmp;
 			unsigned int GPT5_cnt;
@@ -331,7 +336,7 @@ static struct mtk_thermal_ext_tz_data mtk_thermal_ext_tz_values[MTK_THERMAL_EXT_
 
 static int mtk_thermal_ext_get_threshold(struct mtk_thermal_ext_tz_data *tzdata,
 struct thermal_zone_device *thermal, struct thermal_zone_device_ops *ops, int trips) {
-	int temperature;
+	unsigned long temperature;
 	int i, j, ret, trip_num;
 	long trip_point[MTK_THERMAL_MAX_TRIP_NUM] = { 0 };
 	long temp;
@@ -509,8 +514,9 @@ static void mtk_thermal_ext_switch_control_out(void)
 	int i;
 
 	/* [Warning] Not lock here because md32_ipi_send() also lock and
-	 * it will result in kernel warning (LockProve Warning) */
-	/* mutex_lock(&mtk_thermal_ext_control_lock); */
+	 * it will result in kernel warning (LockProve Warning)
+	* mutex_lock(&mtk_thermal_ext_control_lock);
+    */
 	if (g_controlState == MTK_THERMAL_CONTROL_STATE_POLLING) {
 		for (i = 0; i < MTK_THERMAL_EXT_SENSOR_COUNT; i++) {
 			if (mtk_thermal_ext_tz_values[i].set)
@@ -546,7 +552,8 @@ static void mtk_thermal_ext_ipi_msg_handler(int id, void *data, uint len)
 			for (i = 0; i < MTK_THERMAL_EXT_SENSOR_COUNT; i++) {
 				if (mtk_thermal_ext_tz_values[i].set) {
 					/* [Warning] Can not use cancel_delayed_work_sync() here
-					* because it will cause kernel warning (LockProve Warning) */
+					* because it will cause kernel warning (LockProve Warning)
+					*/
 					if (cancel_delayed_work(&(mtk_thermal_ext_tz_values[i].tz->poll_queue)) == 0)
 						THRML_ERROR_LOG("%s work (tz %d) is running\n", __func__, i);
 				}
@@ -562,7 +569,8 @@ static void mtk_thermal_ext_ipi_msg_handler(int id, void *data, uint len)
 			struct thermal_zone_device *tz = NULL;
 
 			/* [Warning] Not lock here because md32_ipi_send() also lock and
-			 * it will result in kernel warning (LockProve Warning) */
+			 * it will result in kernel warning (LockProve Warning)
+			 */
 			/* mutex_lock(&mtk_thermal_ext_control_lock); */
 			if (g_controlState == MTK_THERMAL_CONTROL_STATE_INTERRUPT) {
 				if (mtk_thermal_ext_tz_values[tzidx].set) {
@@ -579,7 +587,8 @@ static void mtk_thermal_ext_ipi_msg_handler(int id, void *data, uint len)
 			if (tz != NULL) {
 				thermal_zone_device_update(tz);
 				/* [Warning] Can not use cancel_delayed_work_sync() here
-				because it will cause kernel warning (LockProve Warning) */
+				*because it will cause kernel warning (LockProve Warning)
+				*/
 				if (cancel_delayed_work(&(tz->poll_queue)) == 0) {
 					THRML_ERROR_LOG("%s work (tz %d) is running\n", __func__,
 							tzidx);
@@ -629,13 +638,13 @@ static const struct file_operations mtk_thermal_ext_proc_fops = {
 
 static int mtk_thermal_ext_get_tz_idx(char *type)
 {
-	if (0 == strncmp(type, "mtktsabb", 8))
+	if (strncmp(type, "mtktsabb", 8) == 0)
 		return MTK_THERMAL_EXT_SENSOR_ABB;
-	else if (0 == strncmp(type, "mtktspmic", 9))
+	else if (strncmp(type, "mtktspmic", 9) == 0)
 		return MTK_THERMAL_EXT_SENSOR_PMIC;
-	else if (0 == strncmp(type, "mtktsbattery2", 13))
+	else if (strncmp(type, "mtktsbattery2", 13) == 0)
 		return -1;
-	else if (0 == strncmp(type, "mtktsbattery", 12))
+	else if (strncmp(type, "mtktsbattery", 12) == 0)
 		return MTK_THERMAL_EXT_SENSOR_BATTERY;
 
 	return -1;
@@ -700,35 +709,35 @@ static struct notifier_block mtk_thermal_ext_nb = {
 
 static int mtk_thermal_get_tz_idx(char *type)
 {
-	if (0 == strncmp(type, "mtktscpu", 8))
+	if (strncmp(type, "mtktscpu", 8) == 0)
 		return MTK_THERMAL_SENSOR_CPU;
-	else if (0 == strncmp(type, "mtktsabb", 8))
+	else if (strncmp(type, "mtktsabb", 8) == 0)
 		return MTK_THERMAL_SENSOR_ABB;
-	else if (0 == strncmp(type, "mtktspmic", 9))
+	else if (strncmp(type, "mtktspmic", 9) == 0)
 		return MTK_THERMAL_SENSOR_PMIC;
-	else if (0 == strncmp(type, "mtktsbattery2", 13))
+	else if (strncmp(type, "mtktsbattery2", 13) == 0)
 		return MTK_THERMAL_SENSOR_BATTERY2;
-	else if (0 == strncmp(type, "mtktsbattery", 12))
+	else if (strncmp(type, "mtktsbattery", 12) == 0)
 		return MTK_THERMAL_SENSOR_BATTERY;
-	else if (0 == strncmp(type, "mtktspa", 7))
+	else if (strncmp(type, "mtktspa", 7) == 0)
 		return MTK_THERMAL_SENSOR_MD1;
-	else if (0 == strncmp(type, "mtktstdpa", 9))
+	else if (strncmp(type, "mtktstdpa", 9) == 0)
 		return MTK_THERMAL_SENSOR_MD2;
-	else if (0 == strncmp(type, "mtktswmt", 8))
+	else if (strncmp(type, "mtktswmt", 8) == 0)
 		return MTK_THERMAL_SENSOR_WIFI;
-	else if (0 == strncmp(type, "mtktsbuck", 9))
+	else if (strncmp(type, "mtktsbuck", 9) == 0)
 		return MTK_THERMAL_SENSOR_BUCK;
-	else if (0 == strncmp(type, "mtktsAP", 7))
+	else if (strncmp(type, "mtktsAP", 7) == 0)
 		return MTK_THERMAL_SENSOR_AP;
-	else if (0 == strncmp(type, "mtktspcb1", 9))
+	else if (strncmp(type, "mtktspcb1", 9) == 0)
 		return MTK_THERMAL_SENSOR_PCB1;
-	else if (0 == strncmp(type, "mtktspcb2", 9))
+	else if (strncmp(type, "mtktspcb2", 9) == 0)
 		return MTK_THERMAL_SENSOR_PCB2;
-	else if (0 == strncmp(type, "mtktsskin", 9))
+	else if (strncmp(type, "mtktsskin", 9) == 0)
 		return MTK_THERMAL_SENSOR_SKIN;
-	else if (0 == strncmp(type, "mtktsxtal", 9))
+	else if (strncmp(type, "mtktsxtal", 9) == 0)
 		return MTK_THERMAL_SENSOR_XTAL;
-	else if (0 == strncmp(type, "mtktsbtsmdpa", 12))
+	else if (strncmp(type, "mtktsbtsmdpa", 12) == 0)
 		return MTK_THERMAL_SENSOR_MD_PA;
 
 	return -1;
@@ -737,10 +746,10 @@ static int mtk_thermal_get_tz_idx(char *type)
 static struct proc_dir_entry *_get_proc_cooler_dir_entry(void)
 {
 	mutex_lock(&MTM_COOLER_PROC_DIR_LOCK);
-	if (NULL == proc_cooler_dir_entry) {
+	if (proc_cooler_dir_entry == NULL) {
 		proc_cooler_dir_entry = proc_mkdir("mtkcooler", NULL);
 		mb();
-		if (NULL == proc_cooler_dir_entry)
+		if (proc_cooler_dir_entry == NULL)
 			THRML_ERROR_LOG("%s mkdir /proc/mtkcooler failed\n", __func__);
 	}
 	mutex_unlock(&MTM_COOLER_PROC_DIR_LOCK);
@@ -750,10 +759,10 @@ static struct proc_dir_entry *_get_proc_cooler_dir_entry(void)
 static struct proc_dir_entry *_get_proc_tz_dir_entry(void)
 {
 	mutex_lock(&MTM_TZ_PROC_DIR_LOCK);
-	if (NULL == proc_tz_dir_entry) {
+	if (proc_tz_dir_entry == NULL) {
 		proc_tz_dir_entry = proc_mkdir("mtktz", NULL);
 		mb();
-		if (NULL == proc_tz_dir_entry)
+		if (proc_tz_dir_entry == NULL)
 			THRML_ERROR_LOG("%s mkdir /proc/mtktz failed\n", __func__);
 	}
 	mutex_unlock(&MTM_TZ_PROC_DIR_LOCK);
@@ -774,8 +783,8 @@ static struct thermal_zone_device_ops *getClientZoneOps(struct thermal_zone_devi
 	struct thermal_zone_device_ops *ret = NULL;
 	struct mtk_thermal_tz_data *tzdata;
 
-	if ((NULL == zdev) || (NULL == zdev->devdata)) {
-		BUG();
+	if ((zdev == NULL) || (zdev->devdata == NULL)) {
+		WARN_ON_ONCE(1);
 		return NULL;
 	}
 
@@ -1060,18 +1069,18 @@ static int _mtkthermal_check_cooler_conditions(struct mtk_thermal_cooler_data *c
 {
 	int ret = 0;
 
-	if (NULL != cldata) {
+	if (cldata != NULL) {
 		int i = 0;
 
 		for (; i < MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS; i++) {
-			if (NULL == cldata->condition_last_value[i]) {
-				if (0x0 == cldata->conditions[i][0])
+			if (cldata->condition_last_value[i] == NULL) {
+				if (cldata->conditions[i][0] == 0x0)
 					ret++;
-				else if (0 == strncmp(cldata->conditions[i], "EXIT", 4))
+				else if (strncmp(cldata->conditions[i], "EXIT", 4) == 0)
 					ret++;
 			} else {
 #if 1 /* [FIX ME] Special case for "condifion of MOBILE"  */
-				if (0 == strncmp(cldata->conditions[i], "MOBILE", 5))  {
+				if (strncmp(cldata->conditions[i], "MOBILE", 5) == 0)  {
 					if	(*cldata->condition_last_value[i] < cldata->threshold[i]) {
 						THRML_LOG("%s MOBILE Condition=%s, last_value=%d, threshold=%d\n",
 							__func__, cldata->conditions[i],
@@ -1122,7 +1131,7 @@ static int _mtkthermal_cooler_read(struct seq_file *m, void *v)
      * <condition_name_n> <condition_value_n> <thershold_n> <state_n>
      * PS: n is MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS
      */
-	if (NULL == m->private) {
+	if (m->private == NULL) {
 		THRML_ERROR_LOG("%s null data\n", __func__);
 	} else {
 		int i = 0;
@@ -1133,7 +1142,7 @@ static int _mtkthermal_cooler_read(struct seq_file *m, void *v)
 		mutex_unlock(&MTM_COOLER_LOCK);
 
 		for (; i < MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS; i++) {
-			if (0x0 == mcdata->conditions[i][0])
+			if (mcdata->conditions[i][0] == 0x0)
 				continue;	/* no condition */
 
 			/* TODO: consider the case that tz is unregistered... */
@@ -1143,7 +1152,7 @@ static int _mtkthermal_cooler_read(struct seq_file *m, void *v)
 				    mcdata->
 				    condition_last_value[i]) ? 0 :
 				   *(mcdata->condition_last_value[i]), mcdata->threshold[i],
-				   (NULL == mcdata->condition_last_value[i]) ? "error\n" : "\n");
+				   (mcdata->condition_last_value[i] == NULL) ? "error\n" : "\n");
 		}
 	}
 
@@ -1174,39 +1183,39 @@ static ssize_t _mtkthermal_cooler_write(struct file *file, const char __user *bu
 	mcdata = (struct mtk_thermal_cooler_data *)PDE_DATA(file_inode(file));
 	mutex_unlock(&MTM_COOLER_LOCK);
 
-	if (NULL == mcdata) {
+	if (mcdata == NULL) {
 		THRML_ERROR_LOG("%s null data\n", __func__);
 		return -EINVAL;
 	}
 	/* WARNING: Modify here if MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS is changed to other than 3 */
-#if (3 == MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS)
+#if (MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS == 3)
 	_mtkthermal_clear_cooler_conditions(mcdata);
 
-	if (2 <= sscanf(desc, "%19s %d %19s %d %19s %d",
+	if (sscanf(desc, "%19s %d %19s %d %19s %d",
 			&mcdata->conditions[0][0], &mcdata->threshold[0],
 			&mcdata->conditions[1][0], &mcdata->threshold[1],
-			&mcdata->conditions[2][0], &mcdata->threshold[2])) {
+			&mcdata->conditions[2][0], &mcdata->threshold[2]) >= 2) {
 		int i = 0;
 
 		for (; i < MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS; i++) {
-			if (0 == strncmp(mcdata->conditions[i], "EXIT", 4)) {
+			if (strncmp(mcdata->conditions[i], "EXIT", 4) == 0) {
 				mcdata->exit_threshold = mcdata->threshold[i];
-			} else if (0 == strncmp(mcdata->conditions[i], "CPU0", 4)) {
+			} else if (strncmp(mcdata->conditions[i], "CPU0", 4) == 0) {
 				mcdata->condition_last_value[i] = &nCPU_loading_sum;
 				g_check_cpu_info_flag |= (1ULL << mcdata->id);
 				THRML_LOG("%s cpu flag: %016llx, id=%d\n", __func__,
 					  g_check_cpu_info_flag, mcdata->id);
-			} else if (0 == strncmp(mcdata->conditions[i], "BATCC", 5)) {
+			} else if (strncmp(mcdata->conditions[i], "BATCC", 5) == 0) {
 				mcdata->condition_last_value[i] = &nBattCurrentCnsmpt;
 				g_check_batt_info_flag |= (1ULL << mcdata->id);
 				THRML_LOG("%s batt flag: %016llx, id=%d\n", __func__,
 					  g_check_batt_info_flag, mcdata->id);
-			} else if (0 == strncmp(mcdata->conditions[i], "WIFI", 4)) {
+			} else if (strncmp(mcdata->conditions[i], "WIFI", 4) == 0) {
 				mcdata->condition_last_value[i] = &nWifi_throughput;
 				g_check_wifi_info_flag |= (1ULL << mcdata->id);
 				THRML_LOG("%s wifi flag: %016llx, id=%d\n", __func__,
 					  g_check_wifi_info_flag, mcdata->id);
-			} else if (0 == strncmp(mcdata->conditions[i], "MOBILE", 5)) {
+			} else if (strncmp(mcdata->conditions[i], "MOBILE", 5) == 0) {
 				mcdata->condition_last_value[i] = &nMobile_throughput;
 				g_check_mobile_info_flag |= (1ULL << mcdata->id);
 				THRML_LOG("%s mobile flag: %016llx, id=%d\n", __func__,
@@ -1227,7 +1236,7 @@ static ssize_t _mtkthermal_cooler_write(struct file *file, const char __user *bu
 #else
 #error "Change correspondent part when changing MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS!"
 #endif
-	THRML_ERROR_LOG("%s bad arg\n", __func__);
+	/*THRML_ERROR_LOG("%s bad arg\n", __func__);*/
 
 	return -EINVAL;
 }
@@ -1250,7 +1259,7 @@ static int _mtkthermal_tz_read(struct seq_file *m, void *v)
 {
 	struct thermal_zone_device *tz = NULL;
 
-	if (NULL == m->private) {
+	if (m->private == NULL) {
 		THRML_ERROR_LOG("%s null data\n", __func__);
 	} else {
 		tz = (struct thermal_zone_device *)m->private;
@@ -1263,7 +1272,7 @@ static int _mtkthermal_tz_read(struct seq_file *m, void *v)
 
 			tzdata = tz->devdata;
 			if (!tzdata)
-				BUG();
+				WARN_ON_ONCE(1);
 
 #if (MAX_STEP_MA_LEN > 1)
 			mutex_lock(&tzdata->ma_lock);
@@ -1316,20 +1325,20 @@ static ssize_t _mtkthermal_tz_write(struct file *file, const char __user *buffer
 
 	tz = (struct thermal_zone_device *)PDE_DATA(file_inode(file));
 
-	if (NULL == tz) {
+	if (tz == NULL) {
 		THRML_ERROR_LOG("%s null data\n", __func__);
 		return -EINVAL;
 	}
 
-	if (2 <= sscanf(desc, "%31s %d %127s", arg_name, &arg_val, trailing)) {
-		if ((0 == strncmp(arg_name, "ma_len", 6)) && (arg_val >= 1) && (arg_val <= 60)) {
+	if (sscanf(desc, "%31s %d %127s", arg_name, &arg_val, trailing) >= 2) {
+		if ((strncmp(arg_name, "ma_len", 6) == 0) && (arg_val >= 1) && (arg_val <= 60)) {
 			struct mtk_thermal_tz_data *tzdata = NULL;
 
 			tzdata = tz->devdata;
 			if (!tzdata)
-				BUG();
+				WARN_ON_ONCE(1);
 
-			THRML_ERROR_LOG("%s trailing=%s\n", __func__, trailing);
+			/*THRML_ERROR_LOG("%s trailing=%s\n", __func__, trailing);*/
 
 		/**
 		 *  reset MA len and lock
@@ -1341,7 +1350,7 @@ static ssize_t _mtkthermal_tz_write(struct file *file, const char __user *buffer
 			tzdata->curr_idx_ma_len = 0;
 			tzdata->ma_lens[0] = arg_val;
 			tzdata->msma_ht[0] = MSMA_MAX_HT;
-			THRML_ERROR_LOG("%s %s ma_len=%d.\n", __func__, tz->type, tzdata->ma_len);
+			/*THRML_ERROR_LOG("%s %s ma_len=%d.\n", __func__, tz->type, tzdata->ma_len);*/
 #if (MAX_STEP_MA_LEN == 4)
 			/* reset */
 			tzdata->msma_ht[1] = tzdata->msma_ht[2] = tzdata->msma_ht[3] = MSMA_MAX_HT;
@@ -1349,10 +1358,11 @@ static ssize_t _mtkthermal_tz_write(struct file *file, const char __user *buffer
 			check = sscanf(trailing, "%ld,%d;%ld,%d;%ld,%d;", &tzdata->msma_ht[0], &tzdata->ma_lens[1],
 					&tzdata->msma_ht[1], &tzdata->ma_lens[2],
 					&tzdata->msma_ht[2], &tzdata->ma_lens[3]);
-			THRML_ERROR_LOG("%s %s (%ld, %d), (%ld, %d), (%ld, %d)\n", __func__,
-					tz->type, tzdata->msma_ht[0], tzdata->ma_lens[1],
-					tzdata->msma_ht[1], tzdata->ma_lens[2],
-					tzdata->msma_ht[2], tzdata->ma_lens[3]);
+			/*THRML_ERROR_LOG("%s %s (%ld, %d), (%ld, %d), (%ld, %d)\n", __func__,
+			*		tz->type, tzdata->msma_ht[0], tzdata->ma_lens[1],
+			*		tzdata->msma_ht[1], tzdata->ma_lens[2],
+			*		tzdata->msma_ht[2], tzdata->ma_lens[3]);
+			*/
 #else
 #error
 #endif
@@ -1364,13 +1374,13 @@ static ssize_t _mtkthermal_tz_write(struct file *file, const char __user *buffer
 			mutex_unlock(&tzdata->ma_lock);
 			THRML_ERROR_LOG("%s %s ma_len=%d.\n", __func__, tz->type, tzdata->ma_len);
 #endif
-		} else if ((0 == strncmp(arg_name, "Tfake", 5)) && (arg_val >= -275000)) {
+		} else if ((strncmp(arg_name, "Tfake", 5) == 0) && (arg_val >= -275000)) {
 			/* only accept for [-275000, max positive value of int] */
 			struct mtk_thermal_tz_data *tzdata = NULL;
 
 			tzdata = tz->devdata;
 			if (!tzdata)
-				BUG();
+				WARN_ON_ONCE(1);
 
 			mutex_lock(&tzdata->ma_lock);
 			tzdata->fake_temp = (long)arg_val;
@@ -1405,8 +1415,8 @@ static long _mtkthermal_update_and_get_sma(struct mtk_thermal_tz_data *tzdata, l
 {
 	long ret = 0;
 
-	if (NULL == tzdata) {
-		BUG();
+	if (tzdata == NULL) {
+		WARN_ON_ONCE(1);
 		return latest_val;
 	}
 
@@ -1414,9 +1424,9 @@ static long _mtkthermal_update_and_get_sma(struct mtk_thermal_tz_data *tzdata, l
 	/* Use Tfake if set... */
 	latest_val = (-275000 < tzdata->fake_temp) ? tzdata->fake_temp : latest_val;
 
-	if (1 == tzdata->ma_len) {
+	if (tzdata->ma_len == 1) {
 		ret = latest_val;
-	} else if (1 < tzdata->ma_len) {
+	} else if (tzdata->ma_len > 1) {
 		int i = 0;
 
 		tzdata->ma[(tzdata->ma_counter) % (tzdata->ma_len)] = latest_val;
@@ -1438,7 +1448,7 @@ static long _mtkthermal_update_and_get_sma(struct mtk_thermal_tz_data *tzdata, l
 	 *      b. else if curr_idx_sma_len >0 && SMA < high_threshold[curr_idx_sma_len-1]
 	 *	{ Move downward: ma_counter =0; ma_len = sma_len[--curr_idx_sma_len]; }
 	 */
-	if (1 == tzdata->ma_counter) {
+	if (tzdata->ma_counter == 1) {
 		int i = 0;
 
 		for (; ret >= tzdata->msma_ht[i]; i++)
@@ -1552,9 +1562,9 @@ loff_t *data)
 		if ((mtm_phone_call_ongoing == 0) || (mtm_phone_call_ongoing == 1)) {
 			g_mtm_phone_call_ongoing = mtm_phone_call_ongoing;
 
-			if (1 == mtm_phone_call_ongoing)
+			if (mtm_phone_call_ongoing  == 1)
 				mtk_thermal_set_user_scenarios(MTK_THERMAL_SCEN_CALL);
-			else if (0 == mtm_phone_call_ongoing)
+			else if (mtm_phone_call_ongoing == 0)
 				mtk_thermal_clear_user_scenarios(MTK_THERMAL_SCEN_CALL);
 		}
 		return count;
@@ -1587,6 +1597,12 @@ static int __init mtkthermal_init(void)
 
 	THRML_LOG("%s\n", __func__);
 
+	/*set init val*/
+	g_check_cpu_info_flag = 0x0;
+	g_check_batt_info_flag = 0x0;
+	g_check_wifi_info_flag = 0x0;
+	g_check_mobile_info_flag = 0x0;
+
 	entry = proc_create("mtm_monitor", S_IRUGO | S_IWUSR | S_IWGRP, dir_entry, &mtkthermal_fops);
 	if (!entry)
 		THRML_ERROR_LOG("%s Can not create mtm_monitor\n", __func__);
@@ -1606,15 +1622,15 @@ static int __init mtkthermal_init(void)
 	/* create /proc/cooler folder */
 	/* WARNING! This is not gauranteed to be invoked before mtk_ts_cpu's functions... */
 	proc_cooler_dir_entry =
-	    (NULL == proc_cooler_dir_entry) ? proc_mkdir("mtkcooler", NULL) : proc_cooler_dir_entry;
-	if (NULL == proc_cooler_dir_entry)
+	    (proc_cooler_dir_entry == NULL) ? proc_mkdir("mtkcooler", NULL) : proc_cooler_dir_entry;
+	if (proc_cooler_dir_entry == NULL)
 		THRML_ERROR_LOG("%s mkdir /proc/mtkcooler failed\n", __func__);
 
 	/* create /proc/tz folder */
 	/* WARNING! This is not gauranteed to be invoked before mtk_ts_cpu's functions... */
 	proc_tz_dir_entry =
-	    (NULL == proc_tz_dir_entry) ? proc_mkdir("mtktz", NULL) : proc_tz_dir_entry;
-	if (NULL == proc_tz_dir_entry)
+	    (proc_tz_dir_entry == NULL) ? proc_mkdir("mtktz", NULL) : proc_tz_dir_entry;
+	if (proc_tz_dir_entry == NULL)
 		THRML_ERROR_LOG("%s mkdir /proc/mtktz failed\n", __func__);
 #if defined(CONFIG_MTK_THERMAL_TIME_BASE_PROTECTION)
 	wake_lock_init(&mtm_wake_lock, WAKE_LOCK_SUSPEND, "alarm");
@@ -1663,9 +1679,10 @@ static int __init mtkthermal_late_init(void)
 }
 #endif
 
-/* ************************************ */
-/* thermal_zone_device_ops Wrapper */
-/* ************************************ */
+/* ************************************
+* thermal_zone_device_ops Wrapper
+* ************************************
+*/
 
 /*
  * .bind wrapper: bind the thermal zone device with a thermal cooling device.
@@ -1676,7 +1693,8 @@ static int mtk_thermal_wrapper_bind(struct thermal_zone_device *thermal, struct 
 	struct thermal_zone_device_ops *ops;
 
 	/* WARNING! bind will invoke mtk_thermal_zone_bind_cooling_device_wrapper(),
-	so don't rollback cooler's devdata in this bind... */
+	*so don't rollback cooler's devdata in this bind...
+	*/
 
 #if MTK_THERMAL_MONITOR_CONDITIONAL_COOLING
 	{
@@ -1688,12 +1706,11 @@ static int mtk_thermal_wrapper_bind(struct thermal_zone_device *thermal, struct 
 		mutex_unlock(&MTM_COOLER_LOCK);
 
 		for (; i < MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS; i++) {
-			if ((0x0 != cldata->conditions[i][0]) &&
-			    (NULL == cldata->condition_last_value[i])) {
-				if (0 == strncmp(cldata->conditions[i], thermal->type, 20)) {
+			if ((cldata->conditions[i][0] != 0x0) &&
+			    (cldata->condition_last_value[i]) == NULL) {
+				if (strncmp(cldata->conditions[i], thermal->type, 20) == 0) {
 					cldata->condition_last_value[i] = &(thermal->temperature);
-					THRML_LOG
-					    ("[.bind]condition+ tz: %s cdev: %s condition: %s\n",
+					THRML_LOG("[.bind]condition+ tz: %s cdev: %s condition: %s\n",
 					     thermal->type, cdev->type, cldata->conditions[i]);
 				}
 			}
@@ -1758,7 +1775,7 @@ static int mtk_thermal_wrapper_unbind
 		}
 
 		for (; i < MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS; i++) {
-			if ((NULL != cldata->condition_last_value[i]) &&
+			if ((cldata->condition_last_value[i] != NULL) &&
 			    (&(thermal->temperature) == cldata->condition_last_value[i])) {
 				cldata->condition_last_value[i] = NULL;
 				THRML_LOG("[.unbind]condition- tz: %s cdev: %s condition: %s\n",
@@ -1839,7 +1856,7 @@ static int mtk_thermal_wrapper_get_temp
 	}
 #endif
 
-	if (0 == ret) {
+	if (ret == 0) {
 		*temperature = _mtkthermal_update_and_get_sma(thermal->devdata, raw_temp);
 		/* No strong type cast... */
 	} else {
@@ -1951,8 +1968,8 @@ static int mtk_thermal_wrapper_get_trip_temp
 	if (ops->get_trip_temp)
 		ret = ops->get_trip_temp(thermal, trip, temperature);
 
-	THRML_LOG("[.get_trip_temp] tz: %s trip: %d temp: %ld\n", thermal->type, trip,
-		  (long)*temperature);
+	THRML_LOG("[.get_trip_temp] tz: %s trip: %d temp: %d\n", thermal->type, trip,
+		  (int)*temperature);
 	THRML_STORAGE_LOG(THRML_LOGGER_MSG_TRIP_POINT, get_trip_temp, thermal->type, trip,
 			  *temperature);
 
@@ -1977,7 +1994,7 @@ static int mtk_thermal_wrapper_get_crit_temp
 	if (ops->get_crit_temp)
 		ret = ops->get_crit_temp(thermal, temperature);
 
-	THRML_LOG("[.get_crit_temp] tz: %s temp: %ld\n", thermal->type, (long)*temperature);
+	THRML_LOG("[.get_crit_temp] tz: %s temp: %d\n", thermal->type, (int)*temperature);
 
 	return ret;
 }
@@ -2101,7 +2118,8 @@ int tc1, int tc2, int passive_delay, int polling_delay) {
 			mtk_thermal_ext_set_tz_threshold(&mtk_thermal_ext_tz_values[tzidx], tzidx);
 
 			/* [Warning] Can not use cancel_delayed_work_sync() here
-			because it will cause kernel warning (LockProve Warning) */
+			*because it will cause kernel warning (LockProve Warning)
+			*/
 			if (g_controlState == MTK_THERMAL_CONTROL_STATE_INTERRUPT &&
 			    cancel_delayed_work(&(tz->poll_queue)) == 0) {
 				THRML_ERROR_LOG("%s cancel tz %d work, work is running\n", __func__,
@@ -2114,7 +2132,7 @@ int tc1, int tc2, int passive_delay, int polling_delay) {
 #endif				/* CONFIG_MTK_THERMAL_EXT_CONTROL */
 
 	/* create a proc for this tz... */
-	if (NULL != _get_proc_tz_dir_entry()) {
+	if (_get_proc_tz_dir_entry() != NULL) {
 		struct proc_dir_entry *entry;
 
 		entry =
@@ -2145,7 +2163,7 @@ void mtk_thermal_zone_device_unregister_wrapper(struct thermal_zone_device *tz)
 	tzdata = (struct mtk_thermal_tz_data *)tz->devdata;
 
 	/* delete the proc file entry from proc */
-	if (NULL != proc_tz_dir_entry)
+	if (proc_tz_dir_entry != NULL)
 		remove_proc_entry((const char *)type, proc_tz_dir_entry);
 #ifdef CONFIG_MTK_THERMAL_EXT_CONTROL
 	tzidx = mtk_thermal_ext_get_tz_idx(tz->type);
@@ -2178,7 +2196,7 @@ void mtk_thermal_zone_device_unregister_wrapper(struct thermal_zone_device *tz)
 	THRML_LOG("%s- tz: %s\n", __func__, type);
 
 	/* free memory */
-	if (NULL != tzdata) {
+	if (tzdata != NULL) {
 		mutex_lock(&tzdata->ma_lock);
 		tzdata->ops = NULL;
 		mutex_unlock(&tzdata->ma_lock);
@@ -2201,7 +2219,7 @@ int trip, struct thermal_cooling_device *cdev) {
 					     THERMAL_NO_LIMIT, THERMAL_WEIGHT_DEFAULT);
 
 	if (ret) {
-		THRML_ERROR_LOG("thermal_zone_bind_cooling_device Fail. Code(%d)\n", ret);
+		/*THRML_ERROR_LOG("thermal_zone_bind_cooling_device Fail. Code(%d)\n", ret);*/
 	} else {
 		/* TODO: think of a way don't do this here...Or cannot rollback devdata in bind ops... */
 		/* Init mtk Cooler Data */
@@ -2298,7 +2316,7 @@ static int mtk_cooling_wrapper_set_cur_state
 
 /* check conditions */
 #if MTK_THERMAL_MONITOR_CONDITIONAL_COOLING
-	if (0 != state) {
+	if (state != 0) {
 		/* here check conditions for setting the cooler... */
 		if (MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS ==
 		    _mtkthermal_check_cooler_conditions(mcdata)) {
@@ -2312,16 +2330,16 @@ static int mtk_cooling_wrapper_set_cur_state
 	}
 
 
-	if (0 == state) {
+	if (state == 0) {
 		int last_temp = 0;
 		int trip_temp = 0;
 		struct thermal_zone_device_ops *tz_ops;
 
-		if ((0 < mcdata->exit_threshold) && (mcdata->tz != NULL)) {
+		if ((mcdata->exit_threshold > 0) && (mcdata->tz != NULL)) {
 			/* if exit point is set and if this cooler is still bound... */
 			THRML_LOG("[.set_cur_state] cur_state:%lu\n", cur_state);
 
-			if (0 < cur_state) {
+			if (cur_state > 0) {
 				THRML_LOG("[.set_cur_state] tz:%p devdata:%p\n", mcdata->tz,
 					  mcdata->tz->devdata);
 
@@ -2339,14 +2357,14 @@ static int mtk_cooling_wrapper_set_cur_state
 
 				if (!ops) {
 					THRML_ERROR_LOG("[.set_cur_state]E tz unregistered.\n");
-					/* BUG(); */
+					/* WARN_ON_ONCE(1); */
 					trip_temp = 120000;
 				} else {
 					if (tz_ops->get_trip_temp) {
 						tz_ops->get_trip_temp(mcdata->tz, mcdata->trip, &trip_temp);
 						THRML_LOG("[.set_cur_state] trip_temp:%ld\n", (long)trip_temp);
 					} else {
-						BUG();
+						WARN_ON_ONCE(1);
 					}
 				}
 
@@ -2418,7 +2436,7 @@ struct thermal_cooling_device *mtk_thermal_cooling_device_register_wrapper
 	mb();
 
 	/* create a proc for this cooler... */
-	if (NULL != _get_proc_cooler_dir_entry()) {
+	if (_get_proc_cooler_dir_entry() != NULL) {
 		struct proc_dir_entry *entry;
 
 		entry =
@@ -2467,7 +2485,7 @@ const struct thermal_cooling_device_ops_extra *ops_ext){
 	mb();
 
 	/* create a proc for this cooler... */
-	if (NULL != _get_proc_cooler_dir_entry()) {
+	if (_get_proc_cooler_dir_entry() != NULL) {
 		struct proc_dir_entry *entry;
 
 		entry =
@@ -2523,7 +2541,7 @@ void mtk_thermal_cooling_device_unregister_wrapper(struct thermal_cooling_device
 	THRML_LOG("%s+ cdev:%p devdata:%p cdev:%s\n", __func__, cdev, cdev->devdata, type);
 
 	/* delete the proc file entry from proc */
-	if (NULL != proc_cooler_dir_entry)
+	if (proc_cooler_dir_entry != NULL)
 		remove_proc_entry((const char *)type, proc_cooler_dir_entry);
 	/* TODO: consider error handling... */
 
@@ -2553,7 +2571,7 @@ int mtk_thermal_zone_bind_trigger_trip(struct thermal_zone_device *tz, int trip,
 }
 EXPORT_SYMBOL(mtk_thermal_zone_bind_trigger_trip);
 
-int mtk_thermal_get_temp(enum mtk_thermal_sensor_id id)
+int mtk_thermal_get_temp(MTK_THERMAL_SENSOR_ID id)
 {
 	int ret = 0;
 
@@ -2575,9 +2593,9 @@ EXPORT_SYMBOL(mtk_thermal_get_temp);
 struct proc_dir_entry *mtk_thermal_get_proc_drv_therm_dir_entry(void)
 {
 	mutex_lock(&MTM_DRV_THERM_PROC_DIR_LOCK);
-	if (NULL == proc_drv_therm_dir_entry) {
+	if (proc_drv_therm_dir_entry == NULL) {
 		proc_drv_therm_dir_entry = proc_mkdir("driver/thermal", NULL);
-		if (NULL == proc_drv_therm_dir_entry)
+		if (proc_drv_therm_dir_entry == NULL)
 			THRML_ERROR_LOG("[%s]: mkdir /proc/driver/thermal failed\n", __func__);
 	}
 	mutex_unlock(&MTM_DRV_THERM_PROC_DIR_LOCK);

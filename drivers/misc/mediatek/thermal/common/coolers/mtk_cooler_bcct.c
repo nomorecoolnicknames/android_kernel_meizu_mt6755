@@ -27,7 +27,7 @@
 #include <linux/uidgid.h>
 #include <linux/notifier.h>
 #include <linux/fb.h>
-#include "mach/mt_thermal.h"
+#include "mach/mtk_thermal.h"
 
 /* ************************************ */
 /* Weak functions */
@@ -48,6 +48,12 @@ mt_get_charger_type(void)
 
 int __attribute__ ((weak))
 set_bat_charging_current_limit(int current_limit)
+{
+	pr_err("E_WF: %s doesn't exist\n", __func__);
+	return 0;
+}
+unsigned int __attribute__ ((weak))
+set_chr_input_current_limit(int current_limit)
 {
 	pr_err("E_WF: %s doesn't exist\n", __func__);
 	return 0;
@@ -104,12 +110,12 @@ mtk_chr_get_tchr(int *min_temp, int *max_temp)
 /* ************************************ */
 
 #define mtk_cooler_bcct_dprintk_always(fmt, args...) \
-pr_warn("[thermal/cooler/bcct]" fmt, ##args)
+pr_warn("[Thermal/TC/bcct]" fmt, ##args)
 
 #define mtk_cooler_bcct_dprintk(fmt, args...) \
 do { \
-	if (1 == cl_bcct_klog_on) \
-		pr_debug("[thermal/cooler/bcct]" fmt, ##args); \
+	if (cl_bcct_klog_on == 1) \
+		pr_debug("[Thermal/TC/bcct]" fmt, ##args); \
 } while (0)
 
 #define MAX_NUM_INSTANCE_MTK_COOLER_BCCT  3
@@ -272,7 +278,7 @@ static void mtk_cl_bcct_set_bcct_limit(void)
 		unsigned long curr_state;
 
 		MTK_CL_BCCT_GET_CURR_STATE(curr_state, cl_bcct_state[i]);
-		if (1 == curr_state) {
+		if (curr_state == 1) {
 
 			int limit;
 
@@ -285,7 +291,7 @@ static void mtk_cl_bcct_set_bcct_limit(void)
 	if (min_limit != cl_bcct_cur_limit) {
 		cl_bcct_cur_limit = min_limit;
 
-		if (65535 <= cl_bcct_cur_limit) {
+		if (cl_bcct_cur_limit >= 65535) {
 			chrlmt_set_limit(&cl_bcct_chrlmt_handle, -1, -1);
 			mtk_cooler_bcct_dprintk("%s limit=-1\n", __func__);
 		} else {
@@ -419,30 +425,32 @@ static int mtk_cl_abcct_set_cur_state(struct thermal_cooling_device *cdev, unsig
 	if (chrlmt_is_lcmoff)
 		cl_abcct_state = 0;
 
-	ret = mtk_chr_get_soc(&bat_info_soc);
-	if (ret)
-		mtk_cooler_bcct_dprintk("mtk_chr_get_soc: %d err: %d\n", bat_info_soc, ret);
-	ret = mtk_chr_get_ui_soc(&bat_info_uisoc);
-	if (ret)
-		mtk_cooler_bcct_dprintk("bat_info_uisoc: %d err: %d\n", bat_info_uisoc, ret);
-	ret = mtk_chr_get_vbat(&bat_info_vbat);
-	if (ret)
-		mtk_cooler_bcct_dprintk("bat_info_vbat: %d err: %d\n", bat_info_vbat, ret);
-	ret = mtk_chr_get_ibat(&bat_info_ibat);
-	if (ret)
-		mtk_cooler_bcct_dprintk("bat_info_ibat: %d err: %d\n", bat_info_ibat, ret);
-	ret = mtk_chr_get_vbus(&bat_info_vbus);
-	if (ret)
-		mtk_cooler_bcct_dprintk("bat_info_vbus: %d err: %d\n", bat_info_vbus, ret);
-	ret = mtk_chr_get_aicr(&bat_info_aicr);
-	if (ret)
-		mtk_cooler_bcct_dprintk("bat_info_aicr: %d err: %d\n", bat_info_aicr, ret);
-/*
-	ret = mtk_chr_get_tchr(&bat_info_mintchr, &bat_info_maxtchr);
-	if (ret)
-		mtk_cooler_bcct_dprintk("mtk_chr_get_tchr: %d %d err: %d\n",
-			bat_info_mintchr, bat_info_maxtchr, ret);
-*/
+	if (cl_bcct_klog_on == 1) {
+		ret = mtk_chr_get_soc(&bat_info_soc);
+		if (ret)
+			mtk_cooler_bcct_dprintk("mtk_chr_get_soc: %d err: %d\n", bat_info_soc, ret);
+		ret = mtk_chr_get_ui_soc(&bat_info_uisoc);
+		if (ret)
+			mtk_cooler_bcct_dprintk("bat_info_uisoc: %d err: %d\n", bat_info_uisoc, ret);
+		ret = mtk_chr_get_vbat(&bat_info_vbat);
+		if (ret)
+			mtk_cooler_bcct_dprintk("bat_info_vbat: %d err: %d\n", bat_info_vbat, ret);
+		ret = mtk_chr_get_ibat(&bat_info_ibat);
+		if (ret)
+			mtk_cooler_bcct_dprintk("bat_info_ibat: %d err: %d\n", bat_info_ibat, ret);
+		ret = mtk_chr_get_vbus(&bat_info_vbus);
+		if (ret)
+			mtk_cooler_bcct_dprintk("bat_info_vbus: %d err: %d\n", bat_info_vbus, ret);
+		ret = mtk_chr_get_aicr(&bat_info_aicr);
+		if (ret)
+			mtk_cooler_bcct_dprintk("bat_info_aicr: %d err: %d\n", bat_info_aicr, ret);
+	/*
+	*	ret = mtk_chr_get_tchr(&bat_info_mintchr, &bat_info_maxtchr);
+	*	if (ret)
+	*		mtk_cooler_bcct_dprintk("mtk_chr_get_tchr: %d %d err: %d\n",
+	*			bat_info_mintchr, bat_info_maxtchr, ret);
+	*/
+	}
 
 	mtk_cooler_bcct_dprintk("%s %s %lu\n", __func__, cdev->type, cl_abcct_state);
 	return 0;
@@ -707,17 +715,17 @@ static ssize_t _cl_bcct_write(struct file *filp, const char __user *buf, size_t 
      * <mtk-cl-bcct00 limit> can only be positive integer or -1 to denote no limit
      */
 
-	if (NULL == data) {
+	if (data == NULL) {
 		mtk_cooler_bcct_dprintk("%s null data\n", __func__);
 		return -EINVAL;
 	}
 	/* WARNING: Modify here if MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS is changed to other than 3 */
-#if (3 == MAX_NUM_INSTANCE_MTK_COOLER_BCCT)
+#if (MAX_NUM_INSTANCE_MTK_COOLER_BCCT == 3)
 	MTK_CL_BCCT_SET_LIMIT(-1, cl_bcct_state[0]);
 	MTK_CL_BCCT_SET_LIMIT(-1, cl_bcct_state[1]);
 	MTK_CL_BCCT_SET_LIMIT(-1, cl_bcct_state[2]);
 
-	if (1 <= sscanf(tmp, "%d %d %d %d", &klog_on, &limit0, &limit1, &limit2)) {
+	if (sscanf(tmp, "%d %d %d %d", &klog_on, &limit0, &limit1, &limit2) >= 1) {
 		if (klog_on == 0 || klog_on == 1)
 			cl_bcct_klog_on = klog_on;
 
@@ -796,7 +804,7 @@ static ssize_t _cl_abcct_write(struct file *filp, const char __user *buf, size_t
 	if (copy_from_user(tmp, buf, len))
 		return -EFAULT;
 
-	if (NULL == data) {
+	if (data == NULL) {
 		mtk_cooler_bcct_dprintk("%s null data\n", __func__);
 		return -EINVAL;
 	}
@@ -806,7 +814,7 @@ static ssize_t _cl_abcct_write(struct file *filp, const char __user *buf, size_t
 		, &_max_cur, &_min_cur, &_input_current_limit_on
 		, &_HW_thermal_sol, &_min_input, &_times_of_ts_polling_inteval);
 
-	if (6 <= scan_count) {
+	if (scan_count >= 6) {
 		abcct_target_temp = _abcct_target_temp;
 		abcct_kp = _abcct_kp;
 		abcct_ki = _abcct_ki;
@@ -814,7 +822,7 @@ static ssize_t _cl_abcct_write(struct file *filp, const char __user *buf, size_t
 		abcct_max_bat_chr_curr_limit = _max_cur;
 		abcct_min_bat_chr_curr_limit = _min_cur;
 
-		if (6 < scan_count) {
+		if (scan_count > 6) {
 			abcct_input_current_limit_on = _input_current_limit_on;
 			abcct_HW_thermal_solution = _HW_thermal_sol;
 			abcct_min_chr_input_curr_limit = _min_input;
@@ -881,15 +889,15 @@ static ssize_t _cl_abcct_lcmoff_write(struct file *filp, const char __user *buf,
 	if (copy_from_user(tmp, buf, len))
 		return -EFAULT;
 
-	if (NULL == data) {
+	if (data == NULL) {
 		mtk_cooler_bcct_dprintk("%s null data\n", __func__);
 		return -EINVAL;
 	}
 
-	if (7 <= sscanf(tmp, "%d %ld %ld %ld %ld %d %d"
+	if (sscanf(tmp, "%d %ld %ld %ld %ld %d %d"
 		, &_lcmoff_policy_enable
 		, &_abcct_lcmoff_target_temp, &_abcct_lcmoff_kp, &_abcct_lcmoff_ki, &_abcct_lcmoff_kd
-		, &_max_cur, &_min_cur)) {
+		, &_max_cur, &_min_cur) >= 7) {
 
 		chrlmt_lcmoff_policy_enable = _lcmoff_policy_enable;
 		abcct_lcmoff_target_temp = _abcct_lcmoff_target_temp;

@@ -25,15 +25,16 @@
 #include <linux/syscalls.h>
 #include <linux/sched.h>
 #include <linux/writeback.h>
-#include <asm/uaccess.h>
-#include <asm/string.h>
+#include <linux/uaccess.h>
+#include <linux/string.h>
 #include <linux/spinlock.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include "mach/mt_thermal.h"
+#include "mach/mtk_thermal.h"
+#include "mtk_thermal_timer.h"
 #include "mt-plat/mtk_mdm_monitor.h"
 #include <linux/uidgid.h>
 #include <linux/slab.h>
-#include <mt_ts_setting.h>
+#include <mtk_ts_setting.h>
 
 #if Feature_Thro_update
 /* For using net dev + */
@@ -51,7 +52,7 @@ static unsigned int interval;	/* seconds, 0 : no auto polling */
 static unsigned int trip_temp[10] = { 85000, 80000, 70000, 60000, 50000, 40000, 30000, 20000, 10000, 5000 };
 static int g_THERMAL_TRIP[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
-static unsigned int cl_dev_sysrst_state;
+static int cl_dev_sysrst_state;
 static struct thermal_zone_device *thz_dev;
 static struct thermal_cooling_device *cl_dev_sysrst;
 static int mtktspa_debug_log;
@@ -84,7 +85,7 @@ static int polling_factor2 = 10000;
 #define mtktspa_dprintk(fmt, args...)   \
 do {                                    \
 	if (mtktspa_debug_log) {                \
-		pr_debug("[Power/PA_Thermal]" fmt, ##args); \
+		pr_debug("[Thermal/TZ/PA]" fmt, ##args); \
 	}                                   \
 } while (0)
 
@@ -169,20 +170,20 @@ static int pa_cal_stats(unsigned long data)
 
 
 /*
-struct md_info{
-		char *attribute;
-		int value;
-		char *unit;
-		int invalid_value;
-		int index;
-};
-struct md_info g_pinfo_list[] =
-{{"TXPWR_MD1", -127, "db", -127, 0},
- {"TXPWR_MD2", -127, "db", -127, 1},
- {"RFTEMP_2G_MD1", -32767, "¢XC", -32767, 2},
- {"RFTEMP_2G_MD2", -32767, "¢XC", -32767, 3},
- {"RFTEMP_3G_MD1", -32767, "¢XC", -32767, 4},
- {"RFTEMP_3G_MD2", -32767, "¢XC", -32767, 5}};
+*struct md_info{
+*		char *attribute;
+*		int value;
+*		char *unit;
+*		int invalid_value;
+*		int index;
+*};
+*struct md_info g_pinfo_list[] =
+*{{"TXPWR_MD1", -127, "db", -127, 0},
+* {"TXPWR_MD2", -127, "db", -127, 1},
+* {"RFTEMP_2G_MD1", -32767, "¢XC", -32767, 2},
+* {"RFTEMP_2G_MD2", -32767, "¢XC", -32767, 3},
+* {"RFTEMP_3G_MD1", -32767, "¢XC", -32767, 4},
+* {"RFTEMP_3G_MD2", -32767, "¢XC", -32767, 5}};
 */
 static DEFINE_MUTEX(TSPA_lock);
 static int mtktspa_get_hw_temp(void)
@@ -387,6 +388,11 @@ static int tspa_sysrst_get_cur_state(struct thermal_cooling_device *cdev, unsign
 	return 0;
 }
 
+/* [lidebiao start] */
+static int pa_sysrst_happened = 0;
+extern int send_sysrst_signal(unsigned int type);
+/* [lidebiao end] */
+
 static int tspa_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state)
 {
 	cl_dev_sysrst_state = state;
@@ -396,8 +402,14 @@ static int tspa_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsign
 		pr_debug("*****************************************");
 		pr_debug("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
 
-		/* To trigger data abort to reset the system for thermal protection. */
-		BUG();
+
+		/* [lidebiao start] */
+		if (0 == pa_sysrst_happened) {
+			send_sysrst_signal(0);
+			pa_sysrst_happened = 1;
+		}
+		//*(unsigned int *)0x0 = 0xdead;	/* To trigger data abort to reset the system for thermal protection. */
+		/* [lidebiao end] */
 	}
 	return 0;
 }
@@ -479,8 +491,10 @@ static ssize_t mtktspa_write(struct file *file, const char __user *buffer, size_
 		mtktspa_unregister_thermal();
 
 		if (num_trip < 0 || num_trip > 10) {
+			#ifdef CONFIG_MTK_AEE_FEATURE
 			aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtktspa_write",
 					"Bad argument");
+			#endif
 			mtktspa_dprintk("[mtktspa_write] bad argument\n");
 			kfree(ptr_mtktspa_data);
 			up(&sem_mutex);
@@ -537,9 +551,10 @@ static ssize_t mtktspa_write(struct file *file, const char __user *buffer, size_
 		kfree(ptr_mtktspa_data);
 		return count;
 	}
-
+	#ifdef CONFIG_MTK_AEE_FEATURE
 	aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtktspa_write",
 			"Bad argument");
+    #endif
 	mtktspa_dprintk("[mtktspa_write] bad argument\n");
 	kfree(ptr_mtktspa_data);
 	return -EINVAL;
@@ -583,7 +598,7 @@ static const struct file_operations _tx_thro_fops = {
 };
 #endif
 
-void mtkts_pa_cancel_thermal_timer(void)
+static void mtkts_pa_cancel_thermal_timer(void)
 {
 	/* cancel timer */
 	/* pr_debug("mtkts_pa_cancel_thermal_timer\n"); */
@@ -601,7 +616,7 @@ void mtkts_pa_cancel_thermal_timer(void)
 }
 
 
-void mtkts_pa_start_thermal_timer(void)
+static void mtkts_pa_start_thermal_timer(void)
 {
 	/* pr_debug("mtkts_pa_start_thermal_timer\n"); */
 	/* resume thermal framework polling when leaving deep idle */
@@ -614,7 +629,8 @@ void mtkts_pa_start_thermal_timer(void)
 		return;
 
 	if (thz_dev != NULL && interval != 0)
-		mod_delayed_work(system_freezable_wq, &(thz_dev->poll_queue), round_jiffies(msecs_to_jiffies(3000)));
+		mod_delayed_work(system_freezable_wq, &(thz_dev->poll_queue),
+			round_jiffies(msecs_to_jiffies(3000)));
 
 	up(&sem_mutex);
 }
@@ -709,6 +725,8 @@ static int __init mtktspa_init(void)
 	add_timer(&pa_stats_timer);
 #endif
 
+	mtkTTimer_register("mtktspa", mtkts_pa_start_thermal_timer, mtkts_pa_cancel_thermal_timer);
+
 	return 0;
 
 err_unreg:
@@ -722,6 +740,7 @@ static void __exit mtktspa_exit(void)
 	mtktspa_unregister_thermal();
 	mtktspa_unregister_cooler();
 
+	mtkTTimer_unregister("mtktspa");
 #if Feature_Thro_update
 	del_timer(&pa_stats_timer);
 #endif

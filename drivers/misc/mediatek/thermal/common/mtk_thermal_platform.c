@@ -11,7 +11,7 @@
  * GNU General Public License for more details.
  */
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/dmi.h>
@@ -29,12 +29,12 @@
 #include <linux/bug.h>
 #include <linux/workqueue.h>
 #include "mt-plat/mtk_mdm_monitor.h"
-#include <mach/mt_thermal.h>
+#include <mach/mtk_thermal.h>
 #include <mt-plat/aee.h>
 #include <mtk_gpu_utility.h>
 #include <mt-plat/mtk_thermal_platform.h>
-#include <mt_gpufreq.h>
-
+#include <mtk_gpufreq.h>
+#include <tscpu_settings.h>
 /* ************************************ */
 /* Definition */
 /* ************************************ */
@@ -58,6 +58,12 @@ force_get_tbat(void)
 {
 	pr_err("E_WF: %s doesn't exist\n", __func__);
 	return 30;
+}
+
+unsigned int __attribute__ ((weak))
+mt_gpufreq_get_cur_freq(void)
+{
+	return 0;
 }
 
 /* ************************************ */
@@ -111,7 +117,7 @@ struct gpu_index_st {
 	int freq;
 };
 
-#define NO_CPU_CORES (8)
+#define NO_CPU_CORES (TZCPU_NO_CPU_CORES)
 static struct cpu_index_st cpu_index_list[NO_CPU_CORES];	/* /< 4-Core is maximum */
 static int cpufreqs[NO_CPU_CORES];
 static int cpuloadings[NO_CPU_CORES];
@@ -202,7 +208,13 @@ static int get_sys_cpu_usage_info_ex(void)
 		cpuloadings[i] = 0;
 
 	for_each_online_cpu(nCoreIndex) {
-
+		if (nCoreIndex >= NO_CPU_CORES) {
+			#ifdef CONFIG_MTK_AEE_FEATURE
+			aee_kernel_warning("thermal", "nCoreIndex %d over NO_CPU_CORES %d\n",
+				nCoreIndex, NO_CPU_CORES);
+			#endif
+			return 0;
+		}
 		/* Get CPU Info */
 		cpu_index_list[nCoreIndex].u[CPU_USAGE_CURRENT_FIELD] =
 		    kcpustat_cpu(nCoreIndex).cpustat[CPUTIME_USER];
@@ -311,7 +323,7 @@ static int get_sys_all_cpu_freq_info(void)
 
 	cpu_total_dmips /= 1000;
 	/* TODO: think a way to easy start and stop, and start for only once */
-	if (1 == check_dmips_limit) {
+	if (check_dmips_limit == 1) {
 		if (cpu_total_dmips > mtktscpu_limited_dmips) {
 			THRML_ERROR_LOG("cpu %d over limit %d\n", cpu_total_dmips,
 					mtktscpu_limited_dmips);
@@ -349,10 +361,10 @@ static ssize_t mtk_thermal_validation_wr(struct file *file, const char __user *b
 	desc[len] = '\0';
 
 	if (kstrtoint(desc, 10, &check_switch) == 0) {
-		if (1 == check_switch) {
+		if (check_switch == 1) {
 			dmips_limit_warned = false;
 			check_dmips_limit = check_switch;
-		} else if (0 == check_switch) {
+		} else if (check_switch == 0) {
 			check_dmips_limit = check_switch;
 		}
 		return count;
@@ -461,15 +473,16 @@ EXPORT_SYMBOL(mtk_thermal_get_gpu_info);
 /* ********************************************* */
 /* Get Extra Info */
 /* ********************************************* */
-#define MIN(_a_, _b_) ((_a_) < (_b_) ? (_a_) : (_b_))
+
 
 enum {
 /*	TXPWR_MD1 = 0,
-	TXPWR_MD2 =1,
-	RFTEMP_2G_MD1 =2,
-	RFTEMP_2G_MD2 = 3,
-	RFTEMP_3G_MD1 = 4,
-	RFTEMP_3G_MD2 = 5, */
+*	TXPWR_MD2 =1,
+*	RFTEMP_2G_MD1 =2,
+*	RFTEMP_2G_MD2 = 3,
+*	RFTEMP_3G_MD1 = 4,
+*	RFTEMP_3G_MD2 = 5,
+*/
 	WiFi_TP = 6,
 	Mobile_TP = 7,
 	NO_EXTRA_THERMAL_ATTR

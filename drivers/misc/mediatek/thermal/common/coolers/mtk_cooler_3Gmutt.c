@@ -17,20 +17,20 @@
 #include <linux/types.h>
 #include <linux/kobject.h>
 #include <linux/proc_fs.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/err.h>
 #include <linux/syscalls.h>
 #include "mt-plat/mtk_thermal_monitor.h"
 
 static int cl_debug_flag;
 
-#define mtk_cooler_3Gmutt_dprintk_always(fmt, args...)pr_notice("[thermal/cooler/3Gmutt]" fmt, ##args)
+#define mtk_cooler_3Gmutt_dprintk_always(fmt, args...)pr_notice("[Thermal/TC/3Gmutt]" fmt, ##args)
 
 
 #define mtk_cooler_3Gmutt_dprintk(fmt, args...) \
 do { \
-	if (1 == cl_mutt_klog_on) \
-		pr_debug("[thermal/cooler/3Gmutt]" fmt, ##args); \
+	if (cl_mutt_klog_on  == 1) \
+		pr_debug("[Thermal/TC/3Gmutt]" fmt, ##args); \
 } while (0)
 
 #define MAX_NUM_INSTANCE_MTK_COOLER_3GMUTT  4
@@ -46,7 +46,7 @@ do { \
 
 #define MTK_CL_3GMUTT_SET_CURR_STATE(curr_state, state) \
 do { \
-	if (0 == curr_state) \
+	if (curr_state == 0) \
 		state &= ~0x1; \
 	else \
 		state |= 0x1; \
@@ -99,7 +99,7 @@ ssize_t mddulthro_pid_write(struct file *file, const char __user *buf, size_t co
 
 	ret = kstrtouint(tmp, 10, &tm_input_pid_3Gtest);
 	if (ret)
-		WARN_ON(1);
+		WARN_ON_ONCE(1);
 
 	mtk_cooler_3Gmutt_dprintk_always("[%s] %s = %d\n", __func__, tmp, tm_input_pid_3Gtest);
 
@@ -178,7 +178,7 @@ static void mtk_cl_mutt_set_mutt_limit(void)
 		MTK_CL_3GMUTT_GET_CURR_STATE(curr_state, cl_mutt_state[i]);
 		mtk_cooler_3Gmutt_dprintk_always("[%s] curr_state = %lu\n", __func__, curr_state);
 
-		if (1 == curr_state) {
+		if (curr_state == 1) {
 
 			md_active = (cl_mutt_param[i] & 0x0000FF00) >> 8;
 			md_suspend = (cl_mutt_param[i] & 0x00FF0000) >> 16;
@@ -186,7 +186,8 @@ static void mtk_cl_mutt_set_mutt_limit(void)
 			md_final = (cl_mutt_param[i] & 0x000FFFF0) >> 4;
 
 			/* mtk_cooler_3Gmutt_dprintk_always("[%s]i= %d ,active=0x%x,suspend=0x%x\n",
-				__func__, i,md_active,md_suspend); */
+			*	__func__, i,md_active,md_suspend);
+			*/
 
 			/* a cooler with 0 active or 0 suspend is not allowed */
 			if (md_active == 0 || md_suspend == 0)
@@ -203,9 +204,7 @@ static void mtk_cl_mutt_set_mutt_limit(void)
 				min_param = cl_mutt_param[i];
 			}
 		} else {
-			/* mutt3G_send_signal(-1,-1); */
-			/* mtk_cooler_3Gmutt_dprintk_always("[%s]i= %d ,active=0x%x,suspend=0x%d\n",
-				__func__, i,md_active,md_suspend); */
+			/* mutt3G_send_signal(-1,-1);*/
 		}
 	}
 	mtk_cooler_3Gmutt_dprintk_always("[%s]i= %d ,min_param=%x,cl_mutt_cur_limit=%x\n", __func__,
@@ -215,8 +214,10 @@ static void mtk_cl_mutt_set_mutt_limit(void)
 
 	if (min_param != cl_mutt_cur_limit) {
 		cl_mutt_cur_limit = min_param;
-/* last_md_boot_cnt = ccci_get_md_boot_count(MD_SYS1); */
-/* ret = exec_ccci_kern_func_by_md_id(MD_SYS1, ID_THROTTLING_CFG, (char*) &cl_mutt_cur_limit, 4); */
+/* last_md_boot_cnt = ccci_get_md_boot_count(MD_SYS1);
+*/
+/* ret = exec_ccci_kern_func_by_md_id(MD_SYS1, ID_THROTTLING_CFG, (char*) &cl_mutt_cur_limit, 4);
+*/
 		mutt3G_send_signal(md_final, cl_mutt_cur_limit);
 		mtk_cooler_3Gmutt_dprintk_always("[%s] ret %d param %x bcnt %lul\n", __func__, ret,
 						 cl_mutt_cur_limit, last_md_boot_cnt);
@@ -342,23 +343,26 @@ static ssize_t _mtk_cl_mutt_proc_write(struct file *filp, const char __user *buf
 	desc[len] = '\0';
 
     /**
-     * sscanf format <klog_on> <mtk-cl-mutt00 active (ms)> <mtk-cl-mutt00 suspended (ms)> <mtk-cl-mutt01 active (ms)> <mtk-cl-mutt01 suspended (ms)> <mtk-cl-mutt02 active (ms)> <mtk-cl-mutt02 suspended (ms)>...
+     * sscanf format <klog_on> <mtk-cl-mutt00 active (ms)> <mtk-cl-mutt00 suspended (ms)>
+     *<mtk-cl-mutt01 active (ms)> <mtk-cl-mutt01 suspended (ms)>
+     *<mtk-cl-mutt02 active (ms)> <mtk-cl-mutt02 suspended (ms)>...
      * <klog_on> can only be 0 or 1
      * <mtk-cl-mutt* active/suspended (ms) > can only be positive integer or 0 to denote no limit
      */
 
-	if (NULL == data) {
+	if (data == NULL) {
 		mtk_cooler_3Gmutt_dprintk("[%s] null data\n", __func__);
 		return -EINVAL;
 	}
-	/* WARNING: Modify here if MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS is changed to other than 4 */
-#if (4 == MAX_NUM_INSTANCE_MTK_COOLER_3GMUTT)
+	/* WARNING: Modify here if MTK_THERMAL_MONITOR_COOLER_MAX_EXTRA_CONDITIONS is changed to other than 4
+    */
+#if (MAX_NUM_INSTANCE_MTK_COOLER_3GMUTT == 4)
 	/* cl_mutt_param[0] = 0; */
 	/* cl_mutt_param[1] = 0; */
 	/* cl_mutt_param[2] = 0; */
 
-	if (1 <= sscanf(desc, "%d %d %d %d %d %d %d %d %d",
-			&klog_on, &mutt0_a, &mutt0_s, &mutt1_a, &mutt1_s, &mutt2_a, &mutt2_s, &mutt3_a, &mutt3_s)) {
+	if (sscanf(desc, "%d %d %d %d %d %d %d %d %d", &klog_on, &mutt0_a, &mutt0_s, &mutt1_a, &mutt1_s,
+		&mutt2_a, &mutt2_s, &mutt3_a, &mutt3_s) >= 1) {
 
 		if (klog_on == 0 || klog_on == 1)
 			cl_mutt_klog_on = klog_on;

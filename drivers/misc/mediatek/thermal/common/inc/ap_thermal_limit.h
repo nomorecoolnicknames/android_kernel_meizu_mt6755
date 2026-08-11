@@ -1,3 +1,4 @@
+
 /*
 * Copyright (C) 2016 MediaTek Inc.
 *
@@ -10,6 +11,7 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 * See http://www.gnu.org/licenses/gpl-2.0.html for more details.
 */
+
 #ifndef __AP_THERMAL_LIMIT_H__
 #define __AP_THERMAL_LIMIT_H__
 

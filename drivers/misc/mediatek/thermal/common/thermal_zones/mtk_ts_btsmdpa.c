@@ -25,16 +25,18 @@
 #include <linux/syscalls.h>
 #include <linux/sched.h>
 #include <linux/writeback.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include "mach/mt_thermal.h"
+#include "mach/mtk_thermal.h"
+#include "mtk_thermal_timer.h"
 #include <linux/uidgid.h>
 #include <tmp_bts.h>
 #include <linux/slab.h>
 
 /*=============================================================
  *Weak functions
- *=============================================================*/
+ *=============================================================
+ */
 int __attribute__ ((weak))
 IMM_IsAdcInitReady(void)
 {
@@ -48,8 +50,8 @@ IMM_GetOneChannelValue(int dwChannel, int data[4], int *rawdata)
 	pr_err("E_WF: %s doesn't exist\n", __func__);
 	return -1;
 }
-/*=============================================================*/
-static int doing_tz_unregister;
+/*=============================================================
+*/
 static kuid_t uid = KUIDT_INIT(0);
 static kgid_t gid = KGIDT_INIT(1000);
 static DEFINE_SEMAPHORE(sem_mutex);
@@ -89,9 +91,13 @@ static int polling_factor2 = 10000;
 #define mtkts_btsmdpa_dprintk(fmt, args...)   \
 do {                                    \
 	if (mtkts_btsmdpa_debug_log) {                \
-		pr_debug("[Power/BTSMDPA_Thermal]" fmt, ##args); \
+		pr_debug("[Thermal/TZ/BTSMDPA]" fmt, ##args); \
 	}                                   \
 } while (0)
+
+#define mtkts_btsmdpa_printk(fmt, args...) \
+pr_debug("[Thermal/TZ/BTSMDPA]" fmt, ##args)
+
 
 
 /* #define INPUT_PARAM_FROM_USER_AP */
@@ -100,20 +106,20 @@ do {                                    \
  * kernel fopen/fclose
  */
 /*
-static mm_segment_t oldfs;
-
-static void my_close(int fd)
-{
-	set_fs(oldfs);
-	sys_close(fd);
-}
-
-static int my_open(char *fname, int flag)
-{
-	oldfs = get_fs();
-    set_fs(KERNEL_DS);
-    return sys_open(fname, flag, 0);
-}
+*static mm_segment_t oldfs;
+*
+*static void my_close(int fd)
+*{
+*	set_fs(oldfs);
+*	sys_close(fd);
+*}
+*
+*static int my_open(char *fname, int flag)
+*{
+*	oldfs = get_fs();
+*    set_fs(KERNEL_DS);
+*    return sys_open(fname, flag, 0);
+*}
 */
 typedef struct {
 	__s32 BTSMDPA_Temp;
@@ -555,7 +561,7 @@ static int get_hw_btsmdpa_temp(void)
 	int times = 1, Channel = g_RAP_ADC_channel;	/* 6752=0(AUX_IN1_NTC) */
 
 	if (IMM_IsAdcInitReady() == 0) {
-		pr_debug("[thermal_auxadc_get_data]: AUXADC is not ready\n");
+		mtkts_btsmdpa_printk("[thermal_auxadc_get_data]: AUXADC is not ready\n");
 		return 0;
 	}
 
@@ -579,7 +585,7 @@ static int get_hw_btsmdpa_temp(void)
 }
 
 static DEFINE_MUTEX(BTSMDPA_lock);
-int ts_btsmdpa_at_boot_time = 0;
+/*int ts_btsmdpa_at_boot_time = 0;*/
 int mtkts_btsmdpa_get_hw_temp(void)
 {
 	int t_ret = 0;
@@ -597,7 +603,7 @@ int mtkts_btsmdpa_get_hw_temp(void)
 
 #if MTKTS_BTSMDPA_SW_FILTER
 	if ((t_ret > 100000) || (t_ret < -30000)) {
-		pr_debug("[Power/BTSMDPA_Thermal] drop this data\n");
+		mtkts_btsmdpa_printk("[Power/BTSMDPA_Thermal] drop this data\n");
 		t_ret = pre_temp1;
 	} else if ((pre_temp1 != 0)
 		   && (((pre_temp1 - t_ret) >= DELTA_TEMP)
@@ -616,14 +622,13 @@ int mtkts_btsmdpa_get_hw_temp(void)
 	mutex_unlock(&BTSMDPA_lock);
 
 	if (t_ret > 40000)	/* abnormal high temp */
-		pr_debug("[Power/BTSMDPA_Thermal] T_btsmdpa=%d\n", t_ret);
+		mtkts_btsmdpa_printk("T_btsmdpa=%d\n", t_ret);
 
 	mtkts_btsmdpa_dprintk("[mtkts_btsmdpa_get_hw_temp] T_btsmdpa, %d\n", t_ret);
 	return t_ret;
 }
 
-
-static int mtkts_btsmdpa_get_temp(struct thermal_zone_device *thermal,int *t)
+static int mtkts_btsmdpa_get_temp(struct thermal_zone_device *thermal, int *t)
 {
 	*t = mtkts_btsmdpa_get_hw_temp();
 
@@ -853,8 +858,10 @@ static ssize_t mtkts_btsmdpa_write(struct file *file, const char __user *buffer,
 		mtkts_btsmdpa_unregister_thermal();
 
 		if (num_trip < 0 || num_trip > 10) {
+			#ifdef CONFIG_MTK_AEE_FEATURE
 			aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtkts_btsmdpa_write",
 				"Bad argument");
+			#endif
 			mtkts_btsmdpa_dprintk("[mtkts_btsmdpa_write] bad argument\n");
 			kfree(ptr_btsmdpa_data);
 			up(&sem_mutex);
@@ -918,9 +925,10 @@ static ssize_t mtkts_btsmdpa_write(struct file *file, const char __user *buffer,
 	}
 
 	mtkts_btsmdpa_dprintk("[mtkts_btsmdpa_write] bad argument\n");
+	#ifdef CONFIG_MTK_AEE_FEATURE
 	aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtkts_btsmdpa_write",
 		"Bad argument");
-
+	#endif
 	kfree(ptr_btsmdpa_data);
 	return -EINVAL;
 }
@@ -943,35 +951,35 @@ void mtkts_btsmdpa_prepare_table(int table_num)
 	switch (table_num) {
 	case 1:		/* AP_NTC_BL197 */
 		mtkts_btsmdpa_copy_table(BTSMDPA_Temperature_Table, BTSMDPA_Temperature_Table1);
-		BUG_ON(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table1));
+		WARN_ON_ONCE(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table1));
 		break;
 	case 2:		/* AP_NTC_TSM_1 */
 		mtkts_btsmdpa_copy_table(BTSMDPA_Temperature_Table, BTSMDPA_Temperature_Table2);
-		BUG_ON(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table2));
+		WARN_ON_ONCE(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table2));
 		break;
 	case 3:		/* AP_NTC_10_SEN_1 */
 		mtkts_btsmdpa_copy_table(BTSMDPA_Temperature_Table, BTSMDPA_Temperature_Table3);
-		BUG_ON(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table3));
+		WARN_ON_ONCE(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table3));
 		break;
 	case 4:		/* AP_NTC_10 */
 		mtkts_btsmdpa_copy_table(BTSMDPA_Temperature_Table, BTSMDPA_Temperature_Table4);
-		BUG_ON(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table4));
+		WARN_ON_ONCE(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table4));
 		break;
 	case 5:		/* AP_NTC_47 */
 		mtkts_btsmdpa_copy_table(BTSMDPA_Temperature_Table, BTSMDPA_Temperature_Table5);
-		BUG_ON(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table5));
+		WARN_ON_ONCE(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table5));
 		break;
 	case 6:		/* NTCG104EF104F */
 		mtkts_btsmdpa_copy_table(BTSMDPA_Temperature_Table, BTSMDPA_Temperature_Table6);
-		BUG_ON(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table6));
+		WARN_ON_ONCE(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table6));
 		break;
 	case 7:		/* NCP15WF104F03RC */
 		mtkts_btsmdpa_copy_table(BTSMDPA_Temperature_Table, BTSMDPA_Temperature_Table7);
-		BUG_ON(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table7));
+		WARN_ON_ONCE(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table7));
 		break;
 	default:		/* AP_NTC_10 */
 		mtkts_btsmdpa_copy_table(BTSMDPA_Temperature_Table, BTSMDPA_Temperature_Table4);
-		BUG_ON(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table4));
+		WARN_ON_ONCE(sizeof(BTSMDPA_Temperature_Table) != sizeof(BTSMDPA_Temperature_Table4));
 		break;
 	}
 
@@ -1014,7 +1022,8 @@ static ssize_t mtkts_btsmdpa_param_write(struct file *file, const char __user *b
 		unsigned int valR, valV, over_cri_low, ntc_table;
 	};
 	/* external pin: 0/1/12/13/14/15, can't use pin:2/3/4/5/6/7/8/9/10/11,
-	choose "adc_channel=11" to check if there is any param input */
+	*choose "adc_channel=11" to check if there is any param input
+	*/
 	unsigned int adc_channel = 11;
 
 	struct param_data *ptr_param_data = kmalloc(sizeof(*ptr_param_data), GFP_KERNEL);
@@ -1045,7 +1054,7 @@ static ssize_t mtkts_btsmdpa_param_write(struct file *file, const char __user *b
 			mtkts_btsmdpa_dprintk("g_RAP_pull_up_R=%d\n", g_RAP_pull_up_R);
 		} else {
 			kfree(ptr_param_data);
-			pr_debug("[mtkts_btsmdpa_write] bad PUP_R argument\n");
+			mtkts_btsmdpa_printk("[mtkts_btsmdpa_write] bad PUP_R argument\n");
 			return -EINVAL;
 		}
 
@@ -1054,7 +1063,7 @@ static ssize_t mtkts_btsmdpa_param_write(struct file *file, const char __user *b
 			mtkts_btsmdpa_dprintk("g_Rat_pull_up_voltage=%d\n", g_RAP_pull_up_voltage);
 		} else {
 			kfree(ptr_param_data);
-			pr_debug("[mtkts_btsmdpa_write] bad PUP_VOLT argument\n");
+			mtkts_btsmdpa_printk("[mtkts_btsmdpa_write] bad PUP_VOLT argument\n");
 			return -EINVAL;
 		}
 
@@ -1064,7 +1073,7 @@ static ssize_t mtkts_btsmdpa_param_write(struct file *file, const char __user *b
 					      g_TAP_over_critical_low);
 		} else {
 			kfree(ptr_param_data);
-			pr_debug("[mtkts_btsmdpa_write] bad OVERCRIT_L argument\n");
+			mtkts_btsmdpa_printk("[mtkts_btsmdpa_write] bad OVERCRIT_L argument\n");
 			return -EINVAL;
 		}
 
@@ -1073,12 +1082,13 @@ static ssize_t mtkts_btsmdpa_param_write(struct file *file, const char __user *b
 			mtkts_btsmdpa_dprintk("g_RAP_ntc_table=%d\n", g_RAP_ntc_table);
 		} else {
 			kfree(ptr_param_data);
-			pr_debug("[mtkts_btsmdpa_write] bad NTC_TABLE argument\n");
+			mtkts_btsmdpa_printk("[mtkts_btsmdpa_write] bad NTC_TABLE argument\n");
 			return -EINVAL;
 		}
 
 		/* external pin: 0/1/12/13/14/15, can't use pin:2/3/4/5/6/7/8/9/10/11,
-		choose "adc_channel=11" to check if there is any param input */
+		*choose "adc_channel=11" to check if there is any param input
+		*/
 		if ((adc_channel >= 2) && (adc_channel <= 11))
 			/* check unsupport pin value, if unsupport, set channel = 1 as default setting. */
 			g_RAP_ADC_channel = AUX_IN1_NTC;
@@ -1094,7 +1104,7 @@ static ssize_t mtkts_btsmdpa_param_write(struct file *file, const char __user *b
 		return count;
 	}
 
-	pr_debug("[mtkts_btsmdpa_write] bad argument\n");
+	mtkts_btsmdpa_printk("[mtkts_btsmdpa_write] bad argument\n");
 	kfree(ptr_param_data);
 	return -EINVAL;
 }
@@ -1107,25 +1117,28 @@ static ssize_t mtkts_btsmdpa_param_write(struct file *file, const char __user *b
 	/* return 0; */
 /* } */
 
-void mtkts_btsmdpa_cancel_thermal_timer(void)
+#if 0
+static void mtkts_btsmdpa_cancel_thermal_timer(void)
 {
 	/* cancel timer */
-	/* pr_debug("mtkts_btsmdpa_cancel_thermal_timer\n"); */
+	/* mtkts_btsmdpa_printk("mtkts_btsmdpa_cancel_thermal_timer\n"); */
 
 	/* stop thermal framework polling when entering deep idle */
-	/* if (thz_dev && !doing_tz_unregister)
-		cancel_delayed_work(&(thz_dev->poll_queue)); */
+	/* if (thz_dev)
+	*	cancel_delayed_work(&(thz_dev->poll_queue));
+	*/
 }
 
 
-void mtkts_btsmdpa_start_thermal_timer(void)
+static void mtkts_btsmdpa_start_thermal_timer(void)
 {
-	/* pr_debug("mtkts_btsmdpa_start_thermal_timer\n"); */
+	/* mtkts_btsmdpa_printk("mtkts_btsmdpa_start_thermal_timer\n"); */
 	/* resume thermal framework polling when leaving deep idle */
-	/* if (thz_dev != NULL && interval != 0 && !doing_tz_unregister)
-		mod_delayed_work(system_freezable_wq, &(thz_dev->poll_queue), round_jiffies(msecs_to_jiffies(3000)));*/
+	/* if (thz_dev != NULL && interval != 0)
+	*	mod_delayed_work(system_freezable_wq, &(thz_dev->poll_queue), round_jiffies(msecs_to_jiffies(3000)));
+	*/
 }
-
+#endif
 
 static int mtkts_btsmdpa_register_thermal(void)
 {
@@ -1151,10 +1164,8 @@ static void mtkts_btsmdpa_unregister_thermal(void)
 	mtkts_btsmdpa_dprintk("[mtkts_btsmdpa_unregister_thermal]\n");
 
 	if (thz_dev) {
-		doing_tz_unregister = 1;
 		mtk_thermal_zone_device_unregister(thz_dev);
 		thz_dev = NULL;
-		doing_tz_unregister = 0;
 	}
 }
 
@@ -1213,7 +1224,9 @@ static int __init mtkts_btsmdpa_init(void)
 		if (entry)
 			proc_set_user(entry, uid, gid);
 	}
-
+#if 0
+	mtkTTimer_register("mtktsbtsmdpa", mtkts_btsmdpa_start_thermal_timer, mtkts_btsmdpa_cancel_thermal_timer);
+#endif
 	return 0;
 }
 
@@ -1221,6 +1234,9 @@ static void __exit mtkts_btsmdpa_exit(void)
 {
 	mtkts_btsmdpa_dprintk("[mtkts_btsmdpa_exit]\n");
 	mtkts_btsmdpa_unregister_thermal();
+#if 0
+	mtkTTimer_unregister("mtktsbtsmdpa");
+#endif
 	/* mtkts_btsmdpa_unregister_cooler(); */
 }
 

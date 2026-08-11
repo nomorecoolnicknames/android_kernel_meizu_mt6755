@@ -10,7 +10,6 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 * See http://www.gnu.org/licenses/gpl-2.0.html for more details.
 */
-
 #include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -19,7 +18,7 @@
 #include <linux/types.h>
 #include <linux/proc_fs.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include "mach/mt_thermal.h"
+#include "mach/mtk_thermal.h"
 #include "mt-plat/mtk_thermal_platform.h"
 #include <linux/slab.h>
 #include <linux/seq_file.h>
@@ -39,15 +38,16 @@ static int mtkts_ta_debug_log;
 #define tsta_dprintk(fmt, args...)   \
 	do {                                    \
 		if (mtkts_ta_debug_log) {                \
-			pr_debug("[Thermal_TA]" fmt, ##args); \
+			pr_debug("[Thermal/TC/TA]" fmt, ##args); \
 		}                                   \
 	} while (0)
 
-#define tsta_warn(fmt, args...)  pr_warn("[Thermal_TA]" fmt, ##args)
+#define tsta_warn(fmt, args...)  pr_warn("[Thermal/TC/TA]" fmt, ##args)
 
 /*=============================================================
  *Local variable definition
- *=============================================================*/
+ *=============================================================
+ */
 
 static struct sock *daemo_nl_sk;
 static void ta_nl_send_to_user(int pid, int seq, struct tad_nl_msg_t *reply_msg);
@@ -58,18 +58,16 @@ static int g_tad_ttj;
 
 /*=============================================================
  *Local function prototype
- *=============================================================*/
+ *=============================================================
+ */
 
 /*=============================================================
  *Weak functions
- *=============================================================*/
+ *=============================================================
+ */
 #define NETLINK_TAD 27
 /*=============================================================*/
 
-/*========================*/
-/* Global variables						*/
-/*========================*/
-struct SPA_T thermal_spa_t;
 
 
 
@@ -82,7 +80,8 @@ void atm_ctrl_cmd_from_user(void *nl_data, struct tad_nl_msg_t *ret_msg)
 	msg = nl_data;
 
 	/*tsta_dprintk("[atm_ctrl_cmd_from_user] tad_cmd = %d, tad_data_len = %d\n" ,
-	msg->tad_cmd , msg->tad_data_len);*/
+	*msg->tad_cmd , msg->tad_data_len);
+	*/
 
 	ret_msg->tad_cmd = msg->tad_cmd;
 
@@ -93,14 +92,14 @@ void atm_ctrl_cmd_from_user(void *nl_data, struct tad_nl_msg_t *ret_msg)
 			memcpy(ret_msg->tad_data, &thermal_atm_t, sizeof(thermal_atm_t));
 			ret_msg->tad_data_len += sizeof(thermal_atm_t);
 
-			tsta_dprintk("[atm_ctrl_cmd_from_user] ret_msg->tad_data_len %d\n" , ret_msg->tad_data_len);
+			tsta_dprintk("[atm_ctrl_cmd_from_user] ret_msg->tad_data_len %d\n", ret_msg->tad_data_len);
 		}
 		break;
 	case TA_DAEMON_CMD_GET_INIT_FLAG:
 		{
 			ret_msg->tad_data_len += sizeof(init_flag);
 			memcpy(ret_msg->tad_data, &init_flag, sizeof(init_flag));
-			tsta_dprintk("[atm_ctrl_cmd_from_user] init_flag = %d\n" , init_flag);
+			tsta_dprintk("[atm_ctrl_cmd_from_user] init_flag = %d\n", init_flag);
 		}
 		break;
 	case TA_DAEMON_CMD_GET_TPCB:
@@ -109,7 +108,7 @@ void atm_ctrl_cmd_from_user(void *nl_data, struct tad_nl_msg_t *ret_msg)
 
 			ret_msg->tad_data_len += sizeof(curr_tpcb);
 			memcpy(ret_msg->tad_data, &curr_tpcb, sizeof(curr_tpcb));
-			tsta_dprintk("[atm_ctrl_cmd_from_user] curr_tpcb = %d\n" , curr_tpcb);
+			tsta_dprintk("[atm_ctrl_cmd_from_user] curr_tpcb = %d\n", curr_tpcb);
 		}
 		break;
 
@@ -123,29 +122,6 @@ void atm_ctrl_cmd_from_user(void *nl_data, struct tad_nl_msg_t *ret_msg)
 		{
 			memcpy(&g_tad_ttj, &msg->tad_data[0], sizeof(g_tad_ttj));
 			tsta_dprintk("[atm_ctrl_cmd_from_user] g_tad_ttj = %d\n", g_tad_ttj);
-		}
-		break;
-	case TA_DAEMON_CMD_GET_TI:
-		{
-			/* --- SPA parameters --- */
-
-			thermal_spa_t.t_spa_system_info.cpu_Tj = 0;
-			thermal_spa_t.t_spa_system_info.Tpcb = 0;
-			thermal_spa_t.t_spa_system_info.OPP_power = 0;
-			thermal_spa_t.t_spa_system_info.fg_app_pid = 0;
-			thermal_spa_t.t_spa_system_info.avg_fps = 0;
-			thermal_spa_t.t_spa_system_info.WIFI_UL_Tput = 0;
-			thermal_spa_t.t_spa_system_info.MD_UL_Tput = 0;
-			thermal_spa_t.t_spa_system_info.chg_current_limit = 0;
-			thermal_spa_t.t_spa_system_info.input_current_limit = 0;
-			thermal_spa_t.t_spa_system_info.camera_on = 0;
-			thermal_spa_t.t_spa_system_info.game_mode = 0;
-
-
-			memcpy(ret_msg->tad_data, &thermal_spa_t, sizeof(thermal_spa_t));
-			ret_msg->tad_data_len += sizeof(thermal_spa_t);
-
-			tsta_dprintk("[atm_ctrl_cmd_from_user] ret_msg->tad_data_len %d\n", ret_msg->tad_data_len);
 		}
 		break;
 
@@ -216,13 +192,8 @@ static void ta_nl_data_handler(struct sk_buff *skb)
 	data = NLMSG_DATA(nlh);
 
 	tad_msg = (struct tad_nl_msg_t *)data;
-	if (tad_msg->tad_ret_data_len >= TAD_NL_MSG_MAX_LEN) {
-		tsta_warn("[ta_nl_data_handler] tad_msg->=ad_ret_data_len=%d\n", tad_msg->tad_ret_data_len);
-		return;
-	}
 
 	size = tad_msg->tad_ret_data_len + TAD_NL_MSG_T_HDR_LEN;
-
 
 	/*tad_ret_msg = (struct tad_nl_msg_t *)vmalloc(size);*/
 	tad_ret_msg = vmalloc(size);
@@ -243,7 +214,7 @@ static void ta_nl_data_handler(struct sk_buff *skb)
 
 int wakeup_ta_algo(int flow_state)
 {
-	tsta_dprintk("[wakeup_ta_algo]g_tad_pid=%d, state=%d\n" , g_tad_pid, flow_state);
+	tsta_dprintk("[wakeup_ta_algo]g_tad_pid=%d, state=%d\n", g_tad_pid, flow_state);
 
 	if (g_tad_pid != 0) {
 		struct tad_nl_msg_t *tad_msg;

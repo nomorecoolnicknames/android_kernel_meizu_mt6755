@@ -24,7 +24,7 @@
 #include <linux/kobject.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include "mt-plat/mtk_thermal_monitor.h"
 
 #define MAX_NUM_INSTANCE_MTK_COOLER_VRT  1
@@ -55,7 +55,7 @@ static ssize_t _cl_vrt_write(struct file *filp, const char __user *buf, size_t l
 
 	ret = kstrtouint(tmp, 10, &_cl_vrt);
 	if (ret)
-		WARN_ON(1);
+		WARN_ON_ONCE(1);
 
 	mtk_cooler_vrt_dprintk("%s %s = %d\n", __func__, tmp, _cl_vrt);
 
@@ -105,7 +105,7 @@ static int mtk_cl_vrt_set_cur_state(struct thermal_cooling_device *cdev, unsigne
 
 	*((unsigned long *)cdev->devdata) = state;
 
-	if (1 == state)
+	if (state == 1)
 		_cl_vrt = 1;
 	else
 		_cl_vrt = 0;
@@ -171,7 +171,7 @@ static int __init mtk_cooler_vrt_init(void)
 
 #if 0
 		entry = create_proc_entry("driver/cl_vrt", S_IRUGO | S_IWUSR, NULL);
-		if (NULL != entry) {
+		if (entry != NULL) {
 			entry->read_proc = _cl_vrt_read;
 			entry->write_proc = _cl_vrt_write;
 		}

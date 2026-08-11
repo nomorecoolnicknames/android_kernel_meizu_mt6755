@@ -111,7 +111,8 @@ static int mtk_cl_backlight_set_cur_state(struct thermal_cooling_device *cdev, u
 		g_backlight_last_level = g_backlight_level;
 
 		/* mtk_cooler_backlight_dprintk("mtk_cl_backlight_set_cur_state() event:%s g_backlight_level:%d\n",
-			 event, g_backlight_level); */
+		*	 event, g_backlight_level);
+		*/
 
 	}
 

@@ -33,7 +33,7 @@
 #include <linux/version.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/pid.h>
 #include <linux/signal.h>
 #include <linux/sched.h>
@@ -41,6 +41,15 @@
 
 #define MAX_LEN	256
 #endif
+
+/* [lidebiao start] */
+#include <linux/reboot.h>
+#include <linux/jiffies.h>
+#include <linux/timer.h>
+
+#define TIMER_DELAY 20
+unsigned int thermald_daemon_pid = 0;
+/* [lidebiao end] */
 
 #if 1
 #define mtk_cooler_shutdown_dprintk(fmt, args...) pr_debug("thermal/cooler/shutdown " fmt, ##args)
@@ -85,10 +94,10 @@ static ssize_t _mtk_cl_sd_rst_write(struct file *filp, const char __user *buf, s
 
 	ret = kstrtouint(tmp, 10, &mtk_cl_sd_rst);
 	if (ret)
-		WARN_ON(1);
+		WARN_ON_ONCE(1);
 
 
-	if (1 == mtk_cl_sd_rst) {
+	if (mtk_cl_sd_rst == 1) {
 		int i;
 
 		for (i = MAX_NUM_INSTANCE_MTK_COOLER_SHUTDOWN; i-- > 0;) {
@@ -136,12 +145,20 @@ static ssize_t _mtk_cl_sd_pid_write(struct file *filp, const char __user *buf, s
 
 	ret = kstrtouint(tmp, 10, &tm_input_pid);
 	if (ret)
-		WARN_ON(1);
+		WARN_ON_ONCE(1);
+
+	/* [lidebiao start] get thermal daemon pid */
+	thermald_daemon_pid = tm_input_pid;
+	/* [lidebiao end] */
 
 	mtk_cooler_shutdown_dprintk("%s %s = %d\n", __func__, tmp, tm_input_pid);
 
 	return len;
 }
+
+/* [lidebiao start] */
+EXPORT_SYMBOL(thermald_daemon_pid);
+/* [lidebiao end] */
 
 static int _mtk_cl_sd_pid_read(struct seq_file *m, void *v)
 {
@@ -264,6 +281,16 @@ static int mtk_cl_shutdown_get_cur_state(struct thermal_cooling_device *cdev, un
 	return 0;
 }
 
+/* [lidebiao start] add timer to force shutdown */
+static void shutdown_func(unsigned long val)
+{
+        pr_err("[shutdown] force shutdown!\n");
+        machine_power_off();
+}
+
+static DEFINE_TIMER(shutdown_timer, shutdown_func, 0, 0);
+/* [lidebiao end] */
+
 static int mtk_cl_shutdown_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state)
 {
 	struct sd_state *cl_state = (struct sd_state *) cdev->devdata;
@@ -280,10 +307,10 @@ static int mtk_cl_shutdown_set_cur_state(struct thermal_cooling_device *cdev, un
 
 	cl_state->state = state;
 
-	if (0 == state) {
+	if (state == 0) {
 		if (cl_state->sd_cnt > 0)
 			cl_state->sd_cnt--;
-	} else if (1 == state) {
+	} else if (state == 1) {
 		cl_state->sd_cnt++;
 	}
 
@@ -299,10 +326,14 @@ static int mtk_cl_shutdown_set_cur_state(struct thermal_cooling_device *cdev, un
 #endif
 
 #if defined(MTK_COOLER_SHUTDOWN_SIGNAL)
-		if (0 == sd_happened) {	/* make this an edge trigger instead of level trigger */
+		if (sd_happened == 0) {	/* make this an edge trigger instead of level trigger */
 			/* send signal to target process */
 			_mtk_cl_sd_send_signal();
 			sd_happened = 1;
+
+                       /* [lidebiao start] */
+                        mod_timer(&shutdown_timer, jiffies + TIMER_DELAY * HZ); //after 20s force shutdown
+                        /* [lidebiao end] */
 		}
 #endif
 	}

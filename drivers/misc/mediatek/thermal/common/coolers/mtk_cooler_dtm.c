@@ -20,27 +20,28 @@
 #include <linux/types.h>
 #include <linux/proc_fs.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include "mach/mt_thermal.h"
-#include <mach/mt_clkmgr.h>
-#include <mt_ptp.h>
+#include "mach/mtk_thermal.h"
+#include <mach/mtk_clkmgr.h>
+
 #include <mach/wd_api.h>
 #include <linux/slab.h>
 #include <linux/seq_file.h>
 #include <tscpu_settings.h>
 #include <ap_thermal_limit.h>
-#if 0
+
 #if defined(ATM_USES_PPM)
-#include "mach/mt_ppm_api.h"
+#include "mach/mtk_ppm_api.h"
 #else
-#include "mt_cpufreq.h"
+#include "mtk_cpufreq.h"
 #endif
-#endif
+
 
 /*=============================================================
  *Local variable definition
- *=============================================================*/
+ *=============================================================
+ */
 int tscpu_cpu_dmips[CPU_COOLER_NUM] = { 0 };
-int mtktscpu_limited_dmips = 0;	/* Use in mtk_thermal_platform.c */
+int mtktscpu_limited_dmips = 1;	/* Use in mtk_thermal_platform.c */
 static int previous_step = -1;
 static unsigned int *cl_dev_state;
 static int Num_of_OPP;
@@ -55,13 +56,15 @@ static char *ap_dtm_log = "ap_dtm";
 
 /*=============================================================
  *Local function prototype
- *=============================================================*/
+ *=============================================================
+ */
 static void set_static_cpu_power_limit(unsigned int limit);
 static void set_static_gpu_power_limit(unsigned int limit);
 
 /*=============================================================
  *Weak functions
- *=============================================================*/
+ *=============================================================
+ */
 #if 0
 #if defined(ATM_USES_PPM)
 void __attribute__ ((weak))
@@ -77,7 +80,8 @@ mt_cpufreq_thermal_protect(unsigned int limited_power)
 }
 #endif
 #endif
-/*=============================================================*/
+/*=============================================================
+*/
 static void set_static_cpu_power_limit(unsigned int limit)
 {
 	prv_stc_cpu_pwr_lim = static_cpu_power_limit;
@@ -120,7 +124,7 @@ static int tscpu_set_power_consumption_state(void)
 
 	/* in 92, Num_of_OPP=34 */
 	for (i = 0; i < Num_of_OPP; i++) {
-		if (1 == cl_dev_state[i]) {
+		if (cl_dev_state[i] == 1) {
 			if (i != previous_step) {
 				tscpu_printk("%s prev=%d curr=%d\n", __func__, previous_step, i);
 				previous_step = i;
@@ -265,10 +269,10 @@ static int __init mtk_cooler_dtm_init(void)
 						&mtktscpu_cooling_F0x2_ops);
 	}
 /*
-	if (err) {
-		tscpu_printk("tscpu_register_DVFS_hotplug_cooler fail\n");
-		return err;
-	}
+*	if (err) {
+*		tscpu_printk("tscpu_register_DVFS_hotplug_cooler fail\n");
+*		return err;
+*	}
 */
 	tscpu_dprintk("%s end\n", __func__);
 	return 0;

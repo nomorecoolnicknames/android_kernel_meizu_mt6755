@@ -19,19 +19,17 @@ ccflags-y  += -I$(srctree)/drivers/misc/mediatek/base/power/include/
 ccflags-y  += -I$(srctree)/drivers/misc/mediatek/video/include
 ccflags-y  += -I$(srctree)/drivers/misc/mediatek/gpu/ged/include
 ccflags-y  += -I$(srctree)/drivers/misc/mediatek/thermal/common/inc/
-ccflags-y  += -I$(srctree)/drivers/power/mediatek/
-ccflags-y  += -I$(srctree)/drivers/misc/mediatek/base/power/eem_v1/inc/
 
 ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "mt6735"))
-ifeq ($(CONFIG_MACH_MT6735),y)
+ifeq ($(CONFIG_ARCH_MT6735),y)
 ccflags-y  += -I$(THERMAL_CHIP_DRIVER_DIR)/inc/D1
 endif
 
-ifeq ($(CONFIG_MACH_MT6735M),y)
+ifeq ($(CONFIG_ARCH_MT6735M),y)
 ccflags-y  += -I$(THERMAL_CHIP_DRIVER_DIR)/inc/D2
 endif
 
-ifeq ($(CONFIG_MACH_MT6753),y)
+ifeq ($(CONFIG_ARCH_MT6753),y)
 ccflags-y  += -I$(THERMAL_CHIP_DRIVER_DIR)/inc/D3
 endif
 
@@ -52,7 +50,7 @@ obj-$(CONFIG_THERMAL) += mtk_cooler_dtm.o
 obj-$(CONFIG_THERMAL) += mtk_cooler_sysrst.o
 endif
 
-ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "mt6580" "mt6570"))
+ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "mt6580"))
 ifeq ($(CONFIG_MTK_THERMAL_PA_VIA_ATCMD),y)
     #obj-$(CONFIG_THERMAL) += mtk_cooler_amddulthro.o
     #obj-$(CONFIG_THERMAL) += mtk_cooler_amdtxctrl.o
@@ -81,11 +79,65 @@ ifeq ($(CONFIG_MTK_THERMAL_PA_VIA_ATCMD),y)
     #obj-$(CONFIG_THERMAL) += mtk_cooler_mdulthro.o
     obj-$(CONFIG_THERMAL) += mtk_cooler_mutt.o
 endif
+# The FPS cooler needs the Android switch class (linux/switch.h), which
+# 4.9 does not have
+ifeq ($(CONFIG_MACH_MT6755),)
 obj-$(CONFIG_THERMAL) += mtk_cooler_fps.o
+endif
 obj-$(CONFIG_THERMAL) += mtk_cooler_bcct.o
 obj-$(CONFIG_THERMAL) += mtk_cooler_atm.o
 obj-$(CONFIG_THERMAL) += mtk_cooler_dtm.o
 obj-$(CONFIG_THERMAL) += mtk_cooler_sysrst.o
 endif
 
+ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "elbrus"))
+ifeq ($(CONFIG_MTK_THERMAL_PA_VIA_ATCMD),y)
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_amddulthro.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_amdtxctrl.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_amutt.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_mddtxpwr.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_mddulthro.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_mdtxpwr.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_mdulthro.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_mutt.o
+endif
+#obj-$(CONFIG_THERMAL) += mtk_cooler_fps.o
+#obj-$(CONFIG_THERMAL) += mtk_cooler_bcct.o
+obj-$(CONFIG_THERMAL) += mtk_cooler_atm.o
+obj-$(CONFIG_THERMAL) += mtk_cooler_dtm.o
+obj-$(CONFIG_THERMAL) += mtk_cooler_sysrst.o
+endif
+
 obj-$(CONFIG_THERMAL) += mtk_ta.o
+
+
+
+
+ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "mt6757" "kiboplus"))
+ifeq ($(CONFIG_MTK_THERMAL_PA_VIA_ATCMD),y)
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_amddulthro.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_amdtxctrl.o
+    obj-$(CONFIG_THERMAL) += mtk_cooler_amutt.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_mddtxpwr.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_mddulthro.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_mdtxpwr.o
+    #obj-$(CONFIG_THERMAL) += mtk_cooler_mdulthro.o
+    obj-$(CONFIG_THERMAL) += mtk_cooler_mutt.o
+endif
+    obj-$(CONFIG_THERMAL) += mtk_cooler_fps.o
+
+ifeq ($(CONFIG_MTK_PUMP_EXPRESS_PLUS_30_SUPPORT),y)
+	obj-$(CONFIG_THERMAL) += mtk_cooler_bcct_v1.o
+else
+	ifeq ($(CONFIG_MTK_GAUGE_VERSION),30)
+		obj-$(CONFIG_THERMAL) += mtk_cooler_bcct_v1.o
+	else
+		obj-$(CONFIG_THERMAL) += mtk_cooler_bcct.o
+	endif
+endif
+
+obj-$(CONFIG_THERMAL) += mtk_cooler_atm.o
+obj-$(CONFIG_THERMAL) += mtk_cooler_dtm.o
+obj-$(CONFIG_THERMAL) += mtk_cooler_sysrst.o
+endif
+

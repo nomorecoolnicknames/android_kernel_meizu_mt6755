@@ -16,19 +16,19 @@
 #include <linux/types.h>
 #include <linux/kobject.h>
 #include <linux/proc_fs.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/err.h>
 #include <linux/syscalls.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include <mt_cl_amddulthro.h>
+#include <mtk_cl_amddulthro.h>
 
 #define mtk_cooler_mddulthro_dprintk_always(fmt, args...) \
-pr_debug("thermal/cooler/mddulthro" fmt, ##args)
+pr_debug("[Thermal/TC/mddulthro]" fmt, ##args)
 
 #define mtk_cooler_mddulthro_dprintk(fmt, args...) \
 do { \
-	if (1 == cl_mddulthro_klog_on) \
-		pr_debug("thermal/cooler/mddulthro" fmt, ##args); \
+	if (cl_mddulthro_klog_on == 1) \
+		pr_debug("[Thermal/TC/mddulthro]" fmt, ##args); \
 } while (0)
 
 #define MAX_NUM_INSTANCE_MTK_COOLER_MDDULTHRO  3
@@ -44,7 +44,7 @@ do { \
 
 #define MTK_CL_MDDULTHRO_SET_CURR_STATE(curr_state, state) \
 do { \
-	if (0 == curr_state) \
+	if (curr_state == 0) \
 		state &= ~0x1; \
 	else \
 		state |= 0x1; \
@@ -66,7 +66,7 @@ static void mtk_cl_mddulthro_set_mddulthro_limit(void)
 		unsigned long curr_state;
 
 		MTK_CL_MDDULTHRO_GET_CURR_STATE(curr_state, cl_mddulthro_state[i]);
-		if (1 == curr_state) {
+		if (curr_state == 1) {
 			int limit;
 
 			MTK_CL_MDDULTHRO_GET_LIMIT(limit, cl_mddulthro_state[i]);
@@ -78,17 +78,16 @@ static void mtk_cl_mddulthro_set_mddulthro_limit(void)
 	if (min_limit != cl_mddulthro_cur_limit) {
 		cl_mddulthro_cur_limit = min_limit;
 #if 1
-		if (0 >= cl_mddulthro_cur_limit) {
+		if (cl_mddulthro_cur_limit <= 0) {
 			int ret = amddulthro_backoff(0);
 
-			mtk_cooler_mddulthro_dprintk_always
-			    ("mtk_cl_mddulthro_set_mddulthro_limit() ret %d limit=0\n", ret);
+			mtk_cooler_mddulthro_dprintk_always("mtk_cl_mddulthro_set_mddulthro_limit() ret %d limit=0\n",
+				ret);
 		} else {
 			int ret = amddulthro_backoff(cl_mddulthro_cur_limit);
 
-			mtk_cooler_mddulthro_dprintk_always
-			    ("mtk_cl_mddulthro_set_mddulthro_limit() ret %d limit=%d\n",
-			     cl_mddulthro_cur_limit);
+			mtk_cooler_mddulthro_dprintk_always("mtk_cl_mddulthro_set_mddulthro_limit() ret %d limit=%d\n",
+				cl_mddulthro_cur_limit);
 		}
 #endif
 	}
@@ -173,7 +172,7 @@ static int _mtk_cl_mddulthro_proc_read(char *buf, char **start, off_t off, int c
      *  <mtk-cl-mddulthro<ID>> <bcc limit>
      *  ..
      */
-	if (NULL == data) {
+	if (data == NULL) {
 		mtk_cooler_mddulthro_dprintk("[_mtk_cl_mddulthro_proc_read] null data\n");
 	} else {
 		int i = 0;
@@ -223,7 +222,7 @@ static ssize_t _mtk_cl_mddulthro_proc_write(struct file *file, const char *buffe
      * <mtk-cl-mddulthro00 limit> can only be positive integer or -1 to denote no limit
      */
 
-	if (NULL == data) {
+	if (data == NULL) {
 		mtk_cooler_mddulthro_dprintk("[_mtk_cl_mddulthro_proc_write] null data\n");
 		return -EINVAL;
 	}
@@ -233,7 +232,7 @@ static ssize_t _mtk_cl_mddulthro_proc_write(struct file *file, const char *buffe
 	MTK_CL_MDDULTHRO_SET_LIMIT(-1, cl_mddulthro_state[1]);
 	MTK_CL_MDDULTHRO_SET_LIMIT(-1, cl_mddulthro_state[2]);
 
-	if (1 <= sscanf(desc, "%d %d %d %d", &klog_on, &limit0, &limit1, &limit2)) {
+	if (sscanf(desc, "%d %d %d %d", &klog_on, &limit0, &limit1, &limit2) >= 1) {
 		if (klog_on == 0 || klog_on == 1)
 			cl_mddulthro_klog_on = klog_on;
 
@@ -278,7 +277,7 @@ static int __init mtk_cooler_mddulthro_init(void)
 		entry =
 		    create_proc_entry("driver/mtk-cl-mddulthro", S_IRUGO | S_IWUSR | S_IWGRP, NULL);
 
-		if (NULL != entry) {
+		if (entry != NULL) {
 			entry->read_proc = _mtk_cl_mddulthro_proc_read;
 			entry->write_proc = _mtk_cl_mddulthro_proc_write;
 			entry->data = cl_mddulthro_state;

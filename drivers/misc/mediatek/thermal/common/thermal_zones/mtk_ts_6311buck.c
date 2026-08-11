@@ -24,12 +24,14 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include "mach/mt_thermal.h"
+#include "mach/mtk_thermal.h"
 #include <mt-plat/upmu_common.h>
 #include <mach/upmu_hw.h>
-#include <mach/mt_pmic_wrap.h>
+#include <mach/mtk_pmic_wrap.h>
 #include <mt6311.h>
-#include "mt_cpufreq.h"
+
+
+
 #include <tmp_6311buck.h>
 #include <linux/uidgid.h>
 #include <linux/slab.h>
@@ -76,7 +78,7 @@ static char g_bind9[20] = "";
 #define mtkts6331_dprintk(fmt, args...)   \
 do {									\
 	if (mtkts6311_debug_log) {				\
-		pr_debug("[Thermal/PMIC_6311]" fmt, ##args); \
+		pr_debug("[Thermal/TZ/PMIC6311]" fmt, ##args); \
 	}								   \
 } while (0)
 
@@ -90,11 +92,11 @@ typedef struct {
 #define mtkts6311_dprintk(fmt, args...)   \
 do {									\
 	if (mtkts6311_debug_log) {				\
-		pr_debug("[Power/6311_Thermal]" fmt, ##args); \
+		pr_debug("[Thermal/TZ/PMIC6311]" fmt, ##args); \
 	}								   \
 } while (0)
 
-static int mtkts6311_get_temp(struct thermal_zone_device *thermal, unsigned long *t)
+static int mtkts6311_get_temp(struct thermal_zone_device *thermal, int *t)
 {
 	mtkts6311_dprintk("[mtkts6311_get_temp]\n");
 
@@ -147,7 +149,7 @@ static int mtkts6311_get_temp(struct thermal_zone_device *thermal, unsigned long
 		}
 
 	}
-	mtkts6331_dprintk("6311 pmic temp =%lu\n", *t);
+	mtkts6331_dprintk("6311 pmic temp = %u\n", *t);
 	return 0;
 }
 
@@ -244,13 +246,13 @@ static int mtkts6311_get_trip_type(struct thermal_zone_device *thermal, int trip
 }
 
 static int mtkts6311_get_trip_temp(struct thermal_zone_device *thermal, int trip,
-				   unsigned long *temp)
+				   int *temp)
 {
 	*temp = trip_temp[trip];
 	return 0;
 }
 
-static int mtkts6311_get_crit_temp(struct thermal_zone_device *thermal, unsigned long *temperature)
+static int mtkts6311_get_crit_temp(struct thermal_zone_device *thermal, int *temperature)
 {
 	*temperature = mtkts6311_TEMP_CRIT;
 	return 0;
@@ -269,40 +271,6 @@ static struct thermal_zone_device_ops mtkts6311_dev_ops = {
 };
 
 #if 1
-/*
-static int mtkts6311_get_max_state(struct thermal_cooling_device *cdev,
-				unsigned long *state)
-{
-	mtkts6311_dprintk("[mtkts6311_get_max_state]\n");
-	*state = 1;
-	return 0;
-}
-
-static int mtkts6311_get_cur_state(struct thermal_cooling_device *cdev,
-				unsigned long *state)
-{
-	mtkts6311_dprintk("[mtkts6311_get_cur_state]\n");
-    *state = "cpu01";
-
-	return 0;
-}
-
-static int mtkts6311_set_cur_state(struct thermal_cooling_device *cdev,
-				unsigned long state)
-{
-	mtkts6311_dprintk("[mtkts6311_set_cur_state]\n");
-	mt_cpufreq_thermal_protect(700);
-
-	return 0;
-
-}
-
-static struct thermal_cooling_device_ops mtktscpu_cooler_cpu_ops = {
-	.get_max_state = mtkts6311_get_max_state,
-	.get_cur_state = mtkts6311_get_cur_state,
-	.set_cur_state = mtkts6311_set_cur_state,
-};
-*/
 
 
 static int ts6311_sysrst_get_max_state(struct thermal_cooling_device *cdev, unsigned long *state)
@@ -319,6 +287,11 @@ static int ts6311_sysrst_get_cur_state(struct thermal_cooling_device *cdev, unsi
 	return 0;
 }
 
+/* [lidebiao start] */
+static int ts6311_sysrst_happened = 0;
+extern int send_sysrst_signal(unsigned int type);
+/* [lidebiao end] */
+
 static int ts6311_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state)
 {
 	mtkts6311_dprintk("ts6311_sysrst_set_cur_state = %d\n", cl_dev_sysrst_state);
@@ -329,11 +302,14 @@ static int ts6311_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsi
 		pr_debug("*****************************************");
 		pr_debug("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
 
-#ifndef CONFIG_ARM64
-		BUG();
-#else
-		*(unsigned int *)0x0 = 0xdead;	/* To trigger data abort to reset the system for thermal protection. */
-#endif
+
+		/* [lidebiao start] */
+		if (0 == ts6311_sysrst_happened) {
+			send_sysrst_signal(0);
+			ts6311_sysrst_happened = 1;
+		}
+		//*(unsigned int *)0x0 = 0xdead; /* To trigger data abort to reset the system for thermal protection. */
+		/* [lidebiao end] */
 	}
 	return 0;
 }
@@ -350,8 +326,8 @@ int mtkts6311_register_cooler(void)
 	cl_dev_sysrst = mtk_thermal_cooling_device_register("mtkts6311-sysrst", NULL,
 							    &mtkts6311_cooling_sysrst_ops);
 /*
-    cl_dev_6311 = mtk_thermal_cooling_device_register("cpu01", NULL,
-					&mtktscpu_cooler_cpu_ops);
+*    cl_dev_6311 = mtk_thermal_cooling_device_register("cpu01", NULL,
+*					&mtktscpu_cooler_cpu_ops);
 */
 	return 0;
 }
@@ -428,8 +404,10 @@ static ssize_t mtkts6311_write(struct file *file, const char __user *buffer, siz
 		mtkts6311_unregister_thermal();
 
 		if (num_trip < 0 || num_trip > 10) {
+			#ifdef CONFIG_MTK_AEE_FEATURE
 			aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtkts6311_write",
 					"Bad argument");
+			#endif
 			mtkts6311_dprintk("[mtkts6311_write] bad argument\n");
 			kfree(ptr_mtkts6311_data);
 			up(&sem_mutex);

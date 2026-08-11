@@ -24,14 +24,14 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include "mach/mt_thermal.h"
+#include "mach/mtk_thermal.h"
 /* #include <mach/pmic_mt6329_hw_bank1.h> */
 /* #include <mach/pmic_mt6329_sw_bank1.h> */
 /* #include <mach/pmic_mt6329_hw.h> */
 /* #include <mach/pmic_mt6329_sw.h> */
 #include <mt-plat/upmu_common.h>
 #include <mach/upmu_hw.h>
-#include <mach/mt_pmic_wrap.h>
+#include <mach/mtk_pmic_wrap.h>
 /* 2015.5.20 Jerry FIX_ME #include <mach/pmic_mt6331_6332_sw.h> */
 #include <mach/pmic_mt6325_sw.h>
 #include <linux/uidgid.h>
@@ -78,7 +78,7 @@ static int polling_factor2 = 10000;
 #define tsbuck_dprintk(fmt, args...)   \
 do {									\
 	if (tsbuck_debug_log) {				\
-		pr_debug("Power/PMIC_Thermal", fmt, ##args); \
+		pr_debug("[Thermal/TZ/BUCK]", fmt, ##args); \
 	}								   \
 } while (0)
 
@@ -110,12 +110,12 @@ void tsbuck_read_6332_efuse(void)
 	/* 2. */
 	ret = pmic_config_interface(0x8C6C, 0x1, 0x1, 0);
 /*
-    //dump
-    tsbuck_dprintk("Reg[0x%x]=0x%x,Reg[0x%x]=0x%x,Reg[0x%x]=0x%x\n",
-	0x80B2,upmu_get_reg_value(0x80B2),
-	0x80A0,upmu_get_reg_value(0x80A0),
-	0x8C6C,upmu_get_reg_value(0x8C6C)
-	);
+*    //dump
+*    tsbuck_dprintk("Reg[0x%x]=0x%x,Reg[0x%x]=0x%x,Reg[0x%x]=0x%x\n",
+*	0x80B2,upmu_get_reg_value(0x80B2),
+*	0x80A0,upmu_get_reg_value(0x80A0),
+*	0x8C6C,upmu_get_reg_value(0x8C6C)
+*	);
 */
 /* for(i=0;i<=0x1F;i++) */
 	for (i = 0x10; i <= 0x11; i++) {
@@ -144,12 +144,12 @@ void tsbuck_read_6332_efuse(void)
 		efusevalue[j] = upmu_get_reg_value(0x8C6E);
 		pr_debug("6332_efuse : efusevalue[%d]=0x%x\n", j, efusevalue[j]);
 /*
-	tsbuck_dprintk("i=0x%x,Reg[0x%x]=0x%x,Reg[0x%x]=0x%x,Reg[0x%x]=0x%x\n",
-	    i,
-	    0x8C56,upmu_get_reg_value(0x8C56),
-	    0x8C70,upmu_get_reg_value(0x8C70),
-	    0x8C6E,upmu_get_reg_value(0x8C6E)
-	    );
+*	tsbuck_dprintk("i=0x%x,Reg[0x%x]=0x%x,Reg[0x%x]=0x%x,Reg[0x%x]=0x%x\n",
+*	    i,
+*	    0x8C56,upmu_get_reg_value(0x8C56),
+*	    0x8C70,upmu_get_reg_value(0x8C70),
+*	    0x8C6E,upmu_get_reg_value(0x8C6E)
+*	    );
 */
 		j++;
 	}
@@ -158,10 +158,10 @@ void tsbuck_read_6332_efuse(void)
 	ret = pmic_config_interface(0x80A2, 0x0004, 0xFFFF, 0);
 	ret = pmic_config_interface(0x80B4, 0x0010, 0xFFFF, 0);	/* new add */
 /*
-    //dump
-    tsbuck_dprintk("Reg[0x%x]=0x%x\n",
-	0x80A0,upmu_get_reg_value(0x80A0)
-	);
+*    //dump
+*    tsbuck_dprintk("Reg[0x%x]=0x%x\n",
+*	0x80A0,upmu_get_reg_value(0x80A0)
+*	);
 */
 
 	g_adc_cali_en = (efusevalue[0]) & 0x1;
@@ -456,6 +456,11 @@ static int tspmic_sysrst_get_cur_state(struct thermal_cooling_device *cdev, unsi
 	return 0;
 }
 
+/* [lidebiao start] */
+static tspmic_sysrst_happened  = 0;
+extern int send_sysrst_signal(unsigned int type);
+/* [lidebiao end] */
+
 static int tspmic_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state)
 {
 	cl_dev_sysrst_state = state;
@@ -466,7 +471,13 @@ static int tspmic_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsi
 		pr_debug("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
 
 		/* arch_reset(0,NULL); */
-		BUG();
+		/* [lidebiao start] */
+		if (0 == tspmic_sysrst_happened) {
+			send_sysrst_signal(0);
+			tspmic_sysrst_happened = 1;
+		}
+		//*(unsigned int *)0x0 = 0xdead;	/* To trigger data abort to reset the system for thermal protection. */
+		/* [lidebiao end] */
 	}
 	return 0;
 }

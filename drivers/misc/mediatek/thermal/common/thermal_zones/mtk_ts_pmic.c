@@ -24,7 +24,8 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include "mt-plat/mtk_thermal_monitor.h"
-#include "mach/mt_thermal.h"
+#include "mach/mtk_thermal.h"
+#include "mtk_thermal_timer.h"
 #include <mt-plat/upmu_common.h>
 #include <tspmic_settings.h>
 #include <linux/uidgid.h>
@@ -32,7 +33,9 @@
 
 /*=============================================================
  *Local variable definition
- *=============================================================*/
+ *=============================================================
+ */
+
 static kuid_t uid = KUIDT_INIT(0);
 static kgid_t gid = KGIDT_INIT(1000);
 static DEFINE_SEMAPHORE(sem_mutex);
@@ -241,6 +244,11 @@ static int tspmic_sysrst_get_cur_state(struct thermal_cooling_device *cdev, unsi
 	return 0;
 }
 
+/* [lidebiao start] */
+static int pmic_sysrst_happened = 0;
+extern int send_sysrst_signal(unsigned int type);
+/* [lidebiao end] */
+
 static int tspmic_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state)
 {
 	cl_dev_sysrst_state = state;
@@ -250,10 +258,13 @@ static int tspmic_sysrst_set_cur_state(struct thermal_cooling_device *cdev, unsi
 		mtktspmic_info("*****************************************");
 		mtktspmic_info("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
 
-		/* To trigger data abort to reset the system
-		 * for thermal protection.
-		 */
-		BUG();
+		/* [lidebiao start] */
+		if (0 == pmic_sysrst_happened) {
+			send_sysrst_signal(0);
+			pmic_sysrst_happened = 1;
+		}
+		//*(unsigned int *)0x0 = 0xdead;	/* To trigger data abort to reset the system for thermal protection. */
+		/* [lidebiao end] */
 
 	}
 	return 0;
@@ -339,8 +350,10 @@ static ssize_t mtktspmic_write(struct file *file, const char __user *buffer, siz
 		mtktspmic_unregister_thermal();
 
 		if (num_trip < 0 || num_trip > 10) {
+			#ifdef CONFIG_MTK_AEE_FEATURE
 			aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtktspmic_write",
 					"Bad argument");
+			#endif
 			mtktspmic_dprintk("[mtktspmic_write] bad argument\n");
 			kfree(ptr_mtktspmic_data);
 			up(&sem_mutex);
@@ -397,13 +410,15 @@ static ssize_t mtktspmic_write(struct file *file, const char __user *buffer, siz
 	}
 
 	mtktspmic_dprintk("[mtktspmic_write] bad argument\n");
+    #ifdef CONFIG_MTK_AEE_FEATURE
 	aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtktspmic_write",
 			"Bad argument");
+    #endif
 	kfree(ptr_mtktspmic_data);
 	return -EINVAL;
 }
 
-void mtkts_pmic_cancel_thermal_timer(void)
+static void mtkts_pmic_cancel_thermal_timer(void)
 {
 	/* cancel timer */
 	/* pr_debug("mtkts_pmic_cancel_thermal_timer\n"); */
@@ -421,7 +436,7 @@ void mtkts_pmic_cancel_thermal_timer(void)
 }
 
 
-void mtkts_pmic_start_thermal_timer(void)
+static void mtkts_pmic_start_thermal_timer(void)
 {
 	/* pr_debug("mtkts_pmic_start_thermal_timer\n"); */
 	/* resume thermal framework polling when leaving deep idle */
@@ -434,7 +449,8 @@ void mtkts_pmic_start_thermal_timer(void)
 		return;
 
 	if (thz_dev != NULL && interval != 0)
-		mod_delayed_work(system_freezable_wq, &(thz_dev->poll_queue), round_jiffies(msecs_to_jiffies(1000)));
+		mod_delayed_work(system_freezable_wq, &(thz_dev->poll_queue),
+			round_jiffies(msecs_to_jiffies(1000)));
 
 	up(&sem_mutex);
 }
@@ -600,20 +616,27 @@ static int __init mtktspmic_init(void)
 
 	struct proc_dir_entry *entry = NULL;
 	struct proc_dir_entry *mtktspmic_dir = NULL;
+	(void)entry; (void)mtktspmic_dir;
+
+	/* Keep this zone skipped: tspmic would read PMIC AUXADC cali/temps over
+	 * pwrap using mt6757 MT6353-labeled registers on MT6351 silicon and feed
+	 * garbage temperatures into the trip logic. */
+	{ extern void forge_m681_mark(unsigned char); forge_m681_mark(0xE8); }
+	return 0;
 
 	mtktspmic_info("[mtktspmic_init]\n");
 
 /*
-	bit4	RG_VBUF_EN	1: turn on Vbuf.
-						0: turn off Vbuf.
-	bit2	RG_VBUF_BYP	1: Bypass Vbuf.
-						0: turn on Vbuf.
-
-	RG_VBUF_EN = 1 / RG_VBUF_BYP = 0
-
-	pmic_data = ts_pmic_read(0x0E9E);
-    if((pmic_data>>4&0x1)!=1 || (pmic_data>>2&0x1)!=0)
-	mtktspmic_info("[mtktspmic_init]: Warrning !!! Need to checking this !!!!!\n");
+*	bit4	RG_VBUF_EN	1: turn on Vbuf.
+*						0: turn off Vbuf.
+*	bit2	RG_VBUF_BYP	1: Bypass Vbuf.
+*						0: turn on Vbuf.
+*
+*	RG_VBUF_EN = 1 / RG_VBUF_BYP = 0
+*
+*	pmic_data = ts_pmic_read(0x0E9E);
+*    if((pmic_data>>4&0x1)!=1 || (pmic_data>>2&0x1)!=0)
+*	mtktspmic_info("[mtktspmic_init]: Warrning !!! Need to checking this !!!!!\n");
 */
 	mtktspmic_cali_prepare();
 	mtktspmic_cali_prepare2();
@@ -643,6 +666,8 @@ static int __init mtktspmic_init(void)
 				&mtktspmic_ate_fops);
 	}
 
+	mtkTTimer_register("mtktspmic", mtkts_pmic_start_thermal_timer, mtkts_pmic_cancel_thermal_timer);
+
 	return 0;
 
 err_unreg:
@@ -655,6 +680,7 @@ static void __exit mtktspmic_exit(void)
 	mtktspmic_info("[mtktspmic_exit]\n");
 	mtktspmic_unregister_thermal();
 	mtktspmic_unregister_cooler();
+	mtkTTimer_unregister("mtktspmic");
 }
 module_init(mtktspmic_init);
 module_exit(mtktspmic_exit);
