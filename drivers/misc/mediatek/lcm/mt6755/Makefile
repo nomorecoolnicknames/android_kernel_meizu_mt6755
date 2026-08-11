@@ -1,0 +1,34 @@
+#
+# Copyright (C) 2015 MediaTek Inc.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 2 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# MT6755: LCM objects, built from the mt6755 copies in this directory.
+
+obj-$(CONFIG_MTK_LCM) += mt65xx_lcm_list.o        \
+                         lcm_common.o             \
+                         lcm_gpio.o               \
+                         lcm_i2c.o                \
+                         lcm_pmic.o               \
+                         lcm_util.o
+
+LCM_LISTS := $(subst ",,$(CONFIG_CUSTOM_KERNEL_LCM))
+obj-$(CONFIG_MTK_LCM) += $(foreach LCM,$(LCM_LISTS),$(LCM)/)
+
+subdir-ccflags-$(CONFIG_MTK_LCM) += -I$(srctree)/drivers/misc/mediatek/lcm/mt6755/inc
+subdir-ccflags-$(CONFIG_MTK_FB) += -I$(srctree)/drivers/misc/mediatek/video/mt6755/dispsys \
+                                   -I$(srctree)/drivers/misc/mediatek/video/mt6755/videox \
+                                   -I$(srctree)/drivers/misc/mediatek/video/mt6755/include
+
+LCM_DEFINES := $(shell echo $(CONFIG_CUSTOM_KERNEL_LCM) | tr a-z A-Z)
+DEFINES += $(foreach LCM,$(LCM_DEFINES),$(LCM))
+DEFINES += MTK_LCM_PHYSICAL_ROTATION=\"$(MTK_LCM_PHYSICAL_ROTATION)\"
+ccflags-$(CONFIG_MTK_LCM) += $(addprefix -D, $(DEFINES))
+ccflags-$(CONFIG_MTK_LCM_DEVICE_TREE_SUPPORT) += -DMTK_LCM_DEVICE_TREE_SUPPORT
