@@ -1,7 +1,10 @@
 config MTK_SMI_EXT
 	bool "MTK SMI Common Driver Code"
-	select MEMORY
-	select MTK_SMI
+	# m681 (MT6755): the SMI_J driver in smi/mt6755 owns the
+	# "mediatek,smi_common" node; drivers/memory/mtk-smi.c matches the
+	# same compatible, so it stays out on MT6755 (as on the m681 4.4 tree).
+	select MEMORY if !MACH_MT6755
+	select MTK_SMI if !MACH_MT6755
 	help
 	  This config enable/disable SMI Driver.
 	  SMI Driver is used to arbitrate memory bandwidth of multimedia.

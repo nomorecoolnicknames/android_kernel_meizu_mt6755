@@ -56,6 +56,47 @@ enum mmp_pixel_format {
 	MMPROFILE_BITMAP_MAX = 0xFFFFFFFF
 };
 
+/* Legacy MMProfile* compat layer: the mt6755 vendor code (m4u etc.) calls
+ * the old-cased API names. Maps them onto this header's lowercase enums +
+ * mmprofile_function.h decls. */
+#define MMProfileFlagStart          MMPROFILE_FLAG_START
+#define MMProfileFlagEnd            MMPROFILE_FLAG_END
+#define MMProfileFlagPulse          MMPROFILE_FLAG_PULSE
+#define MMProfileFlagEventSeparator MMPROFILE_FLAG_EVENT_SEPARATOR
+#define MMProfileFlagSystrace       MMPROFILE_FLAG_SYSTRACE
+#define MMProfileFlagMax            MMPROFILE_FLAG_MAX
+#define MMP_LogType                 enum mmp_log_type
+
+#define MMProfileMetaStringMBS  MMPROFILE_META_STRING_MBS
+#define MMProfileMetaStringWCS  MMPROFILE_META_STRING_WCS
+#define MMProfileMetaStructure  MMPROFILE_META_STRUCTURE
+#define MMProfileMetaBitmap     MMPROFILE_META_BITMAP
+#define MMProfileMetaRaw        MMPROFILE_META_RAW
+#define MMProfileMetaUser       MMPROFILE_META_USER
+#define MMProfileMetaUserM4UReg MMPROFILE_META_USER_M4U_REG
+#define MMProfileMetaMax        MMPROFILE_META_MAX
+#define MMP_MetaDataType        enum mmp_metadata_type
+
+#define MMProfileRegisterEvent(parent, name) mmprofile_register_event(parent, name)
+#define MMProfileFindEvent(parent, name) mmprofile_find_event(parent, name)
+#define MMProfileEnableEvent(event, enable) mmprofile_enable_event(event, enable)
+#define MMProfileEnableFTraceEvent(event, enable, ftrace) mmprofile_enable_ftrace_event(event, enable, ftrace)
+#define MMProfileEnableEventRecursive(event, enable) mmprofile_enable_event_recursive(event, enable)
+#define MMProfileEnableFTraceEventRecursive(event, enable, ftrace) \
+	mmprofile_enable_ftrace_event_recursive(event, enable, ftrace)
+#define MMProfileQueryEnable(event) mmprofile_query_enable(event)
+#define MMProfileLog(event, type) mmprofile_log(event, type)
+#define MMProfileLogEx(event, type, data1, data2) mmprofile_log_ex(event, type, data1, data2)
+#define MMProfileLogMeta(event, type, pMetaData) mmprofile_log_meta(event, type, pMetaData)
+#define MMProfileLogMetaString(event, type, str) mmprofile_log_meta_string(event, type, str)
+#define MMProfileLogMetaStringEx(event, type, data1, data2, str) \
+	mmprofile_log_meta_string_ex(event, type, data1, data2, str)
+#define MMProfileLogMetaStructure(event, type, pMetaData) mmprofile_log_meta_structure(event, type, pMetaData)
+#define MMProfileLogMetaBitmap(event, type, pMetaData) mmprofile_log_meta_bitmap(event, type, pMetaData)
+#define MMProfileStart(start) mmprofile_start(start)
+#define MMProfileEnable(enable) mmprofile_enable(enable)
+#define MMP_RootEvent               MMP_ROOT_EVENT
+
 struct mmp_metadata_t {
 	unsigned int data1;         /* data1 (user defined) */
 	unsigned int data2;         /* data2 (user defined) */
