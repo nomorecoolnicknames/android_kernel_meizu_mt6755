@@ -79,6 +79,19 @@ config TOUCHSCREEN_MTK_GT9XXTB_HN_NEW
 
 source "drivers/input/touchscreen/mediatek/gt9xxtb_hn_new/Kconfig"
 
+config TOUCHSCREEN_MTK_GT9XXTB_HOTKNOT
+	bool "GT9XXTB hotknot for Mediatek package (m5c proven 3.18 port)"
+	default n
+	help
+	  The Goodix GT9xx hotknot driver ported from the hardware-proven
+	  3.18 m5c tree (GT917D at 1-005d, stock-verified orientation and
+	  factory-config policy: CONFIG_GTP_DRIVER_SEND_CFG=n, header FW
+	  update off).
+
+	  If unsure, say N.
+
+source "drivers/input/touchscreen/mediatek/GT9XXTB_hotknot/Kconfig"
+
 config TOUCHSCREEN_MTK_NT36xxx
 	bool "NT36xxx for Mediatek package"
 	default n
@@ -91,6 +104,17 @@ config TOUCHSCREEN_MTK_NT36xxx
 	  module will be called.
 
 source "drivers/input/touchscreen/mediatek/NT36xxx/Kconfig"
+
+config TOUCHSCREEN_MTK_GT9XX_MZ
+	bool "GT9XX_MZ (Meizu m681 Goodix GT9xx) for Mediatek package"
+	depends on I2C && MTK_GPIO
+	help
+	  Stock Meizu m681 Goodix GT9xx touch driver (GT917D/GT915L),
+	  ported from the device-proven m681 4.4 tree (touch #147). Binds
+	  the DTS i2c0 cap_touch@5d node via "mediatek,cap_touch"; the
+	  mtk-tpd framework binds /soc/touch ("mediatek,mt6755-touch").
+
+	  If unsure, say N.
 
 
 endif

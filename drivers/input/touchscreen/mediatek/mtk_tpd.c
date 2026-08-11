@@ -50,7 +50,14 @@ struct pinctrl_state *pins_default;
 struct pinctrl_state *eint_as_int, *eint_output0,
 		*eint_output1, *rst_output0, *rst_output1;
 const struct of_device_id touch_of_match[] = {
-	{ .compatible = "mediatek,touch", },
+	/* Stock DTB touch node is "mediatek,mt6735-touch" (fallback
+	 * "mediatek,mt6735m-touch").
+	 */
+	{ .compatible = "mediatek,mt6735-touch", },
+	/* /soc/touch in mt6755.dtsi; GT9XX_MZ takes its EINT and
+	 * tpd_get_dts_info() its data from this node.
+	 */
+	{ .compatible = "mediatek,mt6755-touch", },
 	{},
 };
 
