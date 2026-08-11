@@ -1,0 +1,664 @@
+
+/dts-v1/;
+
+#include "mt6755.dtsi"
+#include <wt6755_66_sz_l/cust.dtsi>
+
+/ {
+	model = "Meizu M3 Note M681";
+	compatible = "meizu,m681", "mediatek,mt6755";
+
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0 0x40000000 0 0x3e800000>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		reserve-memory-ccci_md3_ccif {
+			compatible = "mediatek,reserve-memory-ccci_md3_ccif";
+			no-map;
+			size = <0 0x00c00000>;
+			alignment = <0 0x2000000>;
+			alloc-ranges = <0 0x40000000 0 0xc0000000>;
+		};
+	};
+
+	/* chosen */
+	chosen {
+		bootargs = "console=tty0 console=ttyMT0,921600n1 root=/dev/ram initrd=0x44000000,0x4b434e loglevel=4 printk.disable_uart=1 maxcpus=1 clk_ignore_unused";
+
+		/* Keep the fallback in sync with the LK handoff. */
+		/* fb buffer is reserved using this dts by memory node above */
+		atag,videolfb-fb_base_h = <0x0>;
+		atag,videolfb-fb_base_l = <0x7e800000>;
+		atag,videolfb-islcmfound = <1>;
+		atag,videolfb-islcm_inited = <1>;
+		atag,videolfb-fps= <5716>;
+		atag,videolfb-vramSize= <0x01be0000>;
+		atag,videolfb-lcmname= "ili9885_fhd_dsi_vdo_txd1";
+	};
+	led@0 {
+		compatible = "mediatek,red";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led@1 {
+		compatible = "mediatek,green";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led@2 {
+		compatible = "mediatek,blue";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led@3 {
+		compatible = "mediatek,jogball-backlight";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led@4 {
+		compatible = "mediatek,keyboard-backlight";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led@5 {
+		compatible = "mediatek,button-backlight";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led@6 {
+		compatible = "mediatek,lcd-backlight";
+		/* Stock DCT uses <5> (CUST_BLS_PWM); <7> is out of range and maps to
+		 * MODE_NONE, so the backlight could never be blanked or dimmed. */
+		led_mode = <5>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	vibrator0:vibrator@0 {
+		compatible = "mediatek,vibrator";
+		vib_timer = <25>;
+		vib_limit = <9>;
+		vib_vol= <5>;
+	};
+	/* The accdet props live in the &accdet override at the end of this file:
+	 * "mediatek,accdet" is not in the driver match table. */
+/*  start sensor */
+	/* Sensors on i2c bus 1. Chip, i2c_addr and direction follow the stock
+	 * cust_acc.c/cust_gyro.c/cust_mag.c; the compatibles follow the MTK
+	 * get_*_dts_func() name lookups. */
+	cust_accel {
+		compatible = "mediatek,mpu6515a";
+		i2c_num = <1>;
+		i2c_addr = <0x69 0 0 0>;
+		direction = <4>;
+		power_id = <0xffff>;
+		power_vol = <0>;
+		firlen = <16>;
+		is_batch_supported = <0>;
+	};
+	cust_gyro {
+		compatible = "mediatek,mpu6515g";
+		i2c_num = <1>;
+		i2c_addr = <0x69 0 0 0>;
+		direction = <4>;
+		power_id = <0xffff>;
+		power_vol = <0>;
+		firlen = <0>;
+		is_batch_supported = <0>;
+	};
+	cust_mag {
+		/* AKM09911@0x0C: the other dual-source magnetometer variant. */
+		compatible = "mediatek,akm09911";
+		i2c_num = <1>;
+		i2c_addr = <0x0C 0 0 0>;
+		direction = <3>;
+		power_id = <0xffff>;
+		power_vol = <0>;
+	};
+	cust_mag@1 {
+		/* SENODIA ST480@0x0D magnetometer. direction = 0: the driver already
+		 * applies the stock axis map. */
+		compatible = "mediatek,st480";
+		i2c_num = <1>;
+		i2c_addr = <0x0D 0 0 0>;
+		direction = <0>;
+		power_id = <0xffff>;
+		power_vol = <0>;
+		is_batch_supported = <0>;
+	};
+	cust_alsps@0 {
+		/* LTR579@0x53 alsps variant. */
+		compatible 				= "mediatek,ltr579";
+		i2c_num 				= <1>;
+		i2c_addr 				= <0x53 0 0 0>;
+		polling_mode_ps			= <0>;
+		polling_mode_als		= <1>;
+		power_id   				= <0xffff>;
+		power_vol  				= <0>;
+		/* Total has 15 level*/
+		als_level  				= <0 257 637 1027 2297 5588 6730 11301 20449 25768 31122 45552 57937 57937 57937>;
+		/*  Total has 16 range*/
+		als_value  				= <0 132 304 502 1004 2003 3006 5006 8004 10000 12000 16000 20000 20000 20000 20000>;
+		ps_threshold_high		=  <70>;
+		ps_threshold_low		=  <40>;
+		is_batch_supported_ps	= <1>;
+		is_batch_supported_als	= <1>;
+	};
+	cust_alsps@1 {
+		/* TXC PA12200001@0x1E alsps (LTR579 above is the other dual-source
+		 * variant). Values from the stock pa12200001.c cust_alsps_hw. PS uses the
+		 * EINT6 interrupt; the driver falls back to polling if EINT setup fails. */
+		compatible 				= "mediatek,pa12200001";
+		i2c_num 				= <1>;
+		i2c_addr 				= <0x1E 0 0 0>;
+		polling_mode_ps			= <0>;
+		polling_mode_als		= <1>;
+		power_id   				= <0xffff>;
+		power_vol  				= <0>;
+		/* Total has 15 level*/
+		als_level  				= <0 471 1058 1703 3883 10171 10443 15445 28499 35153 41421 59194 65535 65535 65535>;
+		/*  Total has 16 range*/
+		als_value  				= <0 133 303 501 1002 2001 3355 5001 8008 10010 12000 16010 20010 20010 20010 20010>;
+		ps_threshold_high		=  <55>;
+		ps_threshold_low		=  <40>;
+		is_batch_supported_ps	= <1>;
+		is_batch_supported_als	= <1>;
+	};
+/* end sensor */
+};
+
+/* The DrvGen cust.dtsi is the generic wt6755 reference DCT, so its i2c1
+ * sensor client nodes sit at the wrong addresses. This file is included
+ * after cust.dtsi and overrides them. Client nodes use the driver of_match
+ * compatibles (mediatek,alsps / mediatek,msensor); the cust_* nodes above
+ * carry the chip names get_*_dts_func() looks up. gyro@68 is left as is. */
+&i2c1 {
+	alsps@60   { status = "disabled"; };
+	msensor@2e { status = "disabled"; };
+
+	/* camera_sub_af@0c is a DrvGen placeholder that claims 0x0c before
+	 * msensor@0c (-EBUSY). Nothing binds it: the AF driver is on i2c2. */
+	camera_sub_af@0c { status = "disabled"; };
+
+	alsps@53 {
+		compatible = "mediatek,alsps";
+		reg = <0x53>;
+		status = "okay";
+	};
+	msensor@0c {
+		compatible = "mediatek,msensor";
+		reg = <0x0c>;
+		status = "okay";
+	};
+};
+
+/* ICM20608 INT = GPIO17/EINT17, rising, no debounce (stock
+ * inv_mpu_ring.c); cust.dtsi carries the generic <4 IRQ_TYPE_LEVEL_HIGH>.
+ * The inv_mpu driver maps this node via "mediatek, gyro-eint". */
+&gyro {
+	interrupts = <17 IRQ_TYPE_EDGE_RISING>;
+	debounce = <17 0>;
+};
+
+/* ALS INT = GPIO6/EINT6. pa122_setup_eint() looks up the "pin_cfg" state
+ * on the mediatek,als_ps device; input with pull-up, as in stock. */
+&alsps {
+	pinctrl-names = "pin_cfg";
+	pinctrl-0 = <&als_int_cfg>;
+};
+
+/* GT9xx touch: INT = GPIO1, RST = GPIO10, vtouch = VLDO28, i2c0.
+ * cust.dtsi provides the EINT and the i2c0 client; this adds the panel
+ * config, the pinctrl states and the SDA0/SCL0 pad mode. Runtime address
+ * is 0x14 (GT9xx 0x5d/0x14 pair). */
+&touch {
+	bus_type = "i2c";
+	bus_id = <0>;
+	vtouch-supply = <&mt_pmic_vldo28_ldo_reg>;
+	interrupt-parent = <&eintc>;
+	interrupts = <1 2>;
+	debounce = <1 0>;
+	charger_supported = <1>;
+	product = "Jim";
+	slave_address = <93 72 0 0 0 0 0 0 0 0 0 0 0 0 0 0>;
+	algo_id = <1>;
+	hmx_irq_config = <3>;
+	goodix_irq_config = <2>;
+	need_wd_check_status = <1>;
+	x_max = <720>;
+	y_max = <1280>;
+	x_max_mt = <720>;
+	y_max_mt = <1280>;
+	goodix,product_id = "GT917D";
+	goodix,test-types = <0x80007>;
+	goodix,panel-max = <3948>;
+	goodix,panel-min = <1897>;
+	goodix,panel-deviation = <400>;
+	goodix,key-max = <0>;
+	goodix,key-min = <0>;
+	goodix,key-nc = <0>;
+	goodix,special_raw_data_limit = <>;
+	goodix,shortcircut-threshold = <0>;
+	fw_upgrade_delay = <30000>;
+	tpd-resolution = <1080 1920>;
+	use-tpd-button = <0>;
+	tpd-key-num = <3>;
+	tpd-key-local= <139 172 158 0>;
+	tpd-key-dim-local = <90 883 100 40 230 883 100 40 370 883 100 40 0 0 0 0>;
+	tpd-max-touch-num = <5>;
+	tpd-filter-enable = <1>;
+	tpd-filter-pixel-density = <146>;
+	tpd-filter-custom-prameters = <0 0 0 0 0 0 0 0 0 0 0 0>;
+	tpd-filter-custom-speed = <0 0 0>;
+	pinctrl-names = "default", "state_eint_as_int", "state_eint_output0", "state_eint_output1",
+		"state_rst_output0", "state_rst_output1";
+	pinctrl-0 = <&ctp_pins_default>;
+	pinctrl-1 = <&ctp_pins_eint_as_int>;
+	pinctrl-2 = <&ctp_pins_eint_output0>;
+	pinctrl-3 = <&ctp_pins_eint_output1>;
+	pinctrl-4 = <&ctp_pins_rst_output0>;
+	pinctrl-5 = <&ctp_pins_rst_output1>;
+	status = "okay";
+};
+&pio {
+	ctp_pins_default: eint0default {
+	};
+	ctp_pins_eint_as_int: ctp_as_eint@0 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO1__FUNC_GPIO1>;
+			slew-rate = <0>;
+			bias-disable;
+		};
+	};
+	ctp_pins_eint_output0: eintoutput0 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO1__FUNC_GPIO1>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+	ctp_pins_eint_output1: eintoutput1 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO1__FUNC_GPIO1>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+	ctp_pins_rst_output0: rstoutput0 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO10__FUNC_GPIO10>;
+			slew-rate = <1>;
+			bias-pull-up;
+			output-low;
+		};
+	};
+	ctp_pins_rst_output1: rstoutput1 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO10__FUNC_GPIO10>;
+			slew-rate = <1>;
+			bias-pull-up;
+			output-high;
+		};
+	};
+	/* i2c0 pads: GPIO92 = SDA0, GPIO93 = SCL0 (mode 1), as in the stock
+	 * cust_gpio.dtsi. Left in GPIO mode the controller gets no ACKs. The
+	 * touch driver also sets the mode directly as a fallback. */
+	gpio@92 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO92__FUNC_SDA0>;
+			slew-rate = <1>;
+			bias-pull-up;
+		};
+	};
+	gpio@93 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO93__FUNC_SCL0>;
+			slew-rate = <1>;
+			bias-pull-up;
+		};
+	};
+	/* ALS INT pad (see &alsps above): GPIO6 mode0, input (slew-rate 0),
+	 * pull-up — PA122 INT is open-drain active-low (EINT6 level-low). */
+	als_int_cfg: als_int_cfg {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO6__FUNC_GPIO6>;
+			slew-rate = <0>;
+			bias-pull-up;
+		};
+	};
+};
+
+
+/* Keypad as in the stock DCT (cust_kpd.dtsi): matrix pos0 = VOLDOWN,
+ * pos1 = VOLUP, rstkey = HOME (102). The generic cust.dtsi maps only
+ * VOLDOWN in the matrix and uses VOLUP as rstkey. */
+&keypad {
+	mediatek,kpd-key-debounce = <1024>;
+	mediatek,kpd-sw-pwrkey = <116>;
+	mediatek,kpd-hw-pwrkey = <8>;
+	mediatek,kpd-sw-rstkey = <102>;
+	mediatek,kpd-hw-rstkey = <17>;
+	mediatek,kpd-use-extend-type = <0>;
+	mediatek,kpd-hw-map-num = <72>;
+	mediatek,kpd-hw-init-map = <114 115 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0>;
+	mediatek,kpd-pwrkey-eint-gpio = <0>;
+	mediatek,kpd-pwrkey-gpio-din = <0>;
+	mediatek,kpd-hw-dl-key0 = <1>;
+	mediatek,kpd-hw-dl-key1 = <0>;
+	mediatek,kpd-hw-dl-key2 = <8>;
+	mediatek,kpd-hw-recovery-key = <1>;
+	mediatek,kpd-hw-factory-key = <0>;
+};
+
+/* GF516M fingerprint: INT = GPIO8/EINT8 rising, RST = GPIO19,
+ * SPI0 CLK = GPIO98, MI = GPIO95, MO = GPIO97, CS = GPIO96 (all mode 1).
+ * gf_spi_tee.c takes pinctrl and EINT from the first "mediatek,goodix-fp"
+ * node (of_find_compatible_node() ignores status), so they go on
+ * goodix_fp. The SPI controller pad hog is compiled out, so the SPI0 pads
+ * are muxed in fp_miso_spi. */
+&goodix_fp {
+	interrupt-parent = <&eintc>;
+	interrupts = <8 1>;	/* EINT8, edge rising = stock EINTF_TRIGGER_RISING */
+	debounce = <8 0>;
+	pinctrl-names = "default", "miso_spi", "miso_pullhigh", "miso_pulllow",
+		"reset_high", "reset_low";
+	pinctrl-0 = <&fp_pins_default>;
+	pinctrl-1 = <&fp_pins_miso_spi>;
+	pinctrl-2 = <&fp_pins_miso_pullhigh>;
+	pinctrl-3 = <&fp_pins_miso_pulllow>;
+	pinctrl-4 = <&fp_pins_reset_high>;
+	pinctrl-5 = <&fp_pins_reset_low>;
+	status = "okay";
+};
+
+&spi0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	fingerprint@0 {
+		compatible = "goodix,goodix-fp";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+		netlink-event = <29>;
+		status = "okay";
+	};
+};
+
+&pio {
+	fp_pins_default: fp_default {
+	};
+	/* miso_spi carries the whole SPI0 pad group: selected once after the
+	 * oswego reset dance, stays for the session. */
+	fp_pins_miso_spi: fp_miso_spi {
+		pins_spi_mi {
+			pins = <PINMUX_GPIO95__FUNC_SPI0_MI>;
+			slew-rate = <0>;
+			bias-pull-up;
+		};
+		pins_spi_cs {
+			pins = <PINMUX_GPIO96__FUNC_SPI0_CSB>;
+			slew-rate = <1>;
+			bias-pull-up;
+		};
+		pins_spi_mo {
+			pins = <PINMUX_GPIO97__FUNC_SPI0_MO>;
+			slew-rate = <1>;
+			bias-pull-up;
+		};
+		pins_spi_clk {
+			pins = <PINMUX_GPIO98__FUNC_SPI0_CLK>;
+			slew-rate = <1>;
+			bias-pull-up;
+		};
+	};
+	/* MISO as GPIO input + pull-up during reset = oswego SPI-interface
+	 * select, stock gf516m_pull_miso_high verbatim (mode0/dir-in/pull-up). */
+	fp_pins_miso_pullhigh: fp_miso_pullhigh {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO95__FUNC_GPIO95>;
+			slew-rate = <0>;
+			bias-pull-up;
+		};
+	};
+	fp_pins_miso_pulllow: fp_miso_pulllow {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO95__FUNC_GPIO95>;
+			slew-rate = <0>;
+			bias-pull-down;
+		};
+	};
+	fp_pins_reset_high: fp_rst_high {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO19__FUNC_GPIO19>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+	fp_pins_reset_low: fp_rst_low {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO19__FUNC_GPIO19>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+};
+
+/* ============================================================
+ * Audio. Inert while CONFIG_SND_SOC is off, except the &accdet props,
+ * which the accdet driver (CONFIG_MTK_ACCDET=y) reads.
+ * ============================================================ */
+
+/* accdet (headset detect): props on the node the driver matches
+ * ("mediatek,mt6755-accdet"). mic-vol, mode-setting and plugout-debounce
+ * are stock values; mic-mode and the three-key thresholds are MTK defaults. */
+&accdet {
+	accdet-mic-vol = <7>;
+	headset-mode-setting = <0x500 0x500 1 0x3f0 0x800 0x800 0x200>;
+	accdet-plugout-debounce = <20>;
+	accdet-mic-mode = <1>;
+	headset-three-key-threshold = <0 80 220 400>;
+};
+
+/* Audio pinctrl on the audgpio (mt_soc_pcm_dl1) node: that is the device
+ * AudDrv_GPIO_probe() gets, not the machine node.
+ * "default" muxes the PMIC MTKIF audio pins (GPIO149/150/151) to their AUD
+ * functions; stock did this in the DCT boot init.
+ * The AW8736 amp SHDN is GPIO118. GPIO115 is the SM5414 charger enable;
+ * audio must not touch it. */
+&audgpio {
+	pinctrl-names = "default", "extamp-pullhigh", "extamp-pulllow";
+	pinctrl-0 = <&aud_pins_default>;
+	pinctrl-1 = <&aud_pins_extamp_high>;
+	pinctrl-2 = <&aud_pins_extamp_low>;
+};
+
+&pio {
+	aud_pins_default: audiodefault {
+		pins_cmd0_dat {
+			pins = <PINMUX_GPIO149__FUNC_AUD_CLK_MOSI>;
+		};
+		pins_cmd1_dat {
+			pins = <PINMUX_GPIO150__FUNC_AUD_DAT_MOSI>;
+		};
+		pins_cmd2_dat {
+			pins = <PINMUX_GPIO151__FUNC_AUD_DAT_MISO>;
+			input-enable;
+			bias-pull-down;
+		};
+	};
+	/* Amp enable = GPIO118 (func0), as in the shipping DTB. The legacy code
+	 * path drives the pad directly and does not select these states. */
+	aud_pins_extamp_high: audextamphigh {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO118__FUNC_GPIO118>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+	aud_pins_extamp_low: audextamplow {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO118__FUNC_GPIO118>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+};
+
+/* Camera RST/PDN pinctrl states for kd_camera_hw1 (stock DCT):
+ * main RST = GPIO110, main PDN = GPIO107, sub RST = GPIO111,
+ * sub PDN = GPIO108. Stock drove them through the legacy GPIO API; the
+ * non-legacy mtkcam_gpio_init() looks them up by name. There are no
+ * cam_ldo_* states: the rails are MT6351 LDOs and those lookups fail
+ * gracefully. */
+&pio {
+	camera_pins_cam0_rst0: cam0rst0 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO110__FUNC_GPIO110>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+	camera_pins_cam0_rst1: cam0rst1 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO110__FUNC_GPIO110>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+	camera_pins_cam0_pnd0: cam0pnd0 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO107__FUNC_GPIO107>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+	camera_pins_cam0_pnd1: cam0pnd1 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO107__FUNC_GPIO107>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+	camera_pins_cam1_rst0: cam1rst0 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO111__FUNC_GPIO111>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+	camera_pins_cam1_rst1: cam1rst1 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO111__FUNC_GPIO111>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+	camera_pins_cam1_pnd0: cam1pnd0 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO108__FUNC_GPIO108>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+	camera_pins_cam1_pnd1: cam1pnd1 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO108__FUNC_GPIO108>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+	/* AF-motor enable = GPIO21 (DCT GPIO_CAMERA_AF_EN_PIN); the shipping
+	 * DTB carries exactly these two states on kd_camera_hw1. */
+	camera_pins_cam0_af_en0: cam0afen0 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO21__FUNC_GPIO21>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+	camera_pins_cam0_af_en1: cam0afen1 {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO21__FUNC_GPIO21>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+	/* CMMCLK pad mux: GPIO161 = CMMCLK0 (main MCLK1), GPIO109 = CMMCLK1
+	 * (sub MCLK2). kd_camera_hw.c selects them around ISP_MCLK*_EN; _off
+	 * parks the pad low. */
+	camera_pins_cam0_mclk_on: cam0mclkon {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO161__FUNC_CMMCLK0>;
+			slew-rate = <1>;
+			bias-disable;
+		};
+	};
+	camera_pins_cam0_mclk_off: cam0mclkoff {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO161__FUNC_GPIO161>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+	camera_pins_cam1_mclk_on: cam1mclkon {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO109__FUNC_CMMCLK1>;
+			slew-rate = <1>;
+			bias-disable;
+		};
+	};
+	camera_pins_cam1_mclk_off: cam1mclkoff {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO109__FUNC_GPIO109>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+};
+
+&kd_camera_hw1 {
+	pinctrl-names = "cam0_rst0", "cam0_rst1", "cam0_pnd0", "cam0_pnd1",
+		"cam1_rst0", "cam1_rst1", "cam1_pnd0", "cam1_pnd1",
+		"cam0_af_en0", "cam0_af_en1",
+		"cam0_mclk_off", "cam0_mclk_on",
+		"cam1_mclk_off", "cam1_mclk_on";
+	pinctrl-0 = <&camera_pins_cam0_rst0>;
+	pinctrl-1 = <&camera_pins_cam0_rst1>;
+	pinctrl-2 = <&camera_pins_cam0_pnd0>;
+	pinctrl-3 = <&camera_pins_cam0_pnd1>;
+	pinctrl-4 = <&camera_pins_cam1_rst0>;
+	pinctrl-5 = <&camera_pins_cam1_rst1>;
+	pinctrl-6 = <&camera_pins_cam1_pnd0>;
+	pinctrl-7 = <&camera_pins_cam1_pnd1>;
+	pinctrl-8 = <&camera_pins_cam0_af_en0>;
+	pinctrl-9 = <&camera_pins_cam0_af_en1>;
+	pinctrl-10 = <&camera_pins_cam0_mclk_off>;
+	pinctrl-11 = <&camera_pins_cam0_mclk_on>;
+	pinctrl-12 = <&camera_pins_cam1_mclk_off>;
+	pinctrl-13 = <&camera_pins_cam1_mclk_on>;
+	/* MT6351 has a single VCAMD LDO for both sockets: map the sub sensor's
+	 * "vcamd_sub" lookup to it instead of a dummy regulator. */
+	vcamd_sub-supply = <&mt_pmic_vcamd_ldo_reg>;
+	/* Add clk26m so forge_cam_mclk_parent can select a 26 MHz camtg root;
+	 * LK leaves camtg on univpll_d26 (48 MHz). An override replaces the whole
+	 * list, so the four base entries are repeated. */
+	clocks = <&topckgen TOP_MUX_CAMTG>,
+		<&topckgen TOP_MUX_SCAM>,
+		<&topckgen TOP_UNIVPLL_D26>,
+		<&topckgen TOP_UNIVPLL2_D2>,
+		<&clk26m>;
+	clock-names = "TOP_CAMTG_SEL", "TOP_MUX_SCAM", "TOP_UNIVPLL_D26",
+		"TOP_UNIVPLL2_D2", "TOP_CLK26M";
+	status = "okay";
+};
