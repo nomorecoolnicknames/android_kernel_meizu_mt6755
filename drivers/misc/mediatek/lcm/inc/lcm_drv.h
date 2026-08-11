@@ -902,4 +902,10 @@ extern int display_bias_regulator_init(void);
 
 
 
+/* Compat typedefs for panel drivers from 3.18 trees: the 3.18 sources use
+ * the typedef names, this header only has tags. */
+typedef struct LCM_DRIVER LCM_DRIVER;
+typedef struct LCM_PARAMS LCM_PARAMS;
+typedef struct LCM_UTIL_FUNCS LCM_UTIL_FUNCS;
+
 #endif /* __LCM_DRV_H__ */
