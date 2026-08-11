@@ -18,6 +18,10 @@ else
 	# phone
 	ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "mt6735" "mt6580"))
 		obj-y += v2/
+	else ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "mt6755"))
+		# MT6755 CMDQ v2 core + mt6755 platform; its event table and DISP
+		# scenarios differ from the mt6735 v2 core.
+		obj-y += v2_mt6755/
 	else
 		obj-y += v3/
 	endif
