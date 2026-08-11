@@ -75,3 +75,6 @@ OBJCOPYFLAGS_lkdtm_rodata_objcopy.o := \
 targets += lkdtm_rodata.o lkdtm_rodata_objcopy.o
 $(obj)/lkdtm_rodata_objcopy.o: $(obj)/lkdtm_rodata.o FORCE
 	$(call if_changed,objcopy)
+
+# Meizu M3 Note m681/l681 board identity from the DT machine compatible
+obj-$(CONFIG_MACH_MT6755)	+= m3note_board.o
