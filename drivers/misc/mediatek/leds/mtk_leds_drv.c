@@ -821,12 +821,22 @@ static struct platform_device mt65xx_leds_device = {
 
 #endif
 
+#ifdef CONFIG_MACH_MT6755
+int forge_display_gate_skip(const char *who);	/* init/forge_m681_marker.c */
+#endif
+
 static int __init mt65xx_leds_init(void)
 {
 	int ret;
 
 	LEDS_DRV_DEBUG("%s\n", __func__);
 
+#ifdef CONFIG_MACH_MT6755
+	/* lcd-backlight is CUST_BLS_PWM = DISP_PWM inside the display block, so
+	 * the LEDs follow the display stack's NONRST2 gate. */
+	if (forge_display_gate_skip("leds"))
+		return 0;
+#endif
 #ifdef CONFIG_OF
 	ret = platform_device_register(&mt65xx_leds_device);
 	if (ret)
