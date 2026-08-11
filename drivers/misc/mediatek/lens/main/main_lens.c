@@ -157,6 +157,12 @@ static int g_regVCAMAFEn;
 
 void AFRegulatorCtrl(int Stage)
 {
+#ifdef CONFIG_MACH_MT6755
+	/* M3 Note: AFVDD is VLDO28, the touch rail; stock never powers it for
+	 * the camera. The VCM runs from AF_EN (GPIO21) in the sensor power
+	 * sequence. Never get or enable a regulator here. */
+	return;
+#endif
 	LOG_INF("AFIOC_S_SETPOWERCTRL regulator_put %p\n", regVCAMAF);
 
 	if (Stage == 0) {

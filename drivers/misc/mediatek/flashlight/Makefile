@@ -5,7 +5,10 @@
 flashlight-y := flashlight-core.o
 flashlight-y += flashlight-device.o
 
+# M3 Note uses the legacy stack below instead (same strobe_VDIrq hook)
+ifneq ($(CONFIG_MACH_MT6755),y)
 obj-$(CONFIG_MTK_FLASHLIGHT)             += flashlight.o
+endif
 obj-$(CONFIG_MTK_FLASHLIGHT_CP2155)      += flashlights-cp2155.o
 obj-$(CONFIG_MTK_FLASHLIGHT_LED191)      += flashlights-led191.o
 obj-$(CONFIG_MTK_FLASHLIGHT_LM3642)      += flashlights-lm3642.o
@@ -38,3 +41,9 @@ subdir-ccflags-y += \
 	-I$(MTK_CUSTOM_PATH)/pmic/include \
 	-I$(MTK_CUSTOM_PATH)/pmic
 
+
+# M3 Note: the stock legacy stack (kd_flashlightlist + SGM3784), which the N
+# camera HAL opens as /dev/kd_camera_flashlight
+ifeq ($(CONFIG_MACH_MT6755),y)
+obj-y += src/mt6755/
+endif

@@ -35,6 +35,10 @@ ifeq ($(CONFIG_MACH_MT6761),y)
 #  obj-y += fdvt/
 endif
 
+ifeq ($(CONFIG_MACH_MT6755),y)
+  obj-y += $(subst ",,$(CONFIG_MTK_PLATFORM))/
+endif
+
 ifeq ($(CONFIG_MACH_MT6580),y)
   obj-y += $(subst ",,$(CONFIG_MTK_PLATFORM))/
 endif

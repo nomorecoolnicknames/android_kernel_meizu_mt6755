@@ -29,8 +29,18 @@ subdir-ccflags-y += -I$(MTK_PROJECT_PATH_ROOT)/camera/camera
 
 MTK_DRIVER_PATH  := $(srctree)/drivers/misc/mediatek
 
+# MT6755 (M3 Note): the mt6755 platform (kd_sensorlist) with its headers,
+# the ioctl ABI the camera HAL was built against; 4.9 imgsensor/inc has
+# moved on (typedef -> enum, dual-sensor masks)
+ifeq ($(CONFIG_MACH_MT6755),y)
+IMGSENSOR_INC := inc_mt6755
+subdir-ccflags-y += -I$(MTK_DRIVER_PATH)/smi/mt6755
+else
+IMGSENSOR_INC := inc
+endif
+
 subdir-ccflags-y += -I$(MTK_DRIVER_PATH)/camera/$(MTK_PLATFORM) \
-             -I$(MTK_DRIVER_PATH)/imgsensor/inc \
+             -I$(MTK_DRIVER_PATH)/imgsensor/$(IMGSENSOR_INC) \
              -I$(MTK_DRIVER_PATH)/imgsensor/src/$(CONFIG_MTK_PLATFORM_SENSOR)/camera_project/$(ARCH_MTK_PROJECT)/camera_hw \
              -I$(MTK_DRIVER_PATH)/imgsensor/src/$(CONFIG_MTK_PLATFORM_SENSOR)/camera_hw	\
              -I$(MTK_DRIVER_PATH)/cam_cal/inc \
