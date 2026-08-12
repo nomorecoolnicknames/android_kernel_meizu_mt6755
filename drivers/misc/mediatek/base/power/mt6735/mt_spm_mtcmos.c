@@ -18,6 +18,7 @@
 #include <linux/of.h>
 #include <linux/of_irq.h>
 #include <linux/of_address.h>
+#include <linux/sched.h>	/* sched_clock */
 #include <mach/mt_spm_mtcmos.h>
 #include <mach/mt_spm_mtcmos_internal.h>
 #include <mach/mt_clkmgr.h>
@@ -83,7 +84,20 @@ static spm_cpu_mtcmos_ctrl_func spm_cpu_mtcmos_ctrl_funcs[] = {
 
 int spm_mtcmos_ctrl_cpu(unsigned int cpu, int state, int chkWfiBeforePdn)
 {
-	return (*spm_cpu_mtcmos_ctrl_funcs[cpu]) (state, chkWfiBeforePdn);
+	/* Timestamped mtcmos markers: slot 86 = sched_clock() at entry,
+	 * slot 87 at exit. An entry without a matching exit means a hang in the
+	 * ACK/WFI spin. */
+	int ret;
+	{
+		extern void forge_kmark_ptr(int ms, unsigned long v);
+		forge_kmark_ptr(86, sched_clock());
+	}
+	ret = (*spm_cpu_mtcmos_ctrl_funcs[cpu]) (state, chkWfiBeforePdn);
+	{
+		extern void forge_kmark_ptr(int ms, unsigned long v);
+		forge_kmark_ptr(87, sched_clock());
+	}
+	return ret;
 }
 
 int spm_mtcmos_ctrl_cpu0(int state, int chkWfiBeforePdn)
@@ -1472,6 +1486,13 @@ int spm_mtcmos_ctrl_disp(int state)
 	unsigned long flags;
 	int count = 0;
 
+	/* bracket the DIS domain — same slot as the display step
+	 * ladder (mtkfb.c). 0x60|state entry, 0x6F exit. */
+	{
+		extern void forge_kmark_ptr(int, unsigned long);
+		forge_kmark_ptr(126, 0x60UL | (unsigned int)state);
+	}
+
 	spm_mtcmos_noncpu_lock(flags);
 
 	if (state == STA_POWER_DOWN) {
@@ -1549,6 +1570,10 @@ int spm_mtcmos_ctrl_disp(int state)
 
 	spm_mtcmos_noncpu_unlock(flags);
 
+	{
+		extern void forge_kmark_ptr(int, unsigned long);
+		forge_kmark_ptr(126, 0x6FUL);	/* DIS done */
+	}
 	return err;
 #else
 	return 1;

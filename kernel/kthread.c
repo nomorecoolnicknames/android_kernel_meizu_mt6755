@@ -527,9 +527,14 @@ int kthread_stop(struct task_struct *k)
 }
 EXPORT_SYMBOL(kthread_stop);
 
+/* boot markers (defined in arch/arm64/kernel/setup.c) */
+extern void forge_kmark(int ms);
+
 int kthreadd(void *unused)
 {
 	struct task_struct *tsk = current;
+
+	forge_kmark(41);	/* kthreadd (PID 2) EXECUTED at least once */
 
 	/* Setup a clean context for our children to inherit. */
 	set_task_comm(tsk, "kthreadd");
@@ -555,7 +560,9 @@ int kthreadd(void *unused)
 			list_del_init(&create->list);
 			spin_unlock(&kthread_create_lock);
 
+			forge_kmark(42);	/* kthreadd dequeued a request */
 			create_kthread(create);
+			forge_kmark(43);	/* create_kthread returned */
 
 			spin_lock(&kthread_create_lock);
 		}

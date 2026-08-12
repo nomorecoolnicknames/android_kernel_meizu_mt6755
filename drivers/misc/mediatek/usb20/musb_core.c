@@ -1332,6 +1332,12 @@ void musb_start(struct musb *musb)
 
 	u8 intrusbe;
 
+	/* boot marker (slot 83) */
+	{
+		extern void forge_kmark_ptr(int ms, unsigned long v);
+		forge_kmark_ptr(83, 1);
+	}
+
 	DBG(0, "start, is_host=%d is_active=%d\n",
 			musb->is_host, musb->is_active);
 
@@ -1543,6 +1549,12 @@ void musb_flush_dma_transcation(struct musb *musb)
  */
 void musb_stop(struct musb *musb)
 {
+	/* boot marker (slot 84) */
+	{
+		extern void forge_kmark_ptr(int ms, unsigned long v);
+		forge_kmark_ptr(84, 1);
+	}
+
 	/* stop IRQs, timers, ... */
 	musb_generic_disable(musb);
 

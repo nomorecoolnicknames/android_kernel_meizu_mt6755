@@ -95,6 +95,14 @@
 
 static int kernel_init(void *);
 
+/* boot markers; defined in arch/arm64 setup.c.
+ * Weak so non-arm64 / marker-less builds still link. */
+void __weak forge_kmark(int ms) { }
+
+#ifdef CONFIG_MACH_MT6755
+#include "forge_m681_marker.h"
+#endif
+
 extern void init_IRQ(void);
 extern void fork_init(void);
 extern void radix_tree_init(void);
@@ -508,7 +516,14 @@ asmlinkage __visible void __init start_kernel(void)
 	boot_cpu_init();
 	page_address_init();
 	pr_notice("%s", linux_banner);
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark(FORGE_STAGE_START_KERNEL_ENTRY);	/* 0x01 */
+#endif
 	setup_arch(&command_line);
+	forge_kmark(10);		/* back in start_kernel */
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark(FORGE_STAGE_POST_SETUP_ARCH);		/* 0x07 */
+#endif
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
@@ -541,6 +556,11 @@ asmlinkage __visible void __init start_kernel(void)
 	sort_main_extable();
 	trap_init();
 	mm_init();
+	forge_kmark(11);		/* mm_init done */
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_marker_late_init();
+	forge_m681_mark(FORGE_STAGE_POST_MM_INIT);		/* 0x0C */
+#endif
 
 	/*
 	 * Set up the scheduler prior starting any interrupts (such as the
@@ -548,6 +568,7 @@ asmlinkage __visible void __init start_kernel(void)
 	 * time - but meanwhile we still have a functioning scheduler.
 	 */
 	sched_init();
+	forge_kmark(12);		/* sched_init done */
 	/*
 	 * Disable preemption - early bootup scheduling is extremely
 	 * fragile until we cpu_idle() for the first time.
@@ -574,14 +595,27 @@ asmlinkage __visible void __init start_kernel(void)
 	radix_tree_init();
 	/* init some links before init_ISA_irqs() */
 	early_irq_init();
+	forge_kmark(13);		/* before init_IRQ (mt-gic) */
 	init_IRQ();
+	forge_kmark(14);		/* init_IRQ (mt-gic) done */
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark(FORGE_STAGE_POST_INIT_IRQ);		/* 0x0F */
+#endif
 	tick_init();
 	rcu_init_nohz();
 	init_timers();
 	hrtimers_init();
 	softirq_init();
 	timekeeping_init();
+	forge_kmark(15);		/* before time_init (mt_gpt) */
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark(FORGE_STAGE_PRE_TIME_INIT);		/* 0x10 */
+#endif
 	time_init();
+	forge_kmark(16);		/* time_init (mt_gpt) done */
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark(FORGE_STAGE_POST_TIME_INIT);		/* 0x11 */
+#endif
 	sched_clock_postinit();
 	printk_nmi_init();
 	perf_event_init();
@@ -598,7 +632,12 @@ asmlinkage __visible void __init start_kernel(void)
 	 * we've done PCI setups etc, and console_init() must be aware of
 	 * this. But we do want output early, in case something goes wrong.
 	 */
+	forge_kmark(17);		/* before console_init */
 	console_init();
+	forge_kmark(18);		/* console_init done (ram console should be live) */
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark(FORGE_STAGE_POST_CONSOLE_INIT);		/* 0x12 */
+#endif
 	if (panic_later)
 		panic("Too many boot %s vars at `%s'", panic_later,
 		      panic_param);
@@ -671,6 +710,9 @@ asmlinkage __visible void __init start_kernel(void)
 
 	ftrace_init();
 
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark(FORGE_STAGE_ABOUT_TO_REST_INIT);	/* 0x18 */
+#endif
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();
 }
@@ -797,12 +839,24 @@ int __init_or_module do_one_initcall(initcall_t fn)
 #ifdef CONFIG_MTK_RAM_CONSOLE
 	aee_rr_rec_last_init_func((unsigned long)fn);
 #endif
+#ifdef CONFIG_MACH_MT6755
+	/* Name the initcall about to run (0xE0 + the fixed-offset tracker at
+	 * diag 0x64..0x78) and pet the toprgu dog once per initcall; 0xE1 when
+	 * it returns. */
+	forge_m681_set_initcall((u32)(unsigned long)fn);
+	forge_m681_mark_aux(0xE0, (u32)(unsigned long)fn);
+	forge_m681_wdt_kick();
+#endif
 	TIME_LOG_START();
 	if (initcall_debug)
 		ret = do_one_initcall_debug(fn);
 	else
 		ret = fn();
 	TIME_LOG_END();
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark_aux(0xE1, (u32)(unsigned long)fn);
+	forge_m681_set_initcall_done((u32)(unsigned long)fn);
+#endif
 	msgbuf[0] = 0;
 
 	if (preempt_count() != count) {
@@ -867,8 +921,14 @@ static void __init do_initcall_level(int level)
 		   level, level,
 		   NULL, &repair_env_string);
 
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark_level_enter(level);
+#endif
 	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
 		do_one_initcall(*fn);
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark_level_done(level);
+#endif
 }
 
 static void __init do_initcalls(void)
@@ -971,6 +1031,9 @@ static int __ref kernel_init(void *unused)
 {
 	int ret;
 
+#ifdef CONFIG_MACH_MT6755
+	forge_m681_mark(FORGE_STAGE_PRE_INIT_EXEC);	/* 0xD0: about to exec /init */
+#endif
 	kernel_init_freeable();
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
@@ -1035,14 +1098,20 @@ static noinline void __init kernel_init_freeable(void)
 
 	cad_pid = task_pid(current);
 
+	forge_kmark(21);		/* before smp_prepare_cpus */
 	smp_prepare_cpus(setup_max_cpus);
+	forge_kmark(22);		/* smp_prepare_cpus done */
 
 	workqueue_init();
+	forge_kmark(31);		/* workqueue_init done */
 
 	do_pre_smp_initcalls();
+	forge_kmark(32);		/* pre-smp initcalls done */
 	lockup_detector_init();
 
+	forge_kmark(28);		/* before smp_init */
 	smp_init();
+	forge_kmark(29);		/* smp_init done */
 	sched_init_smp();
 
 	page_alloc_init_late();

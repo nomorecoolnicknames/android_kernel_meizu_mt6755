@@ -213,8 +213,12 @@ int __cpu_up(unsigned int cpu, struct task_struct *idle)
  * This is the secondary CPU boot entry.  We're using this CPUs
  * idle thread stack, but a set of temporary page tables.
  */
+/* Boot markers (defined in setup.c) */
+extern void forge_kmark(int ms);
+
 asmlinkage notrace void secondary_start_kernel(void)
 {
+	forge_kmark(30);		/* secondary CPU runs C code */
 	struct mm_struct *mm = &init_mm;
 	unsigned int cpu;
 

@@ -8,7 +8,11 @@
 #include <linux/init.h>
 #include <linux/notifier.h>
 #include <linux/sched.h>
+/* sched_clock: declared in linux/sched.h in this tree */
 #include <linux/sched/smt.h>
+
+/* boot markers (defined in arch/arm64/kernel/setup.c) */
+extern void forge_kmark_ptr(int ms, unsigned long v);
 #include <linux/unistd.h>
 #include <linux/cpu.h>
 #include <linux/oom.h>
@@ -1095,7 +1099,14 @@ static int do_cpu_down(unsigned int cpu, enum cpuhp_state target)
 }
 int cpu_down(unsigned int cpu)
 {
-	return do_cpu_down(cpu, CPUHP_OFFLINE);
+	/* Timestamped hotplug markers: 91 = cpu_down entry, 93 = shared exit
+	 * (sched_clock ns). */
+	int ret;
+
+	forge_kmark_ptr(91, sched_clock());
+	ret = do_cpu_down(cpu, CPUHP_OFFLINE);
+	forge_kmark_ptr(93, sched_clock());
+	return ret;
 }
 EXPORT_SYMBOL(cpu_down);
 #endif /*CONFIG_HOTPLUG_CPU*/
@@ -1233,7 +1244,14 @@ out:
 
 int cpu_up(unsigned int cpu)
 {
-	return do_cpu_up(cpu, CPUHP_ONLINE);
+	/* Timestamped hotplug markers: 92 = cpu_up entry, 93 = shared exit
+	 * (sched_clock ns). An entry with no exit = hang inside. */
+	int ret;
+
+	forge_kmark_ptr(92, sched_clock());
+	ret = do_cpu_up(cpu, CPUHP_ONLINE);
+	forge_kmark_ptr(93, sched_clock());
+	return ret;
 }
 EXPORT_SYMBOL_GPL(cpu_up);
 

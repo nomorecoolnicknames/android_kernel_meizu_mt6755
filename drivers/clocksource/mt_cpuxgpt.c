@@ -441,9 +441,21 @@ unsigned int set_count_hi = 0;
 }
 EXPORT_SYMBOL(cpu_xgpt_set_timer);
 
+/* Expose the CPUXGPT control register (read back via the same SMC path
+ * the writer uses) so a DRAM slot can show whether EN_CPUXGPT took. */
+extern void forge_kmark_ptr(int ms, unsigned long v);
+unsigned long forge_cpuxgpt_ctl(void)
+{
+	if (!cpuxgpt_regs)	/* node never matched: nothing mapped */
+		return ~0UL;
+	return __read_cpuxgpt(INDEX_CTL_REG);
+}
+
 void enable_cpuxgpt(void)
 {
+	forge_kmark_ptr(65, __read_cpuxgpt(INDEX_CTL_REG)); /* CTL before enable */
 	__cpuxgpt_enable();
+	forge_kmark_ptr(66, __read_cpuxgpt(INDEX_CTL_REG)); /* CTL after enable */
 	pr_debug("%s: reg(%x)\n", __func__, __read_cpuxgpt(INDEX_CTL_REG));
 }
 EXPORT_SYMBOL(enable_cpuxgpt);

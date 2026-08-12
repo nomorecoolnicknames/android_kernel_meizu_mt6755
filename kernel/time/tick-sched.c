@@ -23,6 +23,13 @@
 #include <linux/irq_work.h>
 #include <linux/posix-timers.h>
 #include <linux/context_tracking.h>
+/* sched_clock: declared in linux/sched.h in this tree */
+
+/* Per-CPU liveness pulse: every 128 ticks each CPU stamps slot 96+cpu of
+ * the marker window with sched_clock. A CPU whose slot stopped advancing
+ * was dead or parked. */
+extern void forge_kmark_ptr(int ms, unsigned long v);
+static DEFINE_PER_CPU(unsigned int, forge_tick_cnt);
 
 #include <asm/irq_regs.h>
 
@@ -150,6 +157,10 @@ static void tick_sched_handle(struct tick_sched *ts, struct pt_regs *regs)
 #endif
 	update_process_times(user_mode(regs));
 	profile_tick(CPU_PROFILING);
+
+	/* per-CPU liveness pulse (see top of file) */
+	if ((this_cpu_inc_return(forge_tick_cnt) & 0x7f) == 1)
+		forge_kmark_ptr(96 + raw_smp_processor_id(), sched_clock());
 }
 #endif
 

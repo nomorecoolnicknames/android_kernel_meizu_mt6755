@@ -1434,14 +1434,54 @@ out:
  * smp_call_function() if an IPI is sent by the same process we are
  * waiting to become inactive.
  */
+/* boot markers (defined in arch/arm64/kernel/setup.c) */
+extern void forge_kmark_ptr(int ms, unsigned long v);
+
 unsigned long wait_task_inactive(struct task_struct *p, long match_state)
 {
 	int running, queued;
 	struct rq_flags rf;
 	unsigned long ncsw;
 	struct rq *rq;
+#ifndef CONFIG_MACH_MT6755
+	static unsigned long forge_wti_iters;
+#endif
 
 	for (;;) {
+#ifndef CONFIG_MACH_MT6755
+		/* Frozen-tick probe. Not on MT6755: its cpuxgpt node is
+		 * "mediatek,cpuxgpt", mt_cpuxgpt never maps its registers, and
+		 * forge_cpuxgpt_ctl() would read NULL+0x670 from the first
+		 * kthread_bind() in workqueue_init(). */
+		if (system_state == SYSTEM_BOOTING) {
+			unsigned long pct, ctl, cval;
+			extern unsigned long forge_gicd_isenabler0(void);
+
+			asm volatile("mrs %0, cntpct_el0"  : "=r"(pct));
+			asm volatile("mrs %0, cntp_ctl_el0"  : "=r"(ctl));
+			asm volatile("mrs %0, cntp_cval_el0" : "=r"(cval));
+			forge_kmark_ptr(52, get_jiffies_64()); /* full 64b, frozen=no tick */
+			forge_kmark_ptr(54, ++forge_wti_iters);
+			forge_kmark_ptr(57, pct);	/* CNTPCT physical counter */
+			forge_kmark_ptr(58, ctl);	/* CNTP_CTL: en/imask/istatus */
+			forge_kmark_ptr(59, cval);	/* CNTP_CVAL compare value */
+			forge_kmark_ptr(60, forge_gicd_isenabler0()); /* PPI29/30 enabled? */
+			{
+				extern unsigned long forge_tick_name8(void);
+				extern unsigned long forge_gicd_isenabler(int word);
+				extern unsigned long forge_cpuxgpt_ctl(void);
+				unsigned long frq, pct2;
+
+				forge_kmark_ptr(63, forge_tick_name8());
+				forge_kmark_ptr(64, forge_gicd_isenabler(5));
+				forge_kmark_ptr(67, forge_cpuxgpt_ctl()); /* CTL in wait loop */
+				asm volatile("mrs %0, cntfrq_el0" : "=r"(frq));
+				forge_kmark_ptr(68, frq);		/* CNTFRQ */
+				asm volatile("mrs %0, cntpct_el0" : "=r"(pct2));
+				forge_kmark_ptr(69, pct2);		/* CNTPCT 2nd read */
+			}
+		}
+#endif
 		/*
 		 * We do the initial early heuristics without holding
 		 * any task-queue locks at all. We'll only try to get

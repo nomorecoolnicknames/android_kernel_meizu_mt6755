@@ -4155,6 +4155,15 @@ static void msdc_ops_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	int host_cookie = 0;
 	struct msdc_host *host = mmc_priv(mmc);
 
+	/* Boot markers: last in-flight mmc opcode (slot 75) + host id (76). An
+	 * 18/25 (read/write) here at a hang means an msdc transaction never
+	 * completed. */
+	{
+		extern void forge_kmark_ptr(int ms, unsigned long v);
+		forge_kmark_ptr(75, mrq->cmd->opcode);
+		forge_kmark_ptr(76, (unsigned long)host->id);
+	}
+
 	if ((host->hw->host_function == MSDC_SDIO) &&
 	    !(host->trans_lock.active))
 		__pm_stay_awake(&host->trans_lock);
@@ -4779,6 +4788,14 @@ static irqreturn_t msdc_irq(int irq, void *dev_id)
 
 	intsts = MSDC_READ32(MSDC_INT);
 	host->intsts = intsts; /* save int raw status */
+
+	/* Boot marker: any msdc interrupt landing is stamped (slot 78 = intsts).
+	 * With slot 75 (in-flight opcode) set and 78 still 0, the IRQ never fired
+	 * (bus wedge). */
+	{
+		extern void forge_kmark_ptr(int ms, unsigned long v);
+		forge_kmark_ptr(78, (unsigned long)intsts);
+	}
 
 	latest_int_status[host->id] = intsts;
 	inten = MSDC_READ32(MSDC_INTEN);

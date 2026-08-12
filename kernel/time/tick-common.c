@@ -29,6 +29,19 @@
  * Tick devices
  */
 DEFINE_PER_CPU(struct tick_device, tick_cpu_device);
+
+/* First 8 bytes of the boot CPU's tick evtdev name, so a DRAM slot can
+ * record which clockevent was picked (gpt vs arch_sys_timer). */
+unsigned long forge_tick_name8(void)
+{
+	struct clock_event_device *ed = per_cpu(tick_cpu_device, 0).evtdev;
+	unsigned long v = 0;
+
+	if (ed && ed->name)
+		memcpy(&v, ed->name, min((size_t)8, strlen(ed->name)));
+	return v;
+}
+
 /*
  * Tick next event: keeps track of the tick time
  */
