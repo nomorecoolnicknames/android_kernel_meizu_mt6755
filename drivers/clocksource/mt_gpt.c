@@ -150,6 +150,10 @@ static void task_sched(unsigned long data)
 	tasklet_schedule(&task[id]);
 }
 
+/* DRAM markers: 100 = GPT IRQ fire count,
+ * 101 = clkevt set_next_event cycles. */
+extern void forge_kmark_ptr(int ms, unsigned long v);
+
 static irqreturn_t gpt_handler(int irq, void *dev_id);
 static cycle_t mt_gpt_read(struct clocksource *cs);
 static int mt_gpt_clkevt_next_event(unsigned long cycles,
@@ -209,8 +213,11 @@ static inline unsigned int gpt_get_and_ack_irq(void)
 
 static irqreturn_t gpt_handler(int irq, void *dev_id)
 {
+	static unsigned long forge_gpt_irqs;
 	unsigned int id = gpt_get_and_ack_irq();
 	struct gpt_device *dev = id_to_dev(id);
+
+	forge_kmark_ptr(100, ++forge_gpt_irqs);
 
 	if (likely(dev)) {
 		if (!(dev->flags & GPT_ISR))
@@ -426,6 +433,8 @@ static int mt_gpt_clkevt_next_event(unsigned long cycles,
 	__gpt_set_clk(dev, GPT_CLK_SRC_SYS & GPT_CLKSRC_MASK,
 		GPT_CLK_DIV_1 & GPT_CLKDIV_MASK);
 
+	forge_kmark_ptr(101, (unsigned long)cycles);
+
 	__gpt_stop(dev);
 
 	if (cycles < 3) {
@@ -446,15 +455,14 @@ static int mt_gpt_clkevt_next_event(unsigned long cycles,
 	__gpt_enable_irq(dev);
 
 	/*
-	 * Configure gpt1 to use 32KHz clock before enabling.
-	 *
-	 * Reason: 13MHz clock source may be disabled during some
-	 *         low-power scenarios, e.g., SODI. We shall use a
-	 *         always-on clock after enabling, e.g., 32KHz.
+	 * Stay on the 13 MHz SYS clock; do not switch to the 32 kHz RTC source.
+	 * The clockevent is registered with freq = 13 MHz (DTB apxgpt node), so
+	 * `cycles` above is in 13 MHz units. At 32768 Hz every programmed deadline
+	 * would stretch ~397x and a tick-broadcast event due in ~50ms would fire
+	 * after ~20s, stalling the first CPU0 idle. The 3.18 mt_gpt.c on this
+	 * hardware never switches either, and SODI is disabled here
+	 * (idle_switch[IDLE_TYPE_SO]=0).
 	 */
-	__gpt_set_clk(dev, GPT_CLK_SRC_RTC & GPT_CLKSRC_MASK,
-		GPT_CLK_DIV_1 & GPT_CLKDIV_MASK);
-
 	__gpt_start(dev);
 
 #if defined(CONFIG_MTK_TIMER_AEE_DUMP)
@@ -620,7 +628,8 @@ static int __init mt_gpt_init(struct device_node *node)
 
 	boot_time_value = xgpt_boot_up_time();	/*record the time when init GPT */
 
-	pr_alert("mt_gpt_init: tmr_regs=0x%x, tmr_irq=%d, freq=%d\n", (u32) xgpt_timers.tmr_regs,
+	pr_alert("mt_gpt_init: tmr_regs=0x%lx, tmr_irq=%d, freq=%d\n",
+		 (unsigned long)xgpt_timers.tmr_regs,
 		 xgpt_timers.tmr_irq, freq);
 
 	gpt_devs_init();
@@ -935,6 +944,11 @@ static int __init gpt_mod_init(void)
 
 module_init(gpt_mod_init);
 CLOCKSOURCE_OF_DECLARE(mtk_apxgpt, "mediatek,APXGPT", mt_gpt_init);
+/* The stock DTB names the node apxgpt@10004000 with this compatible (the
+ * 3.18 driver matches exactly it). Without the entry the GPT clocksource
+ * and sched_clock never initialise and the kernel falls back to the 250 Hz
+ * jiffies sched_clock. */
+CLOCKSOURCE_OF_DECLARE(mtk_apxgpt_m5c, "mediatek,mt6735-apxgpt", mt_gpt_init);
 
 MODULE_DESCRIPTION("MT6580 GPT Driver v0.1");
 MODULE_LICENSE("GPL");
