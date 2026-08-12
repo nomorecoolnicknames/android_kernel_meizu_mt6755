@@ -465,7 +465,10 @@ static int kpd_pdrv_resume(struct platform_device *pdev)
 }
 
 static const struct of_device_id kpd_of_match[] = {
-	{.compatible = "mediatek,kp"},
+	/* The stock DTB keypad node is "mediatek,mt6735-keypad" (fallback
+	 * "mediatek,mt6735m-keypad"), as matched by the 3.18 kpd.c.
+	 */
+	{.compatible = "mediatek,mt6735-keypad"},
 	{},
 };
 

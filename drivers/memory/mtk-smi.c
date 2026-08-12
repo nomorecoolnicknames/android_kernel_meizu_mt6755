@@ -535,8 +535,31 @@ static int mtk_smi_larb_probe(struct platform_device *pdev)
 	/* index */
 	ret = of_property_read_u32(pdev->dev.of_node, "cell-index", &index);
 	if (ret) {
-		dev_notice(&pdev->dev, "cell-index read failed %d\n", ret);
-		return ret;
+		/* the stock DTB has no cell-index either — the larb
+		 * number lives in the compatible ("mediatek,smi_larb0..2"). */
+		const char *compat = NULL;
+
+		if (of_property_read_string(pdev->dev.of_node, "compatible",
+					    &compat) == 0 && compat) {
+			const char *p = compat + strlen(compat) - 1;
+
+			if (*p >= '0' && *p <= '9')
+				index = *p - '0';
+			else
+				return ret;
+		} else {
+			return ret;
+		}
+		dev_notice(&pdev->dev, "no cell-index in DT, using %u (%s)\n",
+			index, compat);
+	}
+	if (!common || !larbs || index >= common->index) {
+		/* larbs[] is sized by the common probe; without it
+		 * (or with an out-of-range index) this write corrupted memory
+		 * or faulted at address 0. */
+		dev_notice(&pdev->dev, "larb %u: common absent or index out of range\n",
+			index);
+		return -ENXIO;
 	}
 	/* dev */
 	larbs[index] = devm_kzalloc(&pdev->dev, sizeof(**larbs), GFP_KERNEL);
@@ -679,8 +702,23 @@ static int mtk_smi_common_probe(struct platform_device *pdev)
 	/* index */
 	ret = of_property_read_u32(common->dev->of_node, "nr_larbs", &nr_larbs);
 	if (ret) {
-		dev_notice(&pdev->dev, "common nr_larbs read failed %d\n", ret);
-		return ret;
+		/* Older DTBs predate the "nr_larbs" binding: their smi_common node
+		 * lists the COMMON window followed by one reg window per larb
+		 * (0x14017000 + larb0/1/2 on this SoC). Derive the count from those;
+		 * bailing out left `larbs` unallocated for smi_register(). */
+		int nr_regs = of_property_count_elems_of_size(
+				common->dev->of_node, "reg", sizeof(u32) * 2);
+
+		if (nr_regs < 2) {
+			dev_notice(&pdev->dev,
+				"common nr_larbs read failed %d, reg ranges %d\n",
+				ret, nr_regs);
+			return ret;
+		}
+		nr_larbs = nr_regs - 1;		/* first range is COMMON */
+		dev_notice(&pdev->dev,
+			"no nr_larbs in DT, derived %u from reg ranges\n",
+			nr_larbs);
 	}
 	common->index = nr_larbs;
 	/* base */

@@ -51,6 +51,10 @@ static int accdet_remove(struct platform_device *dev)
 const struct of_device_id accdet_of_match[] = {
 	{ .compatible = "mediatek,mt8173-accdet", },
 	{ .compatible = "mediatek,pmic-accdet", },
+	/* The stock DTB declares accdet as "mediatek,mt6735-accdet" (fallback
+	 * "mt6735m-accdet"), as matched by the 3.18 driver. */
+	{ .compatible = "mediatek,mt6735-accdet", },
+	{ .compatible = "mediatek,mt6735m-accdet", },
 	{},
 };
 

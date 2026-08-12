@@ -1302,6 +1302,15 @@ int smi_register(struct platform_driver *drv)
 	smi_drv->scen = SMI_BWC_SCEN_NORMAL;
 	smi_drv->table[smi_drv->scen] += 1;
 
+	/* `larbs` is allocated by mtk_smi_common_probe (memory/
+	 * mtk-smi.c); when that probe fails the pointer is NULL and the loop
+	 * below dereferenced it at address 0 (p44 oops, PC=smi_register+0x88).
+	 * Fail the registration instead of taking the kernel down. */
+	if (!larbs || !common) {
+		SMIDBG("no SMI common/larb devices (probe failed)\n");
+		return -ENXIO;
+	}
+
 	/* COMMON and LARBs */
 	for (i = 0; i <= SMI_LARB_NUM; i++) {
 		struct mtk_smi_dev *smi =

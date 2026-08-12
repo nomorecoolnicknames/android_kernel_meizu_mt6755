@@ -39,7 +39,11 @@
 /* Section 1: Device Tree                                     */
 /**************************************************************/
 /* Names used for device tree lookup */
-#define DT_COMPATIBLE_NAME      "mediatek,msdc"
+/* The stock DTB describes msdc0/msdc1 as "mediatek,mt6735m-mmc" (the
+ * string the 3.18 sd.c matches); "mediatek,msdc" does not exist in that
+ * DTB.
+ */
+#define DT_COMPATIBLE_NAME      "mediatek,mt6735m-mmc"
 
 
 /**************************************************************/

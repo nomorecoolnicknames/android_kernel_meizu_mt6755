@@ -890,9 +890,21 @@ int msdc_of_parse(struct platform_device *pdev, struct mmc_host *mmc)
 	np = mmc->parent->of_node; /* mmcx node in project dts */
 
 	if (of_property_read_u8(np, "index", &id)) {
-		pr_notice("[%s] host index not specified in device tree\n",
-			pdev->dev.of_node->name);
-		return -1;
+		/* The stock DTB carries no "index" property, so every host would fail
+		 * here with "host index not specified" and eMMC would never probe.
+		 * Derive the id from the node name as the 3.18 msdc_of_parse does.
+		 */
+		if (!strcmp(np->name, "msdc0"))
+			id = 0;
+		else if (!strcmp(np->name, "msdc1"))
+			id = 1;
+		else if (!strcmp(np->name, "msdc2"))
+			id = 2;
+		else {
+			pr_notice("[%s] host index not specified in device tree\n",
+				pdev->dev.of_node->name);
+			return -1;
+		}
 	}
 	host->id = id;
 	pdev->id = id;
@@ -966,14 +978,12 @@ int msdc_of_parse(struct platform_device *pdev, struct mmc_host *mmc)
 		pr_debug("of_iomap for MSDC%d TOP base @ 0x%p\n",
 			host->id, host->base_top);
 #endif
-	/* device rename */
-	if ((host->id == 0) && !device_rename(mmc->parent, "bootdevice"))
-		pr_notice("[msdc%d] device renamed to bootdevice.\n", host->id);
-	else if ((host->id == 1) && !device_rename(mmc->parent, "externdevice"))
-		pr_notice("[msdc%d] device renamed to externdevice.\n",
-			host->id);
-	else if ((host->id == 0) || (host->id == 1))
-		pr_notice("[msdc%d] error: device renamed failed.\n", host->id);
+	/* No device rename. The vendor BSP renames msdc0 to "bootdevice" (msdc1
+	 * -> "externdevice"), which moves the sysfs DEVPATH and makes ueventd
+	 * publish the partitions under /dev/block/platform/bootdevice/by-name/.
+	 * The ramdisk fstab mounts by
+	 * /dev/block/platform/mtk-msdc.0/11230000.msdc0/by-name/..., the path the
+	 * device keeps when left unrenamed. */
 
 	return host->id;
 }
