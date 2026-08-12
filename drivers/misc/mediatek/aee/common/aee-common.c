@@ -23,6 +23,7 @@
 #include <linux/init.h>
 #include <linux/smp.h>
 #include <linux/io.h>
+#include <linux/reboot.h>	/* emergency_restart fallback */
 #include <linux/delay.h>
 #include <linux/reboot.h>
 #ifdef CONFIG_MTK_WATCHDOG
@@ -376,6 +377,14 @@ void aee_exception_reboot(void)
 	res = get_wd_api(&wd_api);
 	if (res < 0) {
 		pr_info("arch_reset, get wd api error %d\n", res);
+		/* (BUG C): wd_api becomes ready only after the wdk
+		 * workqueue ran (scheduled from a late_initcall in watchdog/,
+		 * which links AFTER usb/). Any exception before that used to
+		 * spin here forever — silent eternal hang, no reset, while the
+		 * deadman kept kicking the WDT. Fall back to a generic warm
+		 * restart (arm_pm_restart = psci_sys_reset, set at early boot;
+		 * standard PSCI SYSTEM_RESET, served by the stock ATF). */
+		emergency_restart();
 		while (1)
 			cpu_relax();
 	} else {

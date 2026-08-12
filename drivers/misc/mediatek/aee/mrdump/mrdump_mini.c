@@ -546,9 +546,13 @@ static int mrdump_mini_cpu_regs(int cpu, struct pt_regs *regs,
 	char name[NOTE_NAME_SHORT];
 	int id;
 
+	/* Never re-run mrdump_mini_init() from the panic path: with no
+	 * reserved buffer that re-enters the failing init and recurses the
+	 * panic. No buffer simply means "nothing to record".
+	 */
 	if (mrdump_mini_ehdr == NULL)
-		mrdump_mini_init();
-	if (cpu >= AEE_MTK_CPU_NUMS || mrdump_mini_ehdr == NULL)
+		return -1;
+	if (cpu >= AEE_MTK_CPU_NUMS)
 		return -1;
 	if (regs == NULL)
 		return -1;
@@ -744,6 +748,12 @@ void mrdump_mini_ke_cpu_regs(struct pt_regs *regs)
 	int i;
 	unsigned long vaddr = 0;
 	unsigned long size = 0;
+
+	/* minirdump disabled: nothing to record, and the helpers below
+	 * (build_task_info, modules_info) are not all NULL-safe.
+	 */
+	if (mrdump_mini_ehdr == NULL)
+		return;
 
 	if (!regs) {
 		regs = &context;
@@ -998,14 +1008,18 @@ static void __init mrdump_mini_elf_header_init(void)
 			(unsigned long)mrdump_mini_size,
 			mrdump_mini_ehdr);
 	} else {
+		/* LK passes no memory_info and the stock DTB has no minirdump node,
+		 * so addr/size stay 0 here. Do not BUG() for a debug-only facility;
+		 * degrade to "minirdump disabled" instead (all runtime readers of
+		 * mrdump_mini_ehdr are NULL-guarded).
+		 */
 		LOGE("minirdump: [DT] illegal value 0x%x(0x%x)\n",
-				mrdump_mini_addr,
-				mrdump_mini_size);
-		mrdump_mini_fatal("illegal addr size");
+			mrdump_mini_addr,
+			mrdump_mini_size);
+		return;
 	}
 	if (mrdump_mini_ehdr == NULL) {
 		LOGE("mrdump mini reserve buffer fail");
-		mrdump_mini_fatal("header null pointer");
 		return;
 	}
 	memset_io(mrdump_mini_ehdr, 0, MRDUMP_MINI_HEADER_SIZE +
@@ -1020,6 +1034,14 @@ int mrdump_mini_init(void)
 	struct pt_regs regs;
 
 	mrdump_mini_elf_header_init();
+
+	/* No reserved buffer: minirdump stays disabled, but boot goes on.
+	 * Return 0 so the initcall records success.
+	 */
+	if (mrdump_mini_ehdr == NULL) {
+		LOGE("minirdump: disabled (no buffer)\n");
+		return 0;
+	}
 
 	fill_psinfo(&mrdump_mini_ehdr->psinfo.data);
 	fill_note_S(&mrdump_mini_ehdr->psinfo.note, "vmlinux", NT_PRPSINFO,

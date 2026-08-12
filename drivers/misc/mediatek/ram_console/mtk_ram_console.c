@@ -286,51 +286,13 @@ unsigned int ram_console_size(void)
 	return ram_console_buffer->sz_console;
 }
 
-#ifdef CONFIG_PSTORE
-void __weak pstore_bconsole_write(struct console *con, const char *s,
-		unsigned int c)
-{
-}
-
-void sram_log_save(const char *msg, int count)
-{
-	pstore_bconsole_write(NULL, msg, count);
-}
-
-void pstore_console_show(enum pstore_type_id type_id, struct seq_file *m,
-		void *v)
-{
-	struct pstore_info *psi = psinfo;
-	char *buf = NULL;
-	ssize_t size;
-	u64 id;
-	int count;
-	enum pstore_type_id type;
-	struct timespec time;
-	bool compressed;
-	ssize_t ecc_notice_size = 0;
-
-	if (!psi)
-		return;
-	mutex_lock(&psi->read_mutex);
-	if (psi->open && psi->open(psi))
-		goto out;
-
-	while ((size = psi->read(&id, &type, &count, &time, &buf, &compressed,
-					&ecc_notice_size, psi)) > 0) {
-		if (type == type_id)
-			seq_write(m, buf, size);
-		kfree(buf);
-		buf = NULL;
-	}
-
-	if (psi->close)
-		psi->close(psi);
-out:
-	mutex_unlock(&psi->read_mutex);
-}
-#else
-void sram_log_save(const char *msg, int count)
+/* The DRAM ring writer. The vendor code hid it under #ifndef CONFIG_PSTORE
+ * and, with PSTORE=y, compiled an sram_log_save that only forwards to
+ * pstore_bconsole_write(), a silent no-op until ramoops registers at
+ * device-initcall time (fs/pstore/platform.c checks psinfo). Compile the
+ * DRAM writer always and call it from both variants; the pstore forward
+ * stays. */
+static void ram_console_dram_save(const char *msg, int count)
 {
 	struct ram_console_buffer *buffer;
 	char *rc_console;
@@ -371,6 +333,56 @@ void sram_log_save(const char *msg, int count)
 	}
 
 }
+
+#ifdef CONFIG_PSTORE
+void __weak pstore_bconsole_write(struct console *con, const char *s,
+		unsigned int c)
+{
+}
+
+void sram_log_save(const char *msg, int count)
+{
+	ram_console_dram_save(msg, count);
+	pstore_bconsole_write(NULL, msg, count);
+}
+
+void pstore_console_show(enum pstore_type_id type_id, struct seq_file *m,
+		void *v)
+{
+	struct pstore_info *psi = psinfo;
+	char *buf = NULL;
+	ssize_t size;
+	u64 id;
+	int count;
+	enum pstore_type_id type;
+	struct timespec time;
+	bool compressed;
+	ssize_t ecc_notice_size = 0;
+
+	if (!psi)
+		return;
+	mutex_lock(&psi->read_mutex);
+	if (psi->open && psi->open(psi))
+		goto out;
+
+	while ((size = psi->read(&id, &type, &count, &time, &buf, &compressed,
+					&ecc_notice_size, psi)) > 0) {
+		if (type == type_id)
+			seq_write(m, buf, size);
+		kfree(buf);
+		buf = NULL;
+	}
+
+	if (psi->close)
+		psi->close(psi);
+out:
+	mutex_unlock(&psi->read_mutex);
+}
+#else
+void sram_log_save(const char *msg, int count)
+{
+	ram_console_dram_save(msg, count);
+}
 #endif
 
 #ifdef __aarch64__
@@ -402,12 +414,12 @@ void aee_sram_fiq_log(const char *msg)
 {
 	unsigned int count = strlen(msg);
 	int delay = 100;
-#ifndef CONFIG_PSTORE
-	unsigned int ram_console_buffer_size = ram_console_size();
 
-	if (FIQ_log_size + count > ram_console_buffer_size)
+	/* bounds check for the (now always-live) DRAM writer; was hidden
+	 * under #ifndef CONFIG_PSTORE */
+	if (ram_console_buffer == NULL ||
+	    FIQ_log_size + count > ram_console_size())
 		return;
-#endif
 
 	atomic_set(&rc_in_fiq, 1);
 
@@ -585,9 +597,13 @@ static int __init ram_console_init(struct ram_console_buffer *buffer,
 	memset_io((void *)buffer + buffer->off_linux, 0,
 			buffer_size - buffer->off_linux);
 	ram_console_init_desc(buffer->off_linux);
-#ifndef CONFIG_PSTORE
+	/* The vendor code skipped register_console() when CONFIG_PSTORE is set,
+	 * relying entirely on pstore/ramoops for console capture, but ramoops
+	 * only starts writing at device-initcall time, so a kernel that dies
+	 * between console_init and the ramoops probe leaves an initialised header
+	 * and an empty log body. Register the ram console always; it coexists
+	 * with the pstore console and captures printk from console_init onward. */
 	register_console(&ram_console);
-#endif
 	ram_console_init_val();
 	ram_console_init_done = 1;
 	return 0;
@@ -683,11 +699,8 @@ struct ram_console_memory_info {
 	u32 magic2;
 };
 
-static void ram_console_fatal(const char *str)
-{
-	pr_err("ram_console: FATAL:%s\n", str);
-	BUG();
-}
+/* ram_console_fatal (BUG on init errors) removed: a missing LK
+ * memory_info would turn into a silent pre-console panic loop. */
 
 void __weak pstore_set_addr_size(unsigned int addr, unsigned int size,
 		unsigned int console_size, unsigned int pmsg_size)
@@ -701,7 +714,7 @@ void __weak sram_log_store_set_addr_size(unsigned int addr, unsigned int size)
 {
 }
 
-static void ram_console_parse_memory_info(struct mem_desc_t *sram,
+static int ram_console_parse_memory_info(struct mem_desc_t *sram,
 		struct ram_console_memory_info *p_memory_info)
 {
 	struct ram_console_memory_info *memory_info = NULL;
@@ -719,8 +732,7 @@ static void ram_console_parse_memory_info(struct mem_desc_t *sram,
 		if (memory_info == NULL) {
 			pr_err("ram_console: [DT] offset:0x%x not map\n",
 					sram->offset);
-			ram_console_fatal("memory_info not map");
-			return;
+			return -1;
 		}
 		magic1 = memory_info->magic1;
 		magic2 = memory_info->magic2;
@@ -748,6 +760,7 @@ static void ram_console_parse_memory_info(struct mem_desc_t *sram,
 					mini_size, mini_addr);
 			memcpy(p_memory_info, memory_info,
 					sizeof(struct ram_console_memory_info));
+			return 0;
 		} else {
 			pr_err("ram_console: [DT] self (0x%x@0x%x)-0x%x@0x%x\n",
 					magic1, magic2,
@@ -758,13 +771,14 @@ static void ram_console_parse_memory_info(struct mem_desc_t *sram,
 			pr_err("ram_console: [DT] mrdump 0x%x@0x%x-0x%x@0x%x\n",
 					mini_size, mini_addr,
 					mrdump_size, mrdump_addr);
-			ram_console_fatal("illegal magic number");
+			/* 2017-era LK does not provide the memory_info
+			 * contract at all - not fatal, caller falls back */
 		}
 	} else {
 		pr_err("ram_console: [DT] offset:0x%x illegal\n",
 			sram->offset);
-		ram_console_fatal("illegal offset");
 	}
+	return -1;
 }
 
 static int __init ram_console_early_init(void)
@@ -776,49 +790,57 @@ static int __init ram_console_early_init(void)
 	struct ram_console_memory_info memory_info_data = {0};
 	unsigned int start, size;
 
-	if (of_scan_flat_dt(dt_get_ram_console, &sram)) {
-		ram_console_parse_memory_info(&sram, &memory_info_data);
+	if (of_scan_flat_dt(dt_get_ram_console, &sram) &&
+	    ram_console_parse_memory_info(&sram, &memory_info_data) == 0 &&
+	    (sram.def_type == RAM_CONSOLE_DEF_SRAM ||
+	     sram.def_type == RAM_CONSOLE_DEF_DRAM)) {
+		/* modern LK contract (chosen/ram_console + memory_info) */
 		if (sram.def_type == RAM_CONSOLE_DEF_SRAM) {
 			pr_info("ram_console: using sram:0x%x\n", sram.start);
 			start = sram.start;
 			size  = sram.size;
 			bufp = ioremap_wc(sram.start, sram.size);
-		} else if (sram.def_type == RAM_CONSOLE_DEF_DRAM) {
+		} else {
 			pr_info("ram_console: using dram:0x%x\n",
 					memory_info_data.dram_addr);
 			start = memory_info_data.dram_addr;
 			size = memory_info_data.dram_size;
 			bufp = remap_lowmem(start, size);
-		} else {
-			pr_err("ram_console: unknown def type:%d\n",
-					sram.def_type);
-			ram_console_fatal("unknown def type");
-			return -ENODEV;
-		}
-		/* unsigned long conversion:
-		 * make size equals to pointer size
-		 * to avoid build error as below for aarch64 case
-		 * (error: cast to 'struct ram_console_buffer *' from
-		 * smaller integer type 'unsigned int'
-		 * [-Werror,-Wint-to-pointer-cast])
-		 */
-		ram_console_buffer_pa =
-			(struct ram_console_buffer *)(unsigned long)start;
-		if (bufp) {
-			buffer_size = size;
-			if (bufp->sig != REBOOT_REASON_SIG) {
-				pr_err("ram_console: illegal sig:0x%x\n",
-						bufp->sig);
-				ram_console_fatal("illegal sig");
-			}
-		} else {
-			pr_err("ram_console: ioremap failed, [0x%x, 0x%x]\n",
-					start, size);
-			ram_console_fatal("ioremap failed");
 		}
 	} else {
-		pr_err("ram_console: of_scan_flat_dt failed\n");
-		ram_console_fatal("of_scan_flat_dt failed");
+		/* LK may pass no (or an older) chosen/ram_console contract; the vendor
+		 * code BUG()'d here, killing the boot inside console_init with no
+		 * output.
+		 *
+		 * Fallback layout: the stock windows (ram_console 0x43f00000, pstore
+		 * 0x43f10000) are re-initialised by the recovery kernel before the log
+		 * can be read, so use 0x5f000000, which survives reset + LK + recovery
+		 * boot. Read from recovery:
+		 *   dd if=/dev/mem bs=1 skip=1593835520 count=65536 -> strings */
+		pr_notice("ram_console: no LK memory_info, using m5c debug layout @0x5f000000\n");
+		start = 0x5f000000;
+		size = 0x10000;
+		bufp = remap_lowmem(start, size);
+		pstore_set_addr_size(0x5f010000, 0xe0000, 0x10000, 0x10000);
+	}
+	/* unsigned long conversion:
+	 * make size equals to pointer size
+	 * to avoid build error as below for aarch64 case
+	 * (error: cast to 'struct ram_console_buffer *' from
+	 * smaller integer type 'unsigned int'
+	 * [-Werror,-Wint-to-pointer-cast])
+	 */
+	ram_console_buffer_pa =
+		(struct ram_console_buffer *)(unsigned long)start;
+	if (bufp) {
+		buffer_size = size;
+		if (bufp->sig != REBOOT_REASON_SIG)
+			pr_err("ram_console: unexpected sig:0x%x (will re-init)\n",
+					bufp->sig);
+	} else {
+		pr_err("ram_console: map failed, [0x%x, 0x%x]\n",
+				start, size);
+		return -ENODEV;
 	}
 #else
 #error "CONFIG_OF NOT defined"
