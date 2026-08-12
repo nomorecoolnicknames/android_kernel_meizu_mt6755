@@ -16,6 +16,7 @@
 #include <linux/kernel.h>
 #include <linux/miscdevice.h>
 #include <linux/fs.h>
+#include <linux/bio.h>		/* expdb mirror via submit_bio */
 #include <linux/device.h>
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
@@ -40,6 +41,195 @@
 #include <mt-plat/aee.h>
 #include <mt-plat/sync_write.h>
 #include <ext_wd_drv.h>
+
+#ifdef CONFIG_MTK_WDT_DIAG_HARD
+/* WDT deadman: an own kthread kicks the WDT every second, so a healthy
+ * boot survives. At ~3 s it sets the RTC FAC_RESET spare bit so that a
+ * WDT reset should make LK boot recovery (same mechanism as "reboot
+ * recovery", wd_api.c); at 15 s it clears it and keeps kicking forever. A
+ * total freeze kills this thread, the kicks stop and the WDT resets the
+ * SoC. LK may not honour the bit on WDT resets; the manual Vol+ key combo
+ * is the reliable path. */
+#include <linux/workqueue.h>
+#include <linux/kthread.h>
+#include <linux/sched.h>	/* sched_clock() */
+extern void rtc_forge_mark_recovery(int on);
+extern void forge_kmark_ptr(int ms, unsigned long v);
+extern int forge_userspace_alive;	/* android.c: android0 configured */
+extern void __iomem *toprgu_base;	/* defined below (line ~96) */
+
+/* mirror the DRAM marker page (phys 0x7f000000, 1KB) and the
+ * ram console (phys 0x5f000000, 64KB) into the expdb partition (10MB,
+ * mmcblk0p10) once per deadman loop. eMMC survives ANY reset, including
+ * the cold PMIC-off that wipes DRAM — this ends the marker-capture
+ * lottery (p32/p33/p34 captures all came back 0xFF after cold-offs).
+ * Layout in expdb: offset 0 = 1KB marker page, offset 1MB = 64KB rc49. */
+static struct block_device *forge_expdb_bdev;
+#define FORGE_EXPDB_DEV		MKDEV(179, 10)	/* expdb = mmcblk0p10, 10MB */
+#define FORGE_MARK_PHYS		0x7f000000UL
+#define FORGE_RC_PHYS		0x5f000000UL
+#define FORGE_RC_SIZE		(64 * 1024)
+/* 2KB — bytes 0..1023 = live slots, 1024..2047 = previous-boot copy
+ * preserved by setup_arch (see forge_preserve_prev in arm64 setup.c). */
+#define FORGE_MARK_SIZE		2048
+
+/* returns the first submit_bio_wait error instead of swallowing it —
+ * p36b wrote nothing and the old void version could not tell us why. */
+static int forge_write_at(struct block_device *bdev, sector_t sect,
+			  void *data, int bytes)
+{
+	int off, err;
+
+	for (off = 0; off < bytes; off += PAGE_SIZE) {
+		struct bio *bio = bio_alloc(GFP_KERNEL, 1);
+		int len = min_t(int, PAGE_SIZE, bytes - off);
+
+		if (!bio)
+			return -ENOMEM;
+		bio->bi_bdev = bdev;
+		bio->bi_iter.bi_sector = sect + (off >> 9);
+		bio_set_op_attrs(bio, REQ_OP_WRITE, REQ_SYNC);
+		bio_add_page(bio, virt_to_page((unsigned long)data + off),
+			     len, offset_in_page((unsigned long)data + off));
+		err = submit_bio_wait(bio);
+		bio_put(bio);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
+static int forge_mirror_expdb(void)
+{
+	int err;
+
+	if (!forge_expdb_bdev) {
+		/* blkdev_get_by_dev needs the partition scanned by the msdc
+		 * probe, but NOT the /dev node (devtmpfs is only mounted by
+		 * userspace init — which a wedged boot never reaches). */
+		forge_expdb_bdev = blkdev_get_by_dev(FORGE_EXPDB_DEV,
+						     FMODE_WRITE, NULL);
+		if (IS_ERR(forge_expdb_bdev)) {
+			err = PTR_ERR(forge_expdb_bdev);
+			forge_expdb_bdev = NULL;	/* retry next loop */
+			return err;
+		}
+		pr_info("FORGE mirror: expdb open\n");
+	}
+	/* layout: sector 0 = 2KB marker page (live + prev-boot copy),
+	 * sector 2048 (1MB) = 64KB rc49 */
+	err = forge_write_at(forge_expdb_bdev, 0,
+			     phys_to_virt(FORGE_MARK_PHYS), FORGE_MARK_SIZE);
+	if (!err)
+		err = forge_write_at(forge_expdb_bdev, 2048,
+				     phys_to_virt(FORGE_RC_PHYS),
+				     FORGE_RC_SIZE);
+	return err;
+}
+
+/* the mirror lives in its OWN thread. In p36b it ran inside the kick
+ * loop, so a single stuck submit_bio_wait stopped the WDT kicks and turned
+ * an IO stall into a spurious WDT reset (prime suspect for the t=40s
+ * preloader flash). Slot 106 = (successful writes << 32) | last -errno. */
+static int forge_mirror_fn(void *arg)
+{
+	u64 ok = 0;
+	int err, early_done = 0;
+
+	while (!kthread_should_stop()) {
+		msleep(1000);
+		err = forge_mirror_expdb();
+		if (!err)
+			ok++;
+		/* one-shot EARLY rc49 snapshot at sector 4096 (2MB) —
+		 * the live ring at 1MB only holds the last ~40s, which kept
+		 * hiding the first-seconds evidence (ueventd, msdc, by-name
+		 * links). First successful loop ≈ earliest possible moment. */
+		if (!err && !early_done) {
+			early_done = !forge_write_at(forge_expdb_bdev, 4096,
+						     phys_to_virt(FORGE_RC_PHYS),
+						     FORGE_RC_SIZE);
+		}
+		forge_kmark_ptr(106, (ok << 32) | ((u32)early_done << 16) |
+				((u32)(-err) & 0xffff));
+	}
+	return 0;
+}
+
+/* (BUG C counterpart): stamp the oops/panic into DRAM slots that no
+ * healthy boot ever rewrites — they survive any number of warm cycles.
+ * Priority above ipanic_die so the stamps land even if aee crashes. */
+#include <linux/kdebug.h>
+#include <linux/notifier.h>
+static int forge_die_cb(struct notifier_block *nb, unsigned long cmd, void *p)
+{
+	struct die_args *a = p;
+
+	forge_kmark_ptr(107, 0xD1E0000UL | (cmd & 0xffff));
+	if (a && a->regs) {
+		forge_kmark_ptr(108, a->regs->pc);
+		forge_kmark_ptr(109, a->regs->regs[30]);
+	}
+	return NOTIFY_DONE;
+}
+static struct notifier_block forge_die_nb = {
+	.notifier_call = forge_die_cb, .priority = 0x7fffffff };
+
+static int forge_panic_cb(struct notifier_block *nb, unsigned long ev, void *p)
+{
+	forge_kmark_ptr(110, 0xBAD0BAD0UL);
+	return NOTIFY_DONE;
+}
+static struct notifier_block forge_panic_nb = {
+	.notifier_call = forge_panic_cb, .priority = 0x7fffffff };
+
+static int forge_deadman_fn(void *arg)
+{
+	int marked = 0, loops = 0;
+
+	/* marker slot 104: the deadman thread ran. */
+	forge_kmark_ptr(104, 1);
+	while (!kthread_should_stop()) {
+		u64 now_s = div_u64(sched_clock(), 1000000000);
+
+		if (!marked && now_s >= 3) {
+			rtc_forge_mark_recovery(1);
+			marked = 1;
+			pr_info("FORGE deadman: recovery boot-mode marked (RTC FAC_RESET)\n");
+		}
+		/* no deadline — a healthy boot must survive to adb.
+		 * Past 15 s = past the wedge window -> clear the recovery mark
+		 * so the next manual reboot lands in Android, and keep kicking
+		 * forever. If the box freezes, this thread dies too -> kicks
+		 * stop -> WDT fires -> warm reset; the mark is still set only
+		 * when the freeze hit inside the 3..15 s window. */
+		if (marked == 1 && now_s >= 15) {
+			rtc_forge_mark_recovery(0);
+			marked = 2;
+			pr_info("FORGE deadman: healthy window passed, recovery mark cleared\n");
+		}
+		/* Hard deadline by loop count (not sched_clock): 120 loops ~ 2-2.5
+		 * min, unless userspace has configured the android0 gadget
+		 * (forge_userspace_alive). A wedged boot then self-resets warm and the
+		 * DRAM markers survive. */
+		if (loops >= 120 && !forge_userspace_alive) {
+			forge_kmark_ptr(105, (unsigned long)loops);
+			pr_emerg("FORGE deadman: no userspace by %d loops, stop kicking -> WDT reset\n",
+				 loops);
+			break;
+		}
+		mt_reg_sync_writel(MTK_WDT_RESTART_KEY, MTK_WDT_RESTART);
+		forge_kmark_ptr(95, (u64)(++loops) | (now_s << 32));
+		/* NO IO here — the kick loop must never block on eMMC;
+		 * the expdb mirror runs in forge_mirror_fn. */
+		msleep(1000);
+	}
+	/* park: never kick again */
+	while (!kthread_should_stop())
+		msleep(5000);
+	return 0;
+}
+#endif
 
 #include <mach/wd_api.h>
 #ifdef CONFIG_MTK_MULTIBRIDGE_SUPPORT
@@ -243,9 +433,17 @@ int  mtk_wdt_confirm_hwreboot(void)
 
 void mtk_wdt_restart(enum wd_restart_type type)
 {
-
 #ifdef CONFIG_OF
 	struct device_node *np_rgu;
+#endif
+
+#ifdef CONFIG_MTK_WDT_DIAG_HARD
+	/* deadman: never kick; any hang warm-resets with DRAM (log + markers)
+	 * intact. See Kconfig help. */
+	return;
+#endif
+
+#ifdef CONFIG_OF
 
 	np_rgu = of_find_compatible_node(NULL, NULL, rgu_of_match[0].compatible);
 
@@ -695,7 +893,25 @@ static int mtk_wdt_probe(struct platform_device *dev)
 	#define MAGIC_NUM_MASK		(0x3)
 
 
-    #ifdef CONFIG_MTK_WD_KICKER	/* Initialize to dual mode */
+    #ifdef CONFIG_MTK_WDT_DIAG_HARD
+	/* deadman: plain reset mode like LK's arming, no dual/IRQ stage (an
+	 * IRQ-stage WDT cannot fire with IRQs wedged off), and nothing kicks it
+	 * here. */
+	pr_info("mtk_wdt_probe : DIAG_HARD deadman v2 (kick thread + recovery mark)\n");
+	mtk_wdt_mode_config(FALSE, FALSE, TRUE, FALSE, TRUE);
+	/* (A0.3): keep DRAM in self-refresh across a HW WDT reset.
+	 * p37 fact: after the WDT deadline reset every DRAM capture came back
+	 * 0xFF — plain reset mode re-inits DRAM in the preloader. DDR-reserve
+	 * restores the second (DRAM) evidence channel; if this preloader
+	 * ignores the bit we merely stay where we are. */
+	mtk_rgu_dram_reserved(1);
+	/* own kicker thread + recovery auto-mark (see top of file) */
+	kthread_run(forge_deadman_fn, NULL, "forge_deadman");
+	/* mirror in its own thread + die/panic stamps (slots 106-110) */
+	kthread_run(forge_mirror_fn, NULL, "forge_mirror");
+	register_die_notifier(&forge_die_nb);
+	atomic_notifier_chain_register(&panic_notifier_list, &forge_panic_nb);
+    #elif defined(CONFIG_MTK_WD_KICKER)	/* Initialize to dual mode */
 	pr_debug("mtk_wdt_probe : Initialize to dual mode\n");
 	mtk_wdt_mode_config(TRUE, TRUE, TRUE, FALSE, TRUE);
 	#else				/* Initialize to disable wdt */

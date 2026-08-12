@@ -368,6 +368,19 @@ void rtc_mark_recovery(void)
 	spin_unlock_irqrestore(&rtc_lock, flags);
 }
 
+/* Minimal recovery boot-mode mark for the WDT deadman. Sets/clears only
+ * the RTC_FAC_RESET spare bit, without the alarm and pwron-time side
+ * effects of rtc_mark_recovery(). LK boots the recovery image while the
+ * bit is set (same mechanism as "reboot recovery", wd_api.c). */
+void rtc_forge_mark_recovery(int on)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&rtc_lock, flags);
+	hal_rtc_set_spare_register(RTC_FAC_RESET, on ? 1 : 0);
+	spin_unlock_irqrestore(&rtc_lock, flags);
+}
+
 void rtc_mark_kpoc(void)
 {
 #if defined(CONFIG_MTK_KERNEL_POWER_OFF_CHARGING)

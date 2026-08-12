@@ -41,3 +41,18 @@ config MTK_WD_KICKER
 	  issue.
 
 	  Say Y here if you want to enable Mediatek watchdog kicker.
+
+config MTK_WDT_DIAG_HARD
+	bool "m5c bring-up: hard watchdog deadman (never kick, plain reset mode)"
+	default n
+	help
+	  Diagnostic-only mode for the m5c 4.9 bring-up: the probe arms the
+	  hardware WDT in plain reset mode (no dual/IRQ stage, same as LK's
+	  arming) and mtk_wdt_restart() becomes a no-op, so NOTHING ever
+	  kicks. Any hang - including an 'alive but stuck' state that still
+	  runs kthreads - ends in a warm reset within the timeout, which
+	  preserves DRAM (log window + markers). Without this, a boot
+	  that reaches the WDT driver and then wedges forces a long-press
+	  power-off, which cold-resets the PMIC and wipes all evidence
+	  (m5c P12 finding). Never enable in a production image: a healthy
+	  boot also resets ~30 s after power-on.
