@@ -22,7 +22,8 @@
 #define MT_NR_SPI               (256)
 #define NR_MT_IRQ_LINE          (GIC_PPI_OFFSET + MT_NR_PPI + MT_NR_SPI)
 
-/* #undef NR_IRQS */
+/* arm64 asm-generic/irq.h pre-defines NR_IRQS=64; ours must win */
+#undef NR_IRQS
 #define NR_IRQS   (NR_MT_IRQ_LINE+220)
 
 #define GIC_PPI_GLOBAL_TIMER    (GIC_PPI_OFFSET + 0)

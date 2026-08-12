@@ -27,3 +27,4 @@ endif
 endif
 
 obj-y += cmdq_mdp.o
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/$(MTK_PLATFORM)

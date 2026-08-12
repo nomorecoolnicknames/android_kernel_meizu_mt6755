@@ -13,6 +13,11 @@
 
 #include <linux/io.h>
 #include <linux/module.h>
+
+/* arm32 asm/io.h provides IOMEM(); arm64 does not */
+#ifndef IOMEM
+#define IOMEM(x)	((void __force __iomem *)(x))
+#endif
 #include <linux/smp.h>
 #include <linux/interrupt.h>
 #include <linux/cpu.h>

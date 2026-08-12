@@ -12,23 +12,33 @@
  */
 #include <linux/init.h>
 #include <linux/smp.h>
+#include <linux/sched.h>	/* sched_clock */
+/* sched_clock: declared in linux/sched.h in this tree */
 
 #include <asm/cpu_ops.h>
-#include <asm/psci.h>
+#include <linux/psci.h>	/* 4.9: asm/psci.h is gone */
 #include <mach/mt_spm_mtcmos.h>
 #include "mt_cpu_psci_ops.h"
 
 #ifdef CONFIG_SMP
 
-static int __init mt_psci_cpu_init(struct device_node *dn, unsigned int cpu)
+/* Boot markers (defined in arch/arm64/kernel/setup.c) */
+extern void forge_kmark(int ms);
+extern void forge_kmark_ptr(int ms, unsigned long v);
+
+
+/* 4.9 cpu_operations: cpu_init/cpu_init_idle take only the cpu number */
+static int __init mt_psci_cpu_init(unsigned int cpu)
 {
 	return 0;
 }
 
 static int __init mt_psci_cpu_prepare(unsigned int cpu)
 {
+	forge_kmark(23);		/* cpu_prepare entered */
 	if (cpu == 1)
 		spm_mtcmos_cpu_init();
+	forge_kmark(24);		/* cpu_prepare done (mtcmos init ok) */
 	return cpu_psci_ops.cpu_prepare(cpu);
 }
 
@@ -36,11 +46,19 @@ static int mt_psci_cpu_boot(unsigned int cpu)
 {
 	int ret;
 
+	forge_kmark(25);		/* cpu_boot entered */
+	/* Timestamped CPU-up markers (slots 88-90). */
+	forge_kmark_ptr(88, sched_clock());
 	ret = cpu_psci_ops.cpu_boot(cpu);
+	forge_kmark(26);		/* psci cpu_on returned */
+	forge_kmark_ptr(89, sched_clock());
 	if (ret < 0)
 		return ret;
 
-	return spm_mtcmos_ctrl_cpu(cpu, STA_POWER_ON, 1);
+	ret = spm_mtcmos_ctrl_cpu(cpu, STA_POWER_ON, 1);
+	forge_kmark(27);		/* mtcmos POWER_ON returned */
+	forge_kmark_ptr(90, sched_clock());
+	return ret;
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -51,6 +69,8 @@ static int mt_psci_cpu_disable(unsigned int cpu)
 
 static void mt_psci_cpu_die(unsigned int cpu)
 {
+	/* CPU power-down via ATF; slot 85 = sched_clock() at entry. */
+	forge_kmark_ptr(85, sched_clock());
 	cpu_psci_ops.cpu_die(cpu);
 }
 
@@ -67,10 +87,9 @@ static int mt_psci_cpu_kill(unsigned int cpu)
 #endif
 
 #ifdef CONFIG_CPU_IDLE
-static int mt_psci_cpu_init_idle(struct device_node *cpu_node,
-				 unsigned int cpu)
+static int mt_psci_cpu_init_idle(unsigned int cpu)
 {
-	return cpu_psci_ops.cpu_init_idle(cpu_node, cpu);
+	return cpu_psci_ops.cpu_init_idle(cpu);
 }
 
 static int mt_psci_cpu_suspend(unsigned long index)

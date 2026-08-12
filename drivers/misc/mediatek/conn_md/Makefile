@@ -20,6 +20,11 @@ ifneq ($(KERNELRELEASE),)
     ccflags-$(CONFIG_MTK_ECCCI_DRIVER) += -I$(srctree)/drivers/misc/mediatek/eccci/
     ccflags-$(CONFIG_MTK_CCCI_EXT) += -I$(srctree)/drivers/misc/mediatek/dual_ccci/
 
+    # mt6735 uses the eccci1 CCCI, not eccci: port_ipc.h and
+    # ccci_ipc_task_ID.h (included by conn_md_exp.h) live there.
+    ccflags-y += -I$(srctree)/drivers/misc/mediatek/eccci1/$(MTK_PLATFORM)
+    ccflags-y += -I$(srctree)/drivers/misc/mediatek/eccci1/
+
     ccflags-y += -I$(src)/include/
 
     obj-y += conn_md_bridge.o

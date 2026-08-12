@@ -20,22 +20,13 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/cmdq/v2/$(MTK_PLATFORM)/
 ccflags-y += $(call cc-option,-Wno-error=maybe-uninitialized)
 
-ifneq ($(CONFIG_ARM64), y)
-# For arm32
+# camera ISP requires CMDQ and SMI/MMDVFS; honour CONFIG_MTK_CAMERA_ISP so a
+# minimal kernel can build without them. The arm32/arm64 branches were
+# identical. The dummy object stays unconditional so built-in.o is always
+# regenerated (an empty obj-y leaves a stale built-in.o behind).
+obj-y += cameraisp_dummy2.o
+ifeq ($(CONFIG_MTK_CAMERA_ISP),y)
   ifeq ($(strip $(CONFIG_MACH_MT6735M)),y)
-    obj-y += cameraisp_dummy2.o
-    obj-y += camera_isp_D2.o
-    obj-y += camera_sysram_D2.o
-    obj-y += camera_pipe_mgr_D2.o
-  else
-    obj-y += camera_isp_D1.o
-    obj-y += camera_sysram_D1.o
-    obj-y += camera_fdvt_D1.o
-  endif
-else
-# For arm64
-  ifeq ($(strip $(CONFIG_MACH_MT6735M)),y)
-    obj-y += cameraisp_dummy2.o
     obj-y += camera_isp_D2.o
     obj-y += camera_sysram_D2.o
     obj-y += camera_pipe_mgr_D2.o

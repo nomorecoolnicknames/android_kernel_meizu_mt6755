@@ -22,7 +22,9 @@
 #include <asm/cacheflush.h>
 #include <asm/irqflags.h>
 #include <asm/neon.h>
-#include <asm/psci.h>
+#ifndef CONFIG_ARM64
+#include <asm/psci.h>	/* arm32 only; arm64 uses linux/psci.h above */
+#endif
 #include <asm/suspend.h>
 #include <asm/cpuidle.h>
 

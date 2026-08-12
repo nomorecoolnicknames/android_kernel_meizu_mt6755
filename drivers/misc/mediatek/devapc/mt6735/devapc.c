@@ -46,6 +46,9 @@
 #include <linux/clk.h>
 #endif
 
+/* mt_secure_call() / MTK_SIP_KERNEL_DAPC_INIT for the ATF path */
+#include <mach/mt_secure_api.h>
+
 #include "mt_device_apc.h"
 #include "mt_io.h"
 #include "sync_write.h"
@@ -716,8 +719,9 @@ static int check_vio_status(unsigned int module)
 }
 #endif
 
-#if defined(CONFIG_TRUSTONIC_TEE_SUPPORT) || defined(CONFIG_ARM_PSCI) || defined(CONFIG_MTK_PSCI)
-/* ATF or TEE runs this path */
+#if defined(CONFIG_TRUSTONIC_TEE_SUPPORT) || defined(CONFIG_ARM_PSCI) || defined(CONFIG_MTK_PSCI) || defined(CONFIG_ARM64)
+/* ATF or TEE runs this path; arm64 always has ATF on this platform
+ * (bootopt=64S3, atf-reserved-memory in the stock DTB) */
 
 static void start_devapc(void)
 {
