@@ -655,6 +655,29 @@ int m4u_destroy_sgtable(struct sg_table *table)
 
 /* #define __M4U_MAP_MVA_TO_KERNEL_FOR_DEBUG__ */
 
+/* Pre-map the unmapped 1 MB-block tail of DISP buffers to a shared zeroed
+ * scratch page, so OVL/RDMA scan-out prefetch past the buffer end never
+ * M4U-faults (the fault-then-remap sequence glitched the first scan-out of
+ * every new buffer). Switchable at runtime. */
+static bool m6_disp_pad = true;
+module_param_named(disp_pad, m6_disp_pad, bool, 0644);
+static unsigned int m6_disp_pad_count;
+module_param_named(disp_pad_count, m6_disp_pad_count, uint, 0444);
+
+static struct page *m6_get_disp_pad_page(void)
+{
+	static struct page *pg;
+	static DEFINE_MUTEX(lk);
+
+	if (!pg) {
+		mutex_lock(&lk);
+		if (!pg)
+			pg = alloc_page(GFP_KERNEL | __GFP_ZERO);
+		mutex_unlock(&lk);
+	}
+	return pg;
+}
+
 int m4u_alloc_mva(m4u_client_t *client, M4U_PORT_ID port,
 		  unsigned long va, struct sg_table *sg_table,
 		  unsigned int size, unsigned int prot, unsigned int flags, unsigned int *pMva)
@@ -742,6 +765,38 @@ int m4u_alloc_mva(m4u_client_t *client, M4U_PORT_ID port,
 	pMvaInfo->mva = mva;
 	pMvaInfo->mva_align = mva_align;
 	pMvaInfo->size_align = size_align;
+
+	/* Pad the DISP (larb0) buffer's block tail with scratch so OVL/RDMA
+	 * prefetch-past-end reads valid pages instead of faulting. blk_end = end
+	 * of the block containing the last mapped page, which is always inside
+	 * this allocation's reserved blocks; the tail is unused by any other
+	 * buffer. size_align is grown so m4u_dealloc_mva -> m4u_unmap clears these
+	 * scratch PTEs (it only zeroes PTEs, no put_page, so over-unmap is safe),
+	 * keeping the block clean for later reuse. */
+	if (m6_disp_pad && m4u_port_2_larb_id(port) == 0) {
+		extern int m4u_map_4K(m4u_domain_t *m4u_domain, unsigned int mva,
+				      phys_addr_t pa, unsigned int prot);
+		unsigned int pad_start = mva_align + size_align;
+		unsigned int blk_end = round_up(mva + size, 0x100000u);
+		struct page *sp = m6_get_disp_pad_page();
+		m4u_domain_t *dom = m4u_get_domain_by_port(port);
+		unsigned int p;
+		int padded = 0;
+
+		if (sp && dom) {
+			for (p = pad_start; p < blk_end; p += PAGE_SIZE) {
+				if (m4u_map_4K(dom, p, page_to_phys(sp),
+					       M4U_PROT_READ | M4U_PROT_WRITE))
+					break;
+				padded++;
+			}
+			if (padded) {
+				pMvaInfo->size_align = blk_end - mva_align;
+				m6_disp_pad_count += padded;
+			}
+		}
+	}
+
 	*pMva = mva;
 
 	if (flags & M4U_FLAGS_SEQ_ACCESS)
@@ -2326,7 +2381,7 @@ static long MTK_M4U_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
 {
 	int ret = 0;
 	M4U_MOUDLE_STRUCT m4u_module;
-#ifdef M4U_FPGAPORTING
+#if defined(M4U_FPGAPORTING) || defined(CONFIG_MACH_MT6755)
 	M4U_PORT_STRUCT m4u_port;
 #endif
 	M4U_PORT_ID ModuleID;
@@ -2447,7 +2502,7 @@ static long MTK_M4U_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
 				m4u_dma_data.size, m4u_dma_data.mva,
 				m4u_dma_data.eDMAType, m4u_dma_data.eDMADir);
 		break;
-#ifdef M4U_FPGAPORTING
+#if defined(M4U_FPGAPORTING) || defined(CONFIG_MACH_MT6755)
 	case MTK_M4U_T_CONFIG_PORT:
 		ret = copy_from_user(&m4u_port, (void *)arg, sizeof(M4U_PORT_STRUCT));
 		if (ret) {
@@ -2458,6 +2513,18 @@ static long MTK_M4U_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
 			M4UMSG("MTK_M4U_T_CONFIG_PORT, port%d is invalid\n", m4u_port.ePortID);
 			return -EFAULT;
 		}
+#ifndef M4U_FPGAPORTING
+		/*
+		 * The hwcomposer.mt6755.so blob configures the display ports itself and
+		 * expects this to work. Allow it again, but only to put a port behind the
+		 * M4U, never to take one out of it or into secure mode.
+		 */
+		if (m4u_port.Virtuality != 1 || m4u_port.Security != 0) {
+			M4UMSG("MTK_M4U_T_CONFIG_PORT, port%d virt=%u sec=%u refused\n",
+			       m4u_port.ePortID, m4u_port.Virtuality, m4u_port.Security);
+			return -EPERM;
+		}
+#endif
 #ifdef M4U_TEE_SERVICE_ENABLE
 		mutex_lock(&gM4u_sec_init);
 #endif
