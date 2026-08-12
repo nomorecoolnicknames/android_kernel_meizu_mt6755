@@ -25,20 +25,37 @@
 #define SIP_SVC_E_INVALID_Range         -3
 #define SIP_SVC_E_PERMISSION_DENY       -4
 
-#define MTK_SIP_KERNEL_MCUSYS_WRITE         0x82000287
-#define MTK_SIP_KERNEL_MCUSYS_ACCESS_COUNT  0x82000288
-#define MTK_SIP_KERNEL_L2_SHARING           0x82000286
-#define MTK_SIP_KERNEL_WDT                  0x82000200
+/*
+ * The SIP function IDs below were renumbered in a newer MTK BSP, but the
+ * stock ATF of this device implements the original numbering. With the new
+ * IDs the SMC is rejected and the call silently has no effect: e.g.
+ * enable_cpuxgpt() writes MCUCFG via mcusys_smc_write_phy() =
+ * SMC(MTK_SIP_KERNEL_MCUSYS_WRITE); with 0x82000287 ATF drops it,
+ * EN_CPUXGPT is never set, CNTPCT stays 0, the first timed sleep never
+ * wakes and boot hangs in workqueue_init. Values match the stock 3.18
+ * header, which is what this ATF speaks.
+ */
+#define MTK_SIP_KERNEL_MCUSYS_WRITE         0x82000201
+#define MTK_SIP_KERNEL_MCUSYS_ACCESS_COUNT  0x82000202
+#define MTK_SIP_KERNEL_L2_SHARING           0x82000203
+#define MTK_SIP_KERNEL_WDT                  0x82000204
 
 #define TBASE_SMC_AEE_DUMP                  (0xB200AEED)
-#define MTK_SIP_KERNEL_GIC_DUMP         0x82000201
-#define MTK_SIP_KERNEL_DAPC_INIT        0x8200026E
-#define MTK_SIP_KERNEL_EMIMPU_WRITE         0x82000260
-#define MTK_SIP_KERNEL_EMIMPU_READ          0x82000261
-#define MTK_SIP_KERNEL_EMIMPU_SET           0x82000262
+#define MTK_SIP_KERNEL_GIC_DUMP         0x82000205
+#define MTK_SIP_KERNEL_DAPC_INIT        0x82000206
+#define MTK_SIP_KERNEL_EMIMPU_WRITE         0x82000207
+#define MTK_SIP_KERNEL_EMIMPU_READ          0x82000208
+#define MTK_SIP_KERNEL_EMIMPU_SET           0x82000209
+#define MTK_SIP_KERNEL_MSG                  0x820002ff
+/*
+ * IDs below are not in the stock ATF map, so the ATF has no handler for
+ * them and the calls are no-ops on this device. TIME_SYNC is moved off
+ * 0x82000202 so it can never collide with the ACCESS_COUNT handler if
+ * atf_logger ever issues it. ICACHE_DUMP / GPIO_* keep their unique values
+ * (no collision with 0x820002xx).
+ */
 #define MTK_SIP_KERNEL_ICACHE_DUMP          0x82000284
-#define MTK_SIP_KERNEL_TIME_SYNC		0x82000202
-#define MTK_SIP_KERNEL_MSG                  0x82000214
+#define MTK_SIP_KERNEL_TIME_SYNC		0x820002fe
 #define MTK_SIP_KERNEL_GPIO_WRITE   0xC20002A1
 #define MTK_SIP_KERNEL_GPIO_READ    0xC20002A2
 
