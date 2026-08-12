@@ -150,6 +150,7 @@ struct compat_ion_mm_data {
 		struct compat_ion_mm_buf_debug_info  buf_debug_info_param;
 		struct compat_ion_mm_pool_info  pool_info_param;
 		struct compat_ion_mm_get_iova_param get_phys_param;
+		struct compat_ion_mm_sf_buf_info sf_buf_info_param;
 	};
 };
 
@@ -440,6 +441,38 @@ static int compat_put_ion_mm_buf_debug_info(
 	return err;
 }
 
+/* ION_MM_SET/GET_SF_BUF_INFO for 32-bit callers */
+static int compat_get_ion_mm_sf_buf_info(
+			struct compat_ion_mm_sf_buf_info __user *data32,
+			struct ion_mm_sf_buf_info __user *data)
+{
+	compat_int_t handle;
+	unsigned int info;
+	int i, err;
+
+	err = get_user(handle, &data32->handle);
+	err |= put_user(handle, &data->handle);
+	for (i = 0; i < ION_MM_SF_BUF_INFO_LEN; i++) {
+		err |= get_user(info, &data32->info[i]);
+		err |= put_user(info, &data->info[i]);
+	}
+	return err;
+}
+
+static int compat_put_ion_mm_sf_buf_info(
+			struct compat_ion_mm_sf_buf_info __user *data32,
+			struct ion_mm_sf_buf_info __user *data)
+{
+	unsigned int info;
+	int i, err = 0;
+
+	for (i = 0; i < ION_MM_SF_BUF_INFO_LEN; i++) {
+		err |= get_user(info, &data->info[i]);
+		err |= put_user(info, &data32->info[i]);
+	}
+	return err;
+}
+
 static int compat_get_ion_mm_data(struct compat_ion_mm_data *data32,
 				  struct ion_mm_data *data)
 {
@@ -481,6 +514,14 @@ static int compat_get_ion_mm_data(struct compat_ion_mm_data *data32,
 			&data->buf_debug_info_param);
 		break;
 	}
+	case ION_MM_SET_SF_BUF_INFO:
+	case ION_MM_GET_SF_BUF_INFO:
+	{
+		err |= compat_get_ion_mm_sf_buf_info(
+			&data32->sf_buf_info_param,
+			&data->sf_buf_info_param);
+		break;
+	}
 	case ION_MM_ACQ_CACHE_POOL:
 	case ION_MM_QRY_CACHE_POOL:
 	{
@@ -504,6 +545,13 @@ static int compat_put_ion_mm_data(struct compat_ion_mm_data *data32,
 	err |= put_user(mm_cmd, &data32->mm_cmd);
 
 	switch (mm_cmd) {
+	case ION_MM_GET_SF_BUF_INFO:
+	{
+		err |= compat_put_ion_mm_sf_buf_info(
+			&data32->sf_buf_info_param,
+			&data->sf_buf_info_param);
+		break;
+	}
 	case ION_MM_GET_DEBUG_INFO:
 	{
 		err |= compat_put_ion_mm_buf_debug_info(

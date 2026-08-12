@@ -36,6 +36,11 @@ enum ION_MM_CMDS {
 	ION_MM_CONFIG_BUFFER_EXT,
 	ION_MM_ACQ_CACHE_POOL,
 	ION_MM_QRY_CACHE_POOL,
+	/* referenced by compat_ion.c and struct ion_mm_data in this header,
+	 * but the enum members were missing in this tree's merge state;
+	 * ion_drv.c does not implement them, callers get -EINVAL. */
+	ION_MM_GET_IOVA,
+	ION_MM_GET_IOVA_EXT,
 };
 
 enum ION_SYS_CMDS {
@@ -216,6 +221,9 @@ struct ion_mm_data {
 		struct ion_mm_buf_debug_info buf_debug_info_param;
 		struct ion_mm_pool_info pool_info_param;
 		struct ion_mm_get_iova_param get_phys_param;
+		/* for the hwcomposer.mt6755.so blob; no larger than
+		 * buf_debug_info_param, so the ABI size is kept */
+		struct ion_mm_sf_buf_info sf_buf_info_param;
 	};
 };
 
