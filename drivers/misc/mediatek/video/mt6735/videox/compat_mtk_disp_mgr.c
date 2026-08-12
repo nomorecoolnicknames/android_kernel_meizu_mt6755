@@ -12,6 +12,7 @@
  */
 
 #include "compat_mtk_disp_mgr.h"
+#include "disp_drv_log.h"	/* DISPDBG/DISPERR */
 
 #include "mtk_sync.h"
 

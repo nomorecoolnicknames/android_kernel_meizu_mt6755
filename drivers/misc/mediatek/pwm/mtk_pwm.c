@@ -1861,8 +1861,18 @@ static int mt_pwm_probe(struct platform_device *pdev)
 		IRQF_TRIGGER_LOW, PWM_DEVICE, NULL);
 #endif
 	if (ret < 0) {
-		pr_err(T "[PWM]Request IRQ %d failed-------\n", pwm_irqnr);
-		return ret;
+		/* do not fail the probe over this interrupt.
+		 *
+		 * The 3.18 kernel that drives this hardware correctly never
+		 * requests it at all — the whole block is #if 0'd out there
+		 * and the request_irq call is commented out — so the driver
+		 * is fully functional without it. With PWM_LDVT_FLAG at 0 the
+		 * handler only acknowledges and logs; nothing in the driver
+		 * waits on it. Aborting here left the PWM device unbound
+		 * entirely for the sake of a diagnostic interrupt.
+		 */
+		pr_err(T "[PWM]request IRQ %d failed (%d), continuing without it\n",
+		       pwm_irqnr, ret);
 	}
 	pr_debug(T "pwm probe Done!!\n");
 

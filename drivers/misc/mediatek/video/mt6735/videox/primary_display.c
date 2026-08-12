@@ -4547,6 +4547,19 @@ static int _ovl_fence_release_callback(uint32_t userdata)
 			cmdqBackupReadSlot(pgc->cur_config_fence, i, &fence_idx);
 			cmdqBackupReadSlot(pgc->subtractor_when_free, i, &subtractor);
 			mtkfb_release_fence(primary_session_id, i, fence_idx - subtractor);
+			/* does the CMDQ completion callback ever run?
+			 * The present fence advances straight from the trigger
+			 * ioctl, but layer fences are released only from here —
+			 * if this is silent while frames keep arriving, the
+			 * callback is the broken half. */
+			if (i == 0) {
+				static unsigned int forge_rel_count;
+
+				forge_rel_count++;
+				if (forge_rel_count <= 8 || forge_rel_count % 100 == 0)
+					pr_err("forge-frame: release #%u L0 idx=%d sub=%d\n",
+					       forge_rel_count, fence_idx, subtractor);
+			}
 		}
 		mmprofile_log_ex(ddp_mmp_get_events()->primary_ovl_fence_release, MMPROFILE_FLAG_PULSE,
 			       i, fence_idx - subtractor);
@@ -5092,8 +5105,13 @@ int primary_display_init(char *lcm_name, unsigned int lcm_fps, int is_lcm_inited
 
 	pr_warn("[DISP]primary_display_init begin\n");
 
+/* step ladder, see mtkfb.c */
+#define FKS(v) do { extern void forge_kmark_ptr(int, unsigned long); \
+		forge_kmark_ptr(126, (v)); } while (0)
+	FKS(0x20);
 	dprec_init();
 	dpmgr_init();
+	FKS(0x21);
 
 
 #ifndef MTK_FB_CMDQ_DISABLE
@@ -5123,8 +5141,14 @@ int primary_display_init(char *lcm_name, unsigned int lcm_fps, int is_lcm_inited
 	mutex_init(&(pgc->switch_dst_lock));
 #endif
 	_primary_path_lock(__func__);
+	FKS(0x22);
 
 	pgc->plcm = disp_lcm_probe(lcm_name, LCM_INTERFACE_NOTDEFINED, is_lcm_inited);
+	FKS(0x23);
+	{
+		extern void forge_kmark_ptr(int, unsigned long);
+		forge_kmark_ptr(76, (unsigned long)pgc->plcm);
+	}
 
 	if (pgc->plcm == NULL) {
 		DISPERR("disp_lcm_probe returns null\n");
@@ -5181,9 +5205,11 @@ int primary_display_init(char *lcm_name, unsigned int lcm_fps, int is_lcm_inited
 #else
 	primary_display_use_cmdq = CMDQ_DISABLE;
 #endif
+	FKS(0x24);
 
 	/* debug for bus hang issue (need to remove) */
 	ddp_dump_analysis(DISP_MODULE_CONFIG);
+	FKS(0x25);
 	if (primary_display_mode == DIRECT_LINK_MODE) {
 		__build_path_direct_link();
 		pgc->session_mode = DISP_SESSION_DIRECT_LINK_MODE;
@@ -5235,13 +5261,17 @@ int primary_display_init(char *lcm_name, unsigned int lcm_fps, int is_lcm_inited
 	dpmgr_path_reset(pgc->dpmgr_handle, CMDQ_DISABLE);
 #endif
 
+	FKS(0x26);
 	if (primary_display_use_cmdq == CMDQ_ENABLE) {
 		_cmdq_build_trigger_loop();
+		FKS(0x27);
 		_cmdq_start_trigger_loop();
+		FKS(0x28);
 		_cmdq_reset_config_handle();
 		_cmdq_insert_wait_frame_done_token();
 	}
 
+	FKS(0x29);
 
 	data_config = dpmgr_path_get_last_config(pgc->dpmgr_handle);
 
@@ -5468,6 +5498,7 @@ int primary_display_init(char *lcm_name, unsigned int lcm_fps, int is_lcm_inited
 	    (mmdvfs_get_mmdvfs_profile() == MMDVFS_PROFILE_D2_M_PLUS))
 		/* register_mmclk_switch_cb(primary_display_switch_mmsys_clk, _switch_mmsys_clk); */
 done:
+	FKS(0x2F);
 
 	/* disable OVL TF in video mode, cause cmdq/sodi log is not ready, avoid too much TF issue */
 	{
@@ -7781,6 +7812,61 @@ int primary_display_is_ovl1to2_handle(cmdqRecHandle *handle)
 		return 1;
 	else
 		return 0;
+}
+
+/*
+ * put the DDP crossbar into the scenario this handle was built
+ * for, through the driver rather than by hand.
+ *
+ * The path is created at init but connected only from the resume paths, so
+ * at boot the mux registers keep whatever the bootloader left: OVL0 feeding
+ * WDMA0 and the DSI fed from UFOE, a block this chip does not have. The
+ * overlay is then configured perfectly and its pixels go to memory, while
+ * the panel keeps scanning the bootloader's last frame. Writing the mux
+ * registers directly does not survive — the driver rewrites them — so ask
+ * the path manager to do it, which also updates the mutex to match.
+ */
+/*
+ * what the driver believes the path is, so it can be compared
+ * against what the mux registers actually say. A driver in DIRECT_LINK
+ * against hardware wired for decouple sends the overlay's pixels to
+ * memory while the panel scans something else entirely.
+ */
+/*
+ * release every outstanding fence of a primary layer, once.
+ *
+ * The driver releases layer fences as cur_fence minus one, so the frame
+ * currently on the panel stays held until the next one is configured.
+ * The vendor HWC will not configure the next one until an overlay comes
+ * back, and the overlay comes back with that very fence — so once the
+ * pipeline pauses, neither side can move. This breaks the tie by hand to
+ * test whether that is really the loop we are stuck in.
+ */
+void forge_release_layer(unsigned int layer)
+{
+	if (layer >= PRIMARY_DISPLAY_SESSION_LAYER_COUNT) {
+		pr_err("forge-rel: bad layer %u\n", layer);
+		return;
+	}
+	pr_err("forge-rel: releasing all fences of layer %u\n", layer);
+	mtkfb_release_layer_fence(primary_session_id, layer);
+}
+
+void forge_report_mode(void)
+{
+	pr_err("forge-path: driver session_mode=%d pgc->mode=%d handle=%p ovl2mem=%p\n",
+	       pgc->session_mode, pgc->mode, pgc->dpmgr_handle, pgc->ovl2mem_path_handle);
+}
+
+void forge_reconnect_primary(void)
+{
+	if (!pgc->dpmgr_handle) {
+		pr_err("forge-path: no primary handle\n");
+		return;
+	}
+	pr_err("forge-path: reconnecting primary path\n");
+	dpmgr_path_connect(pgc->dpmgr_handle, CMDQ_DISABLE);
+	dpmgr_path_start(pgc->dpmgr_handle, CMDQ_DISABLE);
 }
 
 int primary_display_diagnose(void)

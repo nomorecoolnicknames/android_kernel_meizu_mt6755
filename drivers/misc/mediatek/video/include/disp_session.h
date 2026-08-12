@@ -578,6 +578,139 @@ enum DISP_SELF_REFRESH_TYPE {
 	DISP_IOW(218, unsigned int)
 #define DISP_IOCTL_GET_DISPLAY_CAPS	\
 	DISP_IOW(219, struct disp_caps_info)
+
+/*
+ * The legacy ABI the device userspace speaks.
+ *
+ * The MTK hwcomposer blob for the m5c was built against the 3.18 MTK
+ * display driver, where GET_DISPLAY_CAPS is ioctl nr 218 and
+ * disp_caps_info is six words. This tree inserted GET_IS_DRIVER_SUSPEND
+ * at 218 and grew disp_caps_info (rsz lists, lcm_degree, ...), so both
+ * the number and the size encoded in _IOW changed, and the blob reports
+ * "! Failed to get display device cap". The sizes differ, so the legacy
+ * number does not collide with GET_IS_DRIVER_SUSPEND and both can be
+ * served.
+ */
+/*
+ * The legacy session-info layout: hwcomposer calls nr=208 with a 72-byte
+ * payload, the 18-word 3.18 struct. This tree inserted
+ * physicalWidthUm/physicalHeightUm/density in the middle, so the size
+ * (and therefore the _IOW-encoded number) changed and the call reaches no
+ * handler. Without it the HAL has no display size and SurfaceFlinger
+ * composes at the wrong geometry.
+ */
+struct disp_session_info_legacy {
+	unsigned int session_id;
+	unsigned int maxLayerNum;
+	unsigned int isHwVsyncAvailable;
+	unsigned int displayType;
+	unsigned int displayWidth;
+	unsigned int displayHeight;
+	unsigned int displayFormat;
+	unsigned int displayMode;
+	unsigned int vsyncFPS;
+	unsigned int physicalWidth;
+	unsigned int physicalHeight;
+	unsigned int isConnected;
+	unsigned int isHDCPSupported;
+	unsigned int isOVLDisabled;
+	unsigned int is3DSupport;
+	unsigned int const_layer_num;
+	unsigned int updateFPS;
+	unsigned int is_updateFPS_stable;
+};
+
+#define DISP_IOCTL_GET_SESSION_INFO_LEGACY	\
+	DISP_IOW(208, struct disp_session_info_legacy)
+
+struct disp_caps_info_legacy {
+	unsigned int output_mode;
+	unsigned int output_pass;
+	unsigned int max_layer_num;
+	unsigned int disp_feature;
+	int is_support_frame_cfg_ioctl;
+	int is_output_rotated;
+};
+
+#define DISP_IOCTL_GET_DISPLAY_CAPS_LEGACY	\
+	DISP_IOW(218, struct disp_caps_info_legacy)
+
+/*
+ * the per-frame layer list, in the 3.18 layout.
+ *
+ * This is the ioctl that actually puts pixels on the panel. Between 3.18
+ * and 4.9 disp_input_config grew fence/dirty-ROI/compression members, the
+ * geometry fields shrank from u32 to u16, the small flags became u8 and
+ * the array went from 8 to 12 layers. Size therefore moved 1168 -> 1648,
+ * the _IOW number moved with it, and every frame the vendor HAL sent was
+ * rejected as an unknown ioctl. The pixel path stayed dark in the most
+ * literal way: no layer was ever enabled, OVL_SRC_CON read back 0, and
+ * the overlay emitted its background colour (opaque black) over a
+ * perfectly configured ROI, address and pitch.
+ *
+ * Field order below is the 3.18 one verbatim, so the struct the HAL
+ * writes maps onto this one member for member.
+ */
+struct disp_input_config_legacy {
+	unsigned int layer_id;
+	unsigned int layer_enable;
+	enum DISP_BUFFER_SOURCE buffer_source;
+	void *src_base_addr;
+	void *src_phy_addr;
+	unsigned int src_direct_link;
+	enum DISP_FORMAT src_fmt;
+	unsigned int src_use_color_key;
+	unsigned int src_color_key;
+	unsigned int src_pitch;
+	unsigned int src_offset_x, src_offset_y;
+	unsigned int src_width, src_height;
+
+	unsigned int tgt_offset_x, tgt_offset_y;
+	unsigned int tgt_width, tgt_height;
+	enum DISP_ORIENTATION layer_rotation;
+	enum DISP_LAYER_TYPE layer_type;
+	enum DISP_ORIENTATION video_rotation;
+
+	unsigned int isTdshp;
+
+	unsigned int next_buff_idx;
+	int identity;
+	int connected_type;
+	enum DISP_BUFFER_TYPE security;
+	unsigned int alpha_enable;
+	unsigned int alpha;
+	unsigned int sur_aen;
+	enum DISP_ALPHA_TYPE src_alpha;
+	enum DISP_ALPHA_TYPE dst_alpha;
+	unsigned int frm_sequence;
+	enum DISP_YUV_RANGE_ENUM yuv_range;
+};
+
+struct disp_session_input_config_legacy {
+	enum DISP_SESSION_USER setter;
+	unsigned int session_id;
+	unsigned int config_layer_num;
+	struct disp_input_config_legacy config[8];
+};
+
+#define DISP_IOCTL_SET_INPUT_BUFFER_LEGACY	\
+	DISP_IOW(206, struct disp_session_input_config_legacy)
+
+/*
+ * from 215 upwards the whole table is shifted by one against
+ * 3.18 (4.9 inserted DISP_IOCTL_GET_VSYNC_FPS at 215). What the HAL calls
+ * 216 is GET_PRESENT_FENCE, not SET_VSYNC_FPS, and its two output members
+ * are in the opposite order, so the number and the layout both need
+ * translating.
+ */
+struct disp_present_fence_legacy {
+	unsigned int session_id;
+	unsigned int index;
+	int fence_fd;
+};
+
+#define DISP_IOCTL_GET_PRESENT_FENCE_LEGACY	\
+	DISP_IOW(216, struct disp_present_fence_legacy)
 #define DISP_IOCTL_INSERT_SESSION_BUFFERS	\
 	DISP_IOW(220, struct disp_session_buf_info)
 #define	DISP_IOCTL_FRAME_CONFIG	\

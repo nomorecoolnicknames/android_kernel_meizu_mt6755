@@ -837,6 +837,36 @@ static long cmdq_ioctl(struct file *pFile, unsigned int code,
 			return -EFAULT;
 		}
 		break;
+	case CMDQ_IOCTL_QUERY_DTS_LEGACY:
+		/* same data in the 27-subsys layout the userspace
+		 * blobs expect (see cmdq_def.h). */
+		do {
+			struct cmdqDTSDataStruct *pDtsData;
+			struct cmdqDTSDataStruct_legacy *pLegacy;
+			int ret_legacy = 0;
+
+			pDtsData = cmdq_core_get_whole_DTS_Data();
+			pLegacy = kzalloc(sizeof(*pLegacy), GFP_KERNEL);
+			if (!pLegacy)
+				return -ENOMEM;
+
+			memcpy(pLegacy->eventTable, pDtsData->eventTable,
+			       sizeof(pLegacy->eventTable));
+			memcpy(pLegacy->subsys, pDtsData->subsys,
+			       sizeof(pLegacy->subsys));
+			memcpy(pLegacy->MDPBaseAddress, pDtsData->MDPBaseAddress,
+			       sizeof(pLegacy->MDPBaseAddress));
+
+			if (copy_to_user((void *)param, pLegacy,
+					 sizeof(*pLegacy))) {
+				CMDQ_ERR("Copy legacy DTS to user failed\n");
+				ret_legacy = -EFAULT;
+			}
+			kfree(pLegacy);
+			if (ret_legacy)
+				return ret_legacy;
+		} while (0);
+		break;
 	case CMDQ_IOCTL_QUERY_DTS:
 		do {
 			struct cmdqDTSDataStruct *pDtsData;
@@ -886,6 +916,7 @@ static long cmdq_ioctl_compat(struct file *pFile, unsigned int code,
 	case CMDQ_IOCTL_READ_ADDRESS_VALUE:
 	case CMDQ_IOCTL_QUERY_CAP_BITS:
 	case CMDQ_IOCTL_QUERY_DTS:
+	case CMDQ_IOCTL_QUERY_DTS_LEGACY:
 	case CMDQ_IOCTL_NOTIFY_ENGINE:
 		/* All ioctl structures should be the same size in 32-bit and
 		 * 64-bit linux.
@@ -1014,14 +1045,30 @@ static int cmdq_probe(struct platform_device *pDevice)
 
 	CMDQ_MSG("CMDQ driver probe begin\n");
 
+	/* step ladder */
+	{
+		extern void forge_kmark_ptr(int, unsigned long);
+		forge_kmark_ptr(126, 0x42UL);
+	}
+
 	/* Function link */
 	cmdq_virtual_function_setting();
 
 	/* init cmdq device related data */
 	cmdq_dev_init(pDevice);
 
+	{
+		extern void forge_kmark_ptr(int, unsigned long);
+		forge_kmark_ptr(126, 0x43UL);	/* dev_init done */
+	}
+
 	/* init cmdq context */
 	cmdqCoreInitialize();
+
+	{
+		extern void forge_kmark_ptr(int, unsigned long);
+		forge_kmark_ptr(126, 0x44UL);	/* core initialized */
+	}
 
 	status =
 		alloc_chrdev_region(&gCmdqDevNo, 0, 1, CMDQ_DRIVER_DEVICE_NAME);
@@ -1153,6 +1200,11 @@ static int __init cmdq_init(void)
 {
 	int status;
 
+	/* display step ladder (see mtkfb.c) */
+	{
+		extern void forge_kmark_ptr(int, unsigned long);
+		forge_kmark_ptr(126, 0x40UL);
+	}
 	CMDQ_MSG("CMDQ driver init begin\n");
 
 	/* Initialize group callback */
@@ -1195,6 +1247,10 @@ static int __init cmdq_init(void)
 
 	CMDQ_MSG("CMDQ driver init end\n");
 
+	{
+		extern void forge_kmark_ptr(int, unsigned long);
+		forge_kmark_ptr(126, 0x41UL);	/* boot marker */
+	}
 	return 0;
 }
 

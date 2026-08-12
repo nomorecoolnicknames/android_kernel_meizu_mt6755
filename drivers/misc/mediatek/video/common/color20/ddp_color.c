@@ -13,6 +13,7 @@
 
 #include <linux/kernel.h>
 #include <linux/types.h>
+#include <linux/slab.h>	/* kzalloc/kfree for the TDSHP legacy copy */
 #include <linux/spinlock.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -3342,6 +3343,34 @@ int disp_color_ioctl(enum DISP_MODULE_ENUM module, unsigned int msg,
 		tdshp_index_init = 1;
 		break;
 
+	/*
+	 * SET_TDSHPINDEX in the 3.18 3984-byte form (entry[12][83]).
+	 * Copy the 83 columns the HAL fills into the first 83 of the 4.9
+	 * entry[12][146]; the 63 TDSHP_3_0 columns the HAL does not know about
+	 * are zeroed (disabled), as in the PQPARAM legacy path.
+	 */
+	case DISP_IOCTL_SET_TDSHPINDEX_LEGACY: {
+		struct DISPLAY_TDSHP_T_LEGACY *old;
+		int row;
+
+		old = kzalloc(sizeof(*old), GFP_KERNEL);
+		if (!old)
+			return -ENOMEM;
+		if (copy_from_user(old, (void *)arg, sizeof(*old))) {
+			COLOR_ERR("legacy SET_TDSHPINDEX copy from user fail");
+			kfree(old);
+			return -EFAULT;
+		}
+		tdshp_index = get_TDSHP_index();
+		memset(tdshp_index, 0, sizeof(struct DISPLAY_TDSHP_T));
+		for (row = 0; row < THSHP_TUNING_INDEX; row++)
+			memcpy(tdshp_index->entry[row], old->entry[row],
+			       THSHP_PARAM_MAX_LEGACY * sizeof(unsigned int));
+		kfree(old);
+		tdshp_index_init = 1;
+		break;
+	}
+
 	case DISP_IOCTL_GET_TDSHPINDEX:
 
 		if (tdshp_index_init == 0) {
@@ -3406,6 +3435,55 @@ int disp_color_ioctl(enum DISP_MODULE_ENUM module, unsigned int msg,
 		}
 
 		break;
+
+	/*
+	 * the same three setters in the 3.18 56-byte form.
+	 *
+	 * 4.9 appended u4ColorLUT to DISP_PQ_PARAM, which moved sizeof from
+	 * 56 to 60 and with it the _IOW number, so every one of these calls
+	 * from the vendor HAL was refused as an unknown ioctl. Copy the
+	 * 56 bytes the HAL does send and map them member for member, leaving
+	 * u4ColorLUT at whatever the driver already holds — the HAL has no
+	 * opinion about a field that did not exist when it was built.
+	 */
+	case DISP_IOCTL_SET_PQPARAM_LEGACY:
+	case DISP_IOCTL_SET_PQ_CAM_PARAM_LEGACY:
+	case DISP_IOCTL_SET_PQ_GAL_PARAM_LEGACY: {
+		struct DISP_PQ_PARAM_LEGACY old;
+
+		if (msg == DISP_IOCTL_SET_PQPARAM_LEGACY)
+			pq_param = get_Color_config(COLOR_ID_0);
+		else if (msg == DISP_IOCTL_SET_PQ_CAM_PARAM_LEGACY)
+			pq_param = get_Color_Cam_config();
+		else
+			pq_param = get_Color_Gal_config();
+
+		if (copy_from_user(&old, (void *)arg, sizeof(old))) {
+			COLOR_ERR("legacy SET_PQ*_PARAM copy from user fail");
+			return -EFAULT;
+		}
+
+		pq_param->u4SHPGain = old.u4SHPGain;
+		pq_param->u4SatGain = old.u4SatGain;
+		pq_param->u4PartialY = old.u4PartialY;
+		memcpy(pq_param->u4HueAdj, old.u4HueAdj,
+		       sizeof(pq_param->u4HueAdj));
+		memcpy(pq_param->u4SatAdj, old.u4SatAdj,
+		       sizeof(pq_param->u4SatAdj));
+		pq_param->u4Contrast = old.u4Contrast;
+		pq_param->u4Brightness = old.u4Brightness;
+		pq_param->u4Ccorr = old.u4Ccorr;
+
+		if (msg == DISP_IOCTL_SET_PQPARAM_LEGACY) {
+			if (ncs_tuning_mode == 0) {
+				DpEngine_COLORonInit(module, cmdq);
+				DpEngine_COLORonConfig(module, cmdq);
+				color_trigger_refresh(module);
+			}
+		}
+
+		break;
+	}
 
 	case DISP_IOCTL_MUTEX_CONTROL:
 		if (copy_from_user(&value, (void *)arg, sizeof(int))) {

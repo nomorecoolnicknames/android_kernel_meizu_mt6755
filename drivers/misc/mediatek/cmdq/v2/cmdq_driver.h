@@ -103,6 +103,10 @@ struct cmdqWriteAddressStruct {
 #define CMDQ_IOCTL_QUERY_DTS                                                   \
 	_IOW(CMDQ_IOCTL_MAGIC_NUMBER, 11, struct cmdqDTSDataStruct)
 
+/* 27-subsys layout the mt6735 userspace blobs were built against */
+#define CMDQ_IOCTL_QUERY_DTS_LEGACY                                            \
+	_IOW(CMDQ_IOCTL_MAGIC_NUMBER, 11, struct cmdqDTSDataStruct_legacy)
+
 /*  */
 /* Notify MDP will use specified engine before really use. */
 /* input int is same as EngineFlag. */

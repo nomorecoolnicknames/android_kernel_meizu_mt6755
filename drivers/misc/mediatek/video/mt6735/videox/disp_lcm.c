@@ -905,6 +905,12 @@ disp_lcm_handle *disp_lcm_probe(char *plcm_name, enum LCM_INTERFACE_ID lcm_id, i
 	struct LCM_PARAMS *lcm_param = NULL;
 	disp_lcm_handle *plcm = NULL;
 
+	/* step ladder (see mtkfb.c) */
+	{
+		extern void forge_kmark_ptr(int, unsigned long);
+		forge_kmark_ptr(126, 0x30UL | ((unsigned long)!!is_lcm_inited << 8));
+	}
+
 	DISPMSG("%s\n", __func__);
 	DISPMSG("plcm_name=%s\n", plcm_name);
 

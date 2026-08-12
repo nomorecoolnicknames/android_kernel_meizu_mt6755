@@ -52,6 +52,9 @@
 #include "ddp_hal.h"
 #include "disp_lcm.h"
 #include "mtkfb.h"
+#ifdef CONFIG_COMPAT
+#include "compat_mtkfb.h"	/* Q0 dropped the mt6735 copy */
+#endif
 #include "mtkfb_console.h"
 #include "mtkfb_fence.h"
 #include "mtkfb_info.h"
@@ -501,7 +504,24 @@ static int mtkfb_pan_display_impl(struct fb_var_screeninfo *var, struct fb_info 
 
 	input->alpha = 0xFF;
 	input->next_buff_idx = -1;
-	src_pitch = ALIGN_TO(var->xres, MTK_FB_ALIGNMENT);
+	/*
+	 * scan at the pitch the rows are actually written with.
+	 *
+	 * With the vendor hwcomposer out of the way SurfaceFlinger reaches
+	 * the panel through this path, and its rows land packed at
+	 * xres * bpp/8. Rounding the pitch up to MTK_FB_ALIGNMENT told the
+	 * overlay to step 736 pixels per line instead of 720, so every line
+	 * started 16 pixels further along than the one above it — the
+	 * diagonal shear on the panel. Reading a raw fb0 dump back at 720
+	 * renders perfectly while reading it at 736 reproduces the shear,
+	 * which is what pins the pitch as the wrong half of the pair.
+	 *
+	 * Only the scan pitch changes here. The allocation geometry and
+	 * fix.line_length are left alone: making those 720 as well shrinks
+	 * the framebuffer the writer expects and it stops drawing entirely
+	 * (measured — all three pages went black).
+	 */
+	src_pitch = var->xres;
 	input->src_pitch = src_pitch;
 
 	session_input->config_layer_num++;
@@ -2214,8 +2234,36 @@ static int mtkfb_probe(struct platform_device *pdev)
 	/* DISPFUNC(); */
 	DISPMSG("%s\n", __func__);
 
+/* display-init step ladder in DRAM slot 126 (+74=fb_base,
+ * 76=plcm). One warm capture localizes a silent wedge to the exact call. */
+#define FKS(v) do { extern void forge_kmark_ptr(int, unsigned long); \
+		forge_kmark_ptr(126, (v)); } while (0)
+/* One-shot display guard: mark the probe attempt in the reserved DRAM
+ * cell; if the previous boot left the mark set, that boot died in here,
+ * so skip the probe this time and let the phone reach adb. The mark is
+ * cleared on a successful probe and by any cold boot. */
+#define FORGE_DISP_TRY	0xD15A77EDULL
+	{
+		extern u64 forge_flag_get(void);
+		extern void forge_flag_set(u64);
+
+		if (forge_flag_get() == FORGE_DISP_TRY) {
+			forge_flag_set(0);
+			FKS(0x10);
+			pr_warn("[DISP] forge: previous boot died in display init — skipping this boot\n");
+			return -ENODEV;
+		}
+		forge_flag_set(FORGE_DISP_TRY);
+	}
+	FKS(0x11);
+
 #ifdef CONFIG_OF
 	_parse_tag_videolfb();
+	FKS(0x12);
+	{
+		extern void forge_kmark_ptr(int, unsigned long);
+		forge_kmark_ptr(74, (unsigned long)fb_base);
+	}
 #else
 	{
 		char *p = NULL;
@@ -2308,9 +2356,12 @@ static int mtkfb_probe(struct platform_device *pdev)
 #endif
 	}
 	primary_display_set_frame_buffer_address((unsigned long)fbdev->fb_va_base, fb_pa);
+	FKS(0x13);
 
 	/* mtkfb should parse lcm name from kernel boot command line */
+	FKS(0x14);
 	primary_display_init(mtkfb_find_lcm_driver(), lcd_fps, is_lcm_inited);
+	FKS(0x15);
 
 	init_state++; /* 1 */
 	MTK_FB_XRES = primary_display_get_width();
@@ -2342,6 +2393,7 @@ static int mtkfb_probe(struct platform_device *pdev)
 		DISPERR("mtkfb_fbinfo_init fail, r = %d\n", r);
 		goto cleanup;
 	}
+	FKS(0x16);
 	init_state++; /* 4 */
 	mtkfb_fbi = fbi;
 
@@ -2395,9 +2447,16 @@ static int mtkfb_probe(struct platform_device *pdev)
 #endif
 
 	MSG_FUNC_LEAVE();
+	FKS(0x1F);
+	{
+		extern void forge_flag_set(u64);
+
+		forge_flag_set(0);	/* display init survived */
+	}
 	return 0;
 
 cleanup:
+	FKS(0x1E);	/* probe took the error path */
 	mtkfb_free_resources(fbdev, init_state);
 
 	/* printk("mtkfb_probe end\n"); */
@@ -2600,7 +2659,10 @@ int mtkfb_pm_restore_noirq(struct device *device)
 #endif				/*CONFIG_PM */
 /*---------------------------------------------------------------------------*/
 static const struct of_device_id mtkfb_of_ids[] = {
-	{.compatible = "mediatek,mtkfb",},
+	/* The stock DTB uses uppercase "mediatek,MTKFB" (same as the
+	 * mt6761/63/65 drivers in this tree); lowercase never matches.
+	 */
+	{.compatible = "mediatek,MTKFB",},
 	{}
 };
 

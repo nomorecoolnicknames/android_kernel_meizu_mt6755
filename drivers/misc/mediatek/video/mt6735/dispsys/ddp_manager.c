@@ -1824,6 +1824,11 @@ int dpmgr_path_user_cmd(disp_path_handle dp_handle, int msg, unsigned long arg, 
 	case DISP_IOCTL_SET_COLOR_REG:
 	case DISP_IOCTL_SET_TDSHPINDEX:
 	case DISP_IOCTL_GET_TDSHPINDEX:
+	/* 3.18-form legacy PQ ioctls -> same COLOR module */
+	case DISP_IOCTL_SET_PQPARAM_LEGACY:
+	case DISP_IOCTL_SET_PQ_CAM_PARAM_LEGACY:
+	case DISP_IOCTL_SET_PQ_GAL_PARAM_LEGACY:
+	case DISP_IOCTL_SET_TDSHPINDEX_LEGACY:
 	case DISP_IOCTL_SET_PQ_CAM_PARAM:
 	case DISP_IOCTL_GET_PQ_CAM_PARAM:
 	case DISP_IOCTL_SET_PQ_GAL_PARAM:

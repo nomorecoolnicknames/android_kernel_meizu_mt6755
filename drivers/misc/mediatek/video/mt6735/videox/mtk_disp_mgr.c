@@ -119,6 +119,17 @@ unsigned int is_output_buffer_set = 0;
 
 static int mtk_disp_mgr_open(struct inode *inode, struct file *file)
 {
+	/* the hwcomposer blob references "mtk_disp_mgr" but never
+	 * reached our ioctl handler — log who actually gets the node open. */
+	{
+		static int forge_open_spy;
+
+		if (forge_open_spy < 16) {
+			forge_open_spy++;
+			pr_err("forge-spy: disp_mgr opened by %s (pid %d)\n",
+			       current->comm, current->pid);
+		}
+	}
 	return 0;
 }
 
@@ -595,39 +606,28 @@ int _ioctl_prepare_present_fence(unsigned long arg)
 }
 #else
 /* extern struct disp_sync_info *_get_sync_info(unsigned int session_id, unsigned int timeline_id); */
-int _ioctl_prepare_present_fence(unsigned long arg)
+/* split out so the 3.18-layout ioctl (nr 216) can share it. */
+static int _present_fence_create(unsigned int session_id, int *out_fd, unsigned int *out_idx)
 {
 	int ret = 0;
-
-	void __user *argp = (void __user *)arg;
 	struct fence_data data;
-	struct disp_present_fence preset_fence_struct;
 	static unsigned int fence_idx;
 	struct disp_sync_info *layer_info = NULL;
 
-	if (copy_from_user(&preset_fence_struct, (void __user *)arg, sizeof(struct disp_present_fence))) {
-		pr_debug("[FB Driver]: copy_from_user failed! line:%d\n", __LINE__);
+	if (is_session_exist(session_id) == 0) {
+		DISPERR("session id: %x not exists\n", session_id);
 		return -EFAULT;
 	}
 
-	if (is_session_exist(preset_fence_struct.session_id) == 0) {
-		DISPERR("session id: %x not exists\n", preset_fence_struct.session_id);
-		return -EFAULT;
-	}
-
-	if (DISP_SESSION_TYPE(preset_fence_struct.session_id) != DISP_SESSION_PRIMARY) {
-		DISPERR("non-primary ask for present fence! session=0x%x\n",
-			preset_fence_struct.session_id);
+	if (DISP_SESSION_TYPE(session_id) != DISP_SESSION_PRIMARY) {
+		DISPERR("non-primary ask for present fence! session=0x%x\n", session_id);
 		data.fence = MTK_FB_INVALID_FENCE_FD;
 		data.value = 0;
 	} else {
-		layer_info =
-		    _get_sync_info(preset_fence_struct.session_id,
-				   disp_sync_get_present_timeline_id());
+		layer_info = _get_sync_info(session_id, disp_sync_get_present_timeline_id());
 		if (layer_info == NULL) {
 			DISPERR("layer_info is null\n");
-			ret = -EFAULT;
-			return ret;
+			return -EFAULT;
 		}
 		/* create fence */
 		data.fence = MTK_FB_INVALID_FENCE_FD;
@@ -635,22 +635,66 @@ int _ioctl_prepare_present_fence(unsigned long arg)
 		ret = fence_create(layer_info->timeline, &data);
 		if (ret != 0) {
 			DISPPR_ERROR("%s%d,layer%d create Fence Object failed!\n",
-				     disp_session_mode_spy(preset_fence_struct.session_id),
-				     DISP_SESSION_DEV(preset_fence_struct.session_id),
+				     disp_session_mode_spy(session_id),
+				     DISP_SESSION_DEV(session_id),
 				     disp_sync_get_present_timeline_id());
 			ret = -EFAULT;
 		}
 	}
 
-	preset_fence_struct.present_fence_fd = data.fence;
-	preset_fence_struct.present_fence_index = data.value;
+	*out_fd = data.fence;
+	*out_idx = data.value;
+	mmprofile_log_ex(ddp_mmp_get_events()->present_fence_get, MMPROFILE_FLAG_PULSE,
+		       data.fence, data.value);
+	return ret;
+}
+
+int _ioctl_prepare_present_fence(unsigned long arg)
+{
+	int ret = 0;
+
+	void __user *argp = (void __user *)arg;
+	struct disp_present_fence preset_fence_struct;
+
+	if (copy_from_user(&preset_fence_struct, (void __user *)arg, sizeof(struct disp_present_fence))) {
+		pr_debug("[FB Driver]: copy_from_user failed! line:%d\n", __LINE__);
+		return -EFAULT;
+	}
+
+	ret = _present_fence_create(preset_fence_struct.session_id,
+				    &preset_fence_struct.present_fence_fd,
+				    &preset_fence_struct.present_fence_index);
+	if (ret)
+		return ret;
+
 	if (copy_to_user(argp, &preset_fence_struct, sizeof(preset_fence_struct))) {
 		pr_debug("[FB Driver]: copy_to_user failed! line:%d\n", __LINE__);
 		ret = -EFAULT;
 	}
-	mmprofile_log_ex(ddp_mmp_get_events()->present_fence_get, MMPROFILE_FLAG_PULSE,
-		       preset_fence_struct.present_fence_fd,
-		       preset_fence_struct.present_fence_index);
+
+	return ret;
+}
+
+/* same call, 3.18 number and 3.18 member order. */
+int _ioctl_prepare_present_fence_legacy(unsigned long arg)
+{
+	int ret = 0;
+	void __user *argp = (void __user *)arg;
+	struct disp_present_fence_legacy pf;
+
+	if (copy_from_user(&pf, argp, sizeof(pf))) {
+		pr_debug("[FB Driver]: copy_from_user failed! line:%d\n", __LINE__);
+		return -EFAULT;
+	}
+
+	ret = _present_fence_create(pf.session_id, &pf.fence_fd, &pf.index);
+	if (ret)
+		return ret;
+
+	if (copy_to_user(argp, &pf, sizeof(pf))) {
+		pr_debug("[FB Driver]: copy_to_user failed! line:%d\n", __LINE__);
+		ret = -EFAULT;
+	}
 
 	return ret;
 }
@@ -1491,31 +1535,34 @@ static int set_primary_buffer(struct disp_session_input_config *input)
 
 }
 
-int _ioctl_set_input_buffer(unsigned long arg)
+/* everything after the copy from user space, so the 3.18-layout
+ * ioctl can translate into this struct and reuse the whole path. */
+static int _set_input_buffer_common(struct disp_session_input_config *session_input)
 {
 	int ret = 0;
-	void __user *argp = (void __user *)arg;
 	unsigned int session_id = 0;
 	struct disp_session_sync_info *session_info;
-	struct disp_session_input_config *session_input;
-
-	session_input = kmalloc(sizeof(*session_input), GFP_KERNEL);
-	if (!session_input)
-		return -ENOMEM;
-
-	if (copy_from_user(session_input, argp, sizeof(*session_input))) {
-		DISPERR("[FB]: copy_from_user failed! line:%d\n", __LINE__);
-		kfree(session_input);
-		return -EFAULT;
-	}
-
 
 	session_input->setter = SESSION_USER_HWC;
 	session_id = session_input->session_id;
 
+	/* is the HAL still feeding us frames? Print the first few
+	 * and then one in a hundred, so a stall shows up as silence rather
+	 * than as a wall of log. */
+	{
+		static unsigned int forge_cfg_count;
+
+		forge_cfg_count++;
+		if (forge_cfg_count <= 8 || forge_cfg_count % 100 == 0)
+			pr_err("forge-frame: setinput #%u layers=%u L0 en=%u idx=%u addr=%p\n",
+			       forge_cfg_count, session_input->config_layer_num,
+			       session_input->config[0].layer_enable,
+			       session_input->config[0].next_buff_idx,
+			       session_input->config[0].src_phy_addr);
+	}
+
 	if (is_session_exist(session_id) == 0) {
 		DISPERR("session id: %x not exists\n", session_id);
-		kfree(session_input);
 		return -EFAULT;
 	}
 
@@ -1541,7 +1588,120 @@ int _ioctl_set_input_buffer(unsigned long arg)
 	if (session_info)
 		dprec_done(&session_info->event_setinput, 0, session_input->config_layer_num);
 
+	return ret;
+}
+
+int _ioctl_set_input_buffer(unsigned long arg)
+{
+	int ret;
+	void __user *argp = (void __user *)arg;
+	struct disp_session_input_config *session_input;
+
+	session_input = kmalloc(sizeof(*session_input), GFP_KERNEL);
+	if (!session_input)
+		return -ENOMEM;
+
+	if (copy_from_user(session_input, argp, sizeof(*session_input))) {
+		DISPERR("[FB]: copy_from_user failed! line:%d\n", __LINE__);
+		kfree(session_input);
+		return -EFAULT;
+	}
+
+	ret = _set_input_buffer_common(session_input);
 	kfree(session_input);
+	return ret;
+}
+
+/*
+ * the 3.18-layout layer list (nr 206, 1168 bytes).
+ *
+ * Copy each member across by name. The 3.18 struct carries no fence fd —
+ * this driver synchronises on next_buff_idx alone, exactly as 3.18 did,
+ * so nothing is lost. Members that only exist in 4.9 are zeroed, except
+ * ext_sel_layer, whose "unused" value is -1.
+ */
+int _ioctl_set_input_buffer_legacy(unsigned long arg)
+{
+	int ret;
+	unsigned int i, n;
+	void __user *argp = (void __user *)arg;
+	struct disp_session_input_config_legacy *old;
+	struct disp_session_input_config *session_input;
+
+	old = kmalloc(sizeof(*old), GFP_KERNEL);
+	if (!old)
+		return -ENOMEM;
+
+	session_input = kzalloc(sizeof(*session_input), GFP_KERNEL);
+	if (!session_input) {
+		kfree(old);
+		return -ENOMEM;
+	}
+
+	if (copy_from_user(old, argp, sizeof(*old))) {
+		DISPERR("[FB]: copy_from_user failed! line:%d\n", __LINE__);
+		ret = -EFAULT;
+		goto out;
+	}
+
+	session_input->session_id = old->session_id;
+	n = old->config_layer_num;
+	if (n > ARRAY_SIZE(old->config))
+		n = ARRAY_SIZE(old->config);
+	session_input->config_layer_num = n;
+
+	for (i = 0; i < n; i++) {
+		struct disp_input_config_legacy *s = &old->config[i];
+		struct disp_input_config *d = &session_input->config[i];
+
+		d->src_base_addr = s->src_base_addr;
+		d->src_phy_addr = s->src_phy_addr;
+		d->buffer_source = s->buffer_source;
+		d->security = s->security;
+		d->src_fmt = s->src_fmt;
+		d->src_alpha = s->src_alpha;
+		d->dst_alpha = s->dst_alpha;
+		d->yuv_range = s->yuv_range;
+
+		d->layer_rotation = s->layer_rotation;
+		d->layer_type = s->layer_type;
+		d->video_rotation = s->video_rotation;
+
+		d->next_buff_idx = s->next_buff_idx;
+		d->src_fence_fd = MTK_FB_INVALID_FENCE_FD;
+		d->src_fence_struct = NULL;
+
+		d->src_color_key = s->src_color_key;
+		d->frm_sequence = s->frm_sequence;
+
+		d->src_pitch = s->src_pitch;
+		d->src_offset_x = s->src_offset_x;
+		d->src_offset_y = s->src_offset_y;
+		d->src_width = s->src_width;
+		d->src_height = s->src_height;
+		d->tgt_offset_x = s->tgt_offset_x;
+		d->tgt_offset_y = s->tgt_offset_y;
+		d->tgt_width = s->tgt_width;
+		d->tgt_height = s->tgt_height;
+
+		d->alpha_enable = s->alpha_enable;
+		d->alpha = s->alpha;
+		d->sur_aen = s->sur_aen;
+		d->src_use_color_key = s->src_use_color_key;
+		d->layer_id = s->layer_id;
+		d->layer_enable = s->layer_enable;
+		d->src_direct_link = s->src_direct_link;
+
+		d->isTdshp = s->isTdshp;
+		d->identity = s->identity;
+		d->connected_type = s->connected_type;
+		d->ext_sel_layer = -1;
+	}
+
+	ret = _set_input_buffer_common(session_input);
+out:
+	kfree(session_input);
+	kfree(old);
 	return ret;
 }
 
@@ -1777,6 +1937,84 @@ int _ioctl_get_info(unsigned long arg)
 	return ret;
 }
 
+/* serve the 18-word 3.18 session-info layout the vendor
+ * hwcomposer calls (see disp_session.h). Same data, original field set. */
+static int _ioctl_get_info_legacy(unsigned long arg)
+{
+	void __user *argp = (void __user *)arg;
+	struct disp_session_info_legacy old;
+	struct disp_session_info info;
+	unsigned int session_id;
+	int info_ret = 0;
+
+	if (copy_from_user(&old, argp, sizeof(old)))
+		return -EFAULT;
+
+	memset(&info, 0, sizeof(info));
+	session_id = old.session_id;
+	info.session_id = session_id;
+
+	if (is_session_exist(session_id) == 0) {
+		pr_err("[session]legacy get_info: session %x does not exist\n",
+		       session_id);
+		return -EFAULT;
+	}
+
+	if (DISP_SESSION_TYPE(session_id) == DISP_SESSION_PRIMARY) {
+		info_ret = primary_display_get_info(&info);
+	} else if (DISP_SESSION_TYPE(session_id) == DISP_SESSION_MEMORY) {
+		info_ret = ovl2mem_get_info(&info);
+	} else {
+		pr_err("[session]legacy get_info: bad type 0x%08x\n", session_id);
+		return -EINVAL;
+	}
+
+	/*
+	 * this field is what the vendor HWC waits on.
+	 *
+	 * DispDevice::getAvailableOverlayInput() issues this very ioctl and
+	 * returns the second word of the struct — maxLayerNum — straight to
+	 * OverlayEngine::waitUntilAvailable(), which spins 1000 times at 5ms
+	 * while it reads zero and then gives up. So a zero here is what
+	 * stalls composition, and primary_display_get_info() can leave it
+	 * zero by returning early when the LCM params are missing, which the
+	 * caller was not checking. Say what is actually being handed over.
+	 */
+	{
+		static unsigned int forge_info_count;
+
+		forge_info_count++;
+		if (forge_info_count <= 6 || forge_info_count % 200 == 0)
+			pr_err("forge-info: #%u session=0x%x ret=%d maxLayerNum=%u vsync=%u w=%u h=%u\n",
+			       forge_info_count, session_id, info_ret,
+			       info.maxLayerNum, info.isHwVsyncAvailable,
+			       info.displayWidth, info.displayHeight);
+	}
+
+	old.maxLayerNum = info.maxLayerNum;
+	old.isHwVsyncAvailable = info.isHwVsyncAvailable;
+	old.displayType = info.displayType;
+	old.displayWidth = info.displayWidth;
+	old.displayHeight = info.displayHeight;
+	old.displayFormat = info.displayFormat;
+	old.displayMode = info.displayMode;
+	old.vsyncFPS = info.vsyncFPS;
+	old.physicalWidth = info.physicalWidth;
+	old.physicalHeight = info.physicalHeight;
+	old.isConnected = info.isConnected;
+	old.isHDCPSupported = info.isHDCPSupported;
+	old.isOVLDisabled = info.isOVLDisabled;
+	old.is3DSupport = info.is3DSupport;
+	old.const_layer_num = info.const_layer_num;
+	old.updateFPS = info.updateFPS;
+	old.is_updateFPS_stable = info.is_updateFPS_stable;
+
+	if (copy_to_user(argp, &old, sizeof(old)))
+		return -EFAULT;
+
+	return 0;
+}
+
 int _ioctl_get_is_driver_suspend(unsigned long arg)
 {
 	int ret = 0;
@@ -1841,6 +2079,55 @@ int _ioctl_get_display_caps(unsigned long arg)
 	}
 
 	return ret;
+}
+
+/* Serve the 3.18-era caps ABI the m5c hwcomposer blob calls (see
+ * disp_session.h), with the values the 3.18 kernel reports. */
+static int _ioctl_get_display_caps_legacy(unsigned long arg)
+{
+	struct disp_caps_info_legacy caps;
+	void __user *argp = (void __user *)arg;
+
+	if (copy_from_user(&caps, argp, sizeof(caps)))
+		return -EFAULT;
+
+	/* is_support_frame_cfg_ioctl and is_output_rotated are
+	 * only assigned under ifdefs, so without this they would be handed
+	 * back to user space exactly as they arrived — whatever the HAL had
+	 * in that memory. A non-zero is_support_frame_cfg_ioctl would send
+	 * the HAL down the frame-config ioctl instead of SET_INPUT_BUFFER. */
+	memset(&caps, 0, sizeof(caps));
+
+#ifdef DISP_HW_MODE_CAP
+	caps.output_mode = DISP_HW_MODE_CAP;
+#else
+	caps.output_mode = DISP_OUTPUT_CAP_DIRECT_LINK;
+#endif
+#ifdef DISP_HW_PASS_MODE
+	caps.output_pass = DISP_HW_PASS_MODE;
+#else
+	caps.output_pass = DISP_OUTPUT_CAP_SINGLE_PASS;
+#endif
+#ifdef DISP_HW_MAX_LAYER
+	caps.max_layer_num = DISP_HW_MAX_LAYER;
+#else
+	caps.max_layer_num = 4;
+#endif
+	caps.disp_feature = 0;
+#ifdef OVL_TIME_SHARING
+	caps.disp_feature |= DISP_FEATURE_TIME_SHARING;
+#endif
+#ifdef CONFIG_MTK_LCM_PHYSICAL_ROTATION_HW
+	caps.is_output_rotated = 1;
+#endif
+
+	DISPMSG("%s(legacy) mode:%d, pass:%d, max_layer_num:%d\n", __func__,
+		caps.output_mode, caps.output_pass, caps.max_layer_num);
+
+	if (copy_to_user(argp, &caps, sizeof(caps)))
+		return -EFAULT;
+
+	return 0;
 }
 
 int _ioctl_wait_vsync(unsigned long arg)
@@ -2024,6 +2311,20 @@ int _ioctl_set_session_mode(unsigned long arg)
 		DISPERR("session id: %x not exists\n", config_info.session_id);
 		return -EFAULT;
 	}
+	/* which mode does the vendor HAL actually ask for?
+	 * The crossbar at boot reads as the decouple wiring while the driver
+	 * builds and configures the direct-link scenario, so either the HAL
+	 * requested the switch or the bootloader's wiring was never
+	 * replaced. This says which. 1 = DIRECT_LINK, 2 = DECOUPLE. */
+	{
+		static unsigned int forge_mode_count;
+
+		forge_mode_count++;
+		if (forge_mode_count <= 12 || forge_mode_count % 50 == 0)
+			pr_err("forge-mode: set_session_mode #%u requested=%d session=0x%x\n",
+			       forge_mode_count, config_info.mode, config_info.session_id);
+	}
+
 	if (config_info.mode > DISP_INVALID_SESSION_MODE &&
 		config_info.mode < DISP_SESSION_MODE_NUM) {
 		ret = set_session_mode(&config_info, 0);
@@ -2125,11 +2426,35 @@ const char *_session_ioctl_spy(unsigned int cmd)
 	}
 }
 
+/*
+ * count every disp_mgr ioctl by number.
+ *
+ * The vendor HWC spins on "Waiting for available OVL" thousands of times
+ * while nothing composes, and the one-shot spy is long exhausted by then,
+ * so it cannot say what the HAL is actually asking for during the wait.
+ * A counter per _IOC_NR costs nothing and answers it from the dump.
+ */
+unsigned int forge_ioctl_nr_count[256];
+
 long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	int ret = -1;
 
-	/* DISPMSG("mtk_disp_mgr_ioctl, cmd=%s, arg=0x%08x\n", _session_ioctl_spy(cmd), arg); */
+	forge_ioctl_nr_count[_IOC_NR(cmd) & 0xff]++;	/* per-ioctl-nr counter */
+
+	/* name every call the vendor HAL makes, with the decoded
+	 * nr/size, so an ABI gap shows up as data rather than a guess. The
+	 * first 64 calls only — enough to cover hwcomposer's open path. */
+	{
+		static int forge_spy;
+
+		if (forge_spy < 64) {
+			forge_spy++;
+			pr_err("forge-spy: %s nr=%u size=%u cmd=0x%08x\n",
+			       _session_ioctl_spy(cmd), _IOC_NR(cmd),
+			       _IOC_SIZE(cmd), cmd);
+		}
+	}
 
 	switch (cmd) {
 	case DISP_IOCTL_CREATE_SESSION:
@@ -2145,14 +2470,22 @@ long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return _ioctl_prepare_buffer(arg, PREPARE_INPUT_FENCE);
 	case DISP_IOCTL_SET_INPUT_BUFFER:
 		return _ioctl_set_input_buffer(arg);
+	case DISP_IOCTL_SET_INPUT_BUFFER_LEGACY:
+		return _ioctl_set_input_buffer_legacy(arg);
+	case DISP_IOCTL_GET_PRESENT_FENCE_LEGACY:
+		return _ioctl_prepare_present_fence_legacy(arg);
 	case DISP_IOCTL_WAIT_FOR_VSYNC:
 		return _ioctl_wait_vsync(arg);
 	case DISP_IOCTL_GET_SESSION_INFO:
 		return _ioctl_get_info(arg);
+	case DISP_IOCTL_GET_SESSION_INFO_LEGACY:
+		return _ioctl_get_info_legacy(arg);
 	case DISP_IOCTL_GET_IS_DRIVER_SUSPEND:
 		return _ioctl_get_is_driver_suspend(arg);
 	case DISP_IOCTL_GET_DISPLAY_CAPS:
 		return _ioctl_get_display_caps(arg);
+	case DISP_IOCTL_GET_DISPLAY_CAPS_LEGACY:
+		return _ioctl_get_display_caps_legacy(arg);
 	case DISP_IOCTL_SET_VSYNC_FPS:
 		return _ioctl_set_vsync(arg);
 	case DISP_IOCTL_SET_SESSION_MODE:
@@ -2183,6 +2516,12 @@ long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case DISP_IOCTL_SET_COLOR_REG:
 	case DISP_IOCTL_SET_TDSHPINDEX:
 	case DISP_IOCTL_GET_TDSHPINDEX:
+	/* Route the 3.18-form PQ ioctls the vendor HAL sends (60/65/67/69) to
+	 * the same path. */
+	case DISP_IOCTL_SET_PQPARAM_LEGACY:
+	case DISP_IOCTL_SET_PQ_CAM_PARAM_LEGACY:
+	case DISP_IOCTL_SET_PQ_GAL_PARAM_LEGACY:
+	case DISP_IOCTL_SET_TDSHPINDEX_LEGACY:
 	case DISP_IOCTL_SET_PQ_CAM_PARAM:
 	case DISP_IOCTL_GET_PQ_CAM_PARAM:
 	case DISP_IOCTL_SET_PQ_GAL_PARAM:
@@ -2205,7 +2544,11 @@ long mtk_disp_mgr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		ret = primary_display_user_cmd(cmd, arg);
 		break;
 	default:
-		DISPMSG("[session]ioctl not supported, 0x%08x\n", cmd);
+		/* decode the number so an ABI mismatch with the
+		 * vendor HAL names itself instead of needing a guess. */
+		pr_err("[session]ioctl not supported, 0x%08x (dir=%u type='%c' nr=%u size=%u)\n",
+		       cmd, _IOC_DIR(cmd), (char)_IOC_TYPE(cmd), _IOC_NR(cmd),
+		       _IOC_SIZE(cmd));
 	}
 
 	return ret;
@@ -2266,6 +2609,12 @@ static long mtk_disp_mgr_compat_ioctl(struct file *file, unsigned int cmd, unsig
 	case DISP_IOCTL_SET_COLOR_REG:
 	case DISP_IOCTL_SET_TDSHPINDEX:
 	case DISP_IOCTL_GET_TDSHPINDEX:
+	/* Route the 3.18-form PQ ioctls the vendor HAL sends (60/65/67/69) to
+	 * the same path. */
+	case DISP_IOCTL_SET_PQPARAM_LEGACY:
+	case DISP_IOCTL_SET_PQ_CAM_PARAM_LEGACY:
+	case DISP_IOCTL_SET_PQ_GAL_PARAM_LEGACY:
+	case DISP_IOCTL_SET_TDSHPINDEX_LEGACY:
 	case DISP_IOCTL_SET_PQ_CAM_PARAM:
 	case DISP_IOCTL_GET_PQ_CAM_PARAM:
 	case DISP_IOCTL_SET_PQ_GAL_PARAM:

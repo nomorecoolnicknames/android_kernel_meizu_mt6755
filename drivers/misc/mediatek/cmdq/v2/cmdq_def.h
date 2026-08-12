@@ -264,6 +264,25 @@ struct cmdqDTSDataStruct {
 	uint32_t MDPBaseAddress[CMDQ_MAX_MDP_PA_BASE_COUNT];
 };
 
+/*
+ * the ABI this device's MDP/hwcomposer userspace speaks.
+ *
+ * The Q0 subsys table grew from the 27 entries this SoC has (mt6735, see
+ * the 3.18 tree) to 39 by adding VDEC1..3 / CAMSYS1..3 / IMGSYS1 / SMI_LAB1
+ * ids from newer chips. That changes sizeof(cmdqDTSDataStruct), and the
+ * size is encoded in the ioctl number, so the blob's CMDQ_IOCTL_QUERY_DTS
+ * matched nothing and DpDriver reported "exec CMDQ_IOCTL_QUERY_DTS
+ * failed(-1)". Serve the original layout too; the extra subsys ids simply
+ * do not exist on this hardware.
+ */
+#define CMDQ_SUBSYS_MAX_COUNT_LEGACY	27
+
+struct cmdqDTSDataStruct_legacy {
+	int32_t eventTable[CMDQ_SYNC_TOKEN_MAX];
+	struct SubsysStruct subsys[CMDQ_SUBSYS_MAX_COUNT_LEGACY];
+	uint32_t MDPBaseAddress[CMDQ_MAX_MDP_PA_BASE_COUNT];
+};
+
 /* Custom "wide" pointer type for 64-bit job handle (pointer to VA) */
 #define cmdqJobHandle_t unsigned long long
 /* Custom "wide" pointer type for 64-bit compatibility. Always cast from

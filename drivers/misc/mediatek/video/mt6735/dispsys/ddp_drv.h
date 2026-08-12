@@ -151,6 +151,19 @@ struct device *disp_get_device(void);
 #define DISP_IOCTL_SET_PQ_GAL_PARAM _IOW(DISP_IOCTL_MAGIC, 69 , struct DISP_PQ_PARAM)
 #define DISP_IOCTL_GET_PQ_GAL_PARAM _IOR(DISP_IOCTL_MAGIC, 70 , struct DISP_PQ_PARAM)
 
+/* the same three calls in the 3.18 56-byte form the vendor
+ * HAL actually sends. Distinct _IOW numbers, so they coexist with the
+ * native ones above. */
+#define DISP_IOCTL_SET_PQPARAM_LEGACY \
+	_IOW(DISP_IOCTL_MAGIC, 60, struct DISP_PQ_PARAM_LEGACY)
+#define DISP_IOCTL_SET_PQ_CAM_PARAM_LEGACY \
+	_IOW(DISP_IOCTL_MAGIC, 67, struct DISP_PQ_PARAM_LEGACY)
+#define DISP_IOCTL_SET_PQ_GAL_PARAM_LEGACY \
+	_IOW(DISP_IOCTL_MAGIC, 69, struct DISP_PQ_PARAM_LEGACY)
+/* SET_TDSHPINDEX (nr 65) in the 3.18 3984-byte form. */
+#define DISP_IOCTL_SET_TDSHPINDEX_LEGACY \
+	_IOW(DISP_IOCTL_MAGIC, 65, struct DISPLAY_TDSHP_T_LEGACY)
+
 #define DISP_IOCTL_PQ_SET_BYPASS_COLOR  _IOW(DISP_IOCTL_MAGIC, 71 , int)
 #define DISP_IOCTL_PQ_SET_WINDOW    _IOW(DISP_IOCTL_MAGIC, 72 , struct DISP_PQ_WIN_PARAM)
 #define DISP_IOCTL_PQ_GET_TDSHP_FLAG    _IOR(DISP_IOCTL_MAGIC, 73 , int)

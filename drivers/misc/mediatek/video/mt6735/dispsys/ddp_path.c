@@ -791,6 +791,15 @@ int ddp_remove_module(DDP_SCENARIO_ENUM ddp_scenario, enum DISP_MODULE_ENUM modu
 
 void ddp_connect_path(DDP_SCENARIO_ENUM scenario, void *handle)
 {
+	/* name whoever rewires the crossbar. At boot the mux
+	 * registers read the decouple wiring (OVL0->WDMA0, DSI0 fed from
+	 * UFOE, which this chip does not have) instead of the PRIMARY_DISP
+	 * chain OVL0->COLOR0->...->DITHER->RDMA0->DSI0, so the overlay's
+	 * output never reaches the panel and the DSI keeps scanning what
+	 * the bootloader left in RDMA0. DISPDBG is compiled to nothing
+	 * here, so this call was invisible. */
+	pr_err("forge-path: connect scenario=%s caller=%pS\n",
+	       ddp_get_scenario_name(scenario), __builtin_return_address(0));
 	DISPDBG("path connect on scenario %s\n", ddp_get_scenario_name(scenario));
 	if (scenario == DDP_SCENARIO_PRIMARY_ALL) {
 		ddp_connect_path_l(module_list_scenario[DDP_SCENARIO_PRIMARY_DISP], handle);

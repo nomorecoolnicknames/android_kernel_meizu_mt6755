@@ -292,6 +292,45 @@ void disp_dump_emi_status(void)
 
 }
 
+/*
+ * count display interrupts per module.
+ *
+ * In video mode the vsync SurfaceFlinger waits on is the RDMA0 frame-done
+ * interrupt. Frames stop arriving a few seconds into boot with nobody
+ * blocked anywhere — SurfaceFlinger idle in epoll, the animation thread
+ * sleeping — which is what a dead vsync looks like from userspace. These
+ * counters say whether the interrupts are still coming, without adding a
+ * print per interrupt.
+ */
+unsigned int forge_irq_count[DISP_MODULE_NUM];
+
+/*
+ * Measure underflow in the interrupt handler itself, not by polling
+ * INTSTA from userspace. INTSTA is cleared every frame here
+ * (DISP_CPU_REG_SET(..., ~reg_val) below), so a userspace poll samples it
+ * between clears and almost always reads zero. These counters latch the
+ * bits at the instant the IRQ fires, before the clear. Normalise
+ * underflow against forge_ovl0_frame_done (OVL0 frame-done, bit 1) to get
+ * a rate. Primary display only (OVL0 index 0). RDMA0's own underflow
+ * already has rdma_underflow_irq_cnt[0]; forgedump shows it alongside.
+ */
+/*
+ * OVL INTSTA bit map from the register spec (mt6735m/ddp_reg.h); bits
+ * 5-12 are per internal RDMA engine, not per layer:
+ *   bit 1  FME_CPL (frame done)          bit 2  FME_UND (frame underrun)
+ *   bits 5-8  RDMA0..3 EOF_ABNORMAL      bits 9-12 RDMA0..3 FIFO_UNDERFLOW
+ * OVL INTEN is 0x1e0 / 0x1e2 (ovl_start): only bits 1,5-8 raise an IRQ;
+ * bits 9-12 (FIFO_UNDERFLOW) are not interrupt-enabled, so their INTSTA
+ * state is sampled only when a 5-8/1 IRQ fires and is best-effort, not a
+ * per-frame count; they latch. The reliable interrupt-driven
+ * underflow-class signal is bits 5-8 (rdma_eof_abnormal[]); RDMA0's own
+ * dedicated underflow stays in rdma_underflow_irq_cnt[0].
+ */
+unsigned int forge_ovl0_frame_done;		/* bit 1  — per-frame normaliser */
+unsigned int forge_ovl0_frame_underrun;		/* bit 2  — OVL frame underrun */
+unsigned int forge_ovl0_rdma_eof_abnormal[4];	/* bits 5-8 RDMA0-3, IRQ-enabled */
+unsigned int forge_ovl0_rdma_fifo_underflow[4];	/* bits 9-12 RDMA0-3, NOT IRQ-en (best-effort) */
+
 irqreturn_t disp_irq_handler(int irq, void *dev_id)
 {
 	enum DISP_MODULE_ENUM module = DISP_MODULE_UNKNOWN;
@@ -302,6 +341,16 @@ irqreturn_t disp_irq_handler(int irq, void *dev_id)
 
 	DISPDBG("disp_irq_handler, irq=%d, module=%s\n", irq, disp_irq_module(irq));
 	mmprofile_log_ex(ddp_mmp_get_events()->DDP_IRQ, MMPROFILE_FLAG_START, irq, 0);
+
+	/* per-module IRQ counters */
+	if (irq == dispsys_irq[DISP_REG_RDMA0])
+		forge_irq_count[DISP_MODULE_RDMA0]++;
+	else if (irq == dispsys_irq[DISP_REG_DSI0])
+		forge_irq_count[DISP_MODULE_DSI0]++;
+	else if (irq == dispsys_irq[DISP_REG_OVL0])
+		forge_irq_count[DISP_MODULE_OVL0]++;
+	else if (irq == dispsys_irq[DISP_REG_MUTEX])
+		forge_irq_count[DISP_MODULE_MUTEX]++;
 
 	if (irq == dispsys_irq[DISP_REG_DSI0]) {
 		module = DISP_MODULE_DSI0;
@@ -320,6 +369,21 @@ irqreturn_t disp_irq_handler(int irq, void *dev_id)
 		index = (irq == dispsys_irq[DISP_REG_OVL0]) ? 0 : 1;
 		module = (irq == dispsys_irq[DISP_REG_OVL0]) ? DISP_MODULE_OVL0 : DISP_MODULE_OVL1;
 		reg_val = DISP_REG_GET(DISP_REG_OVL_INTSTA + index * DISP_OVL_INDEX_OFFSET);
+		/* latch OVL0 status bits before they are cleared below */
+		if (index == 0) {
+			unsigned int fi;
+
+			if (reg_val & (1 << 1))
+				forge_ovl0_frame_done++;
+			if (reg_val & (1 << 2))
+				forge_ovl0_frame_underrun++;
+			for (fi = 0; fi < 4; fi++) {
+				if (reg_val & (1 << (5 + fi)))
+					forge_ovl0_rdma_eof_abnormal[fi]++;
+				if (reg_val & (1 << (9 + fi)))
+					forge_ovl0_rdma_fifo_underflow[fi]++;
+			}
+		}
 		if (reg_val & (1 << 1)) {
 			unsigned int i = 0;
 

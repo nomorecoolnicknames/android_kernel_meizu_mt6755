@@ -590,6 +590,277 @@ void ddp_process_dbg_opt(const char *opt)
 	int ret = 0;
 	char *p;
 
+	/* "forgedump" — the few registers that answer "is the
+	 * panel actually being scanned out", printed with pr_err so they
+	 * reach dmesg (the driver's own dump macros go to the display
+	 * logger, which is invisible here). */
+	/* ungate DISP_CCORR (bit15) and DISP_DITHER (bit18) by
+	 * hand. Both sit in the primary pixel path
+	 * (OVL0->COLOR0->CCORR->AAL->GAMMA->DITHER->RDMA0->PWM0->DSI0) and
+	 * read back as gated in MMSYS_CG_CON0 while the driver's shadow
+	 * register says they should be on — if the picture appears after
+	 * this write, that mismatch is why the panel stays black. */
+	if (0 == strncmp(opt, "forgeclk", 8)) {
+		pr_err("forge-disp: CG_CON0 before=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
+		DISP_CPU_REG_SET(DISP_REG_CONFIG_MMSYS_CG_CLR0,
+				 (1 << 15) | (1 << 18));
+		pr_err("forge-disp: CG_CON0 after=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0));
+		return;
+	}
+
+	/* paint the OVL's own background colour and turn every
+	 * layer off. The overlay then emits a solid colour with no buffer,
+	 * no M4U mapping and no composition involved, so whatever reaches
+	 * the panel tests exactly one thing: the path from OVL through
+	 * COLOR/CCORR/DITHER/RDMA/DSI to the glass. Red means that whole
+	 * path is healthy and the black screen is a content problem;
+	 * black means the fault is below the overlay. */
+	if (0 == strncmp(opt, "forgered", 8)) {
+		DISP_CPU_REG_SET(DISP_REG_OVL_ROI_BGCLR, 0xffff0000);
+		DISP_CPU_REG_SET(DISP_REG_OVL_SRC_CON, 0x0);
+		pr_err("forge-disp: BGCLR=0x%x SRC_CON=0x%x (solid red, layers off)\n",
+		       DISP_REG_GET(DISP_REG_OVL_ROI_BGCLR),
+		       DISP_REG_GET(DISP_REG_OVL_SRC_CON));
+		return;
+	}
+
+	/* force the crossbar into the wiring the primary path
+	 * actually needs. On a fresh boot DSI0_SEL reads 0, which selects
+	 * UFOE — and this chip has no UFOE at all (its reg entry in the
+	 * DISPSYS node is <0 0>), so the DSI is listening to nothing. The
+	 * same registers were observed in the other state later in the same
+	 * session, so something does reconnect the path eventually; this
+	 * puts it there on demand. */
+	/* reconnect the primary path through the path manager,
+	 * then show what the crossbar ended up as. */
+	/* force the session mode through the driver, with force=1.
+	 * The idle manager parks the path in decouple and the HAL then waits
+	 * for an overlay it can never get, so it never asks to come back.
+	 * This asks on its behalf: forgemode:1 = direct link, 2 = decouple. */
+	if (0 == strncmp(opt, "forgerel:", 9)) {
+		extern void forge_release_layer(unsigned int layer);
+		char *rp = (char *)opt + 9;
+		unsigned long int rl = 0;
+
+		if (kstrtoul(rp, 10, &rl))
+			pr_err("forge-disp: bad forgerel arg\n");
+		forge_release_layer((unsigned int)rl);
+		return;
+	}
+
+	if (0 == strncmp(opt, "forgemode:", 10)) {
+		char *fp = (char *)opt + 10;
+		unsigned long int fm = 0;
+
+		if (kstrtoul(fp, 10, &fm))
+			pr_err("forge-disp: bad forgemode arg\n");
+		pr_err("forge-disp: forcing session mode -> %lu\n", fm);
+		primary_display_switch_mode((int)fm,
+					    MAKE_DISP_SESSION(DISP_SESSION_PRIMARY, 0), 1);
+		pr_err("forge-disp: route now OVL0_MOUT=0x%x DITHER_MOUT=0x%x COLOR0_SEL=0x%x DSI0_SEL=0x%x RDMA0_SOUT=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_OVL0_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_DITHER_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_COLOR0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DSI0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_RDMA0_SOUT_SEL_IN));
+		return;
+	}
+
+	if (0 == strncmp(opt, "forgeconnect", 12)) {
+		extern void forge_reconnect_primary(void);
+
+		pr_err("forge-disp: route before OVL0_MOUT=0x%x DITHER_MOUT=0x%x COLOR0_SEL=0x%x DSI0_SEL=0x%x RDMA0_SOUT=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_OVL0_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_DITHER_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_COLOR0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DSI0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_RDMA0_SOUT_SEL_IN));
+		forge_reconnect_primary();
+		pr_err("forge-disp: route after  OVL0_MOUT=0x%x DITHER_MOUT=0x%x COLOR0_SEL=0x%x DSI0_SEL=0x%x RDMA0_SOUT=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_OVL0_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_DITHER_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_COLOR0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DSI0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_RDMA0_SOUT_SEL_IN));
+		return;
+	}
+
+	if (0 == strncmp(opt, "forgeroute", 10)) {
+		pr_err("forge-disp: route before OVL0_MOUT=0x%x DITHER_MOUT=0x%x COLOR0_SEL=0x%x DSI0_SEL=0x%x RDMA0_SOUT=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_OVL0_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_DITHER_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_COLOR0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DSI0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_RDMA0_SOUT_SEL_IN));
+		DISP_CPU_REG_SET(DISP_REG_CONFIG_DISP_OVL0_MOUT_EN, 0x1);
+		DISP_CPU_REG_SET(DISP_REG_CONFIG_DISP_DITHER_MOUT_EN, 0x1);
+		DISP_CPU_REG_SET(DISP_REG_CONFIG_DISP_COLOR0_SEL_IN, 0x1);
+		DISP_CPU_REG_SET(DISP_REG_CONFIG_DSI0_SEL_IN, 0x1);
+		DISP_CPU_REG_SET(DISP_REG_CONFIG_DISP_RDMA0_SOUT_SEL_IN, 0x2);
+		pr_err("forge-disp: route after  OVL0_MOUT=0x%x DITHER_MOUT=0x%x COLOR0_SEL=0x%x DSI0_SEL=0x%x RDMA0_SOUT=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_OVL0_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_DITHER_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_COLOR0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DSI0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_RDMA0_SOUT_SEL_IN));
+		return;
+	}
+
+	if (0 == strncmp(opt, "forgedump", 9)) {
+		extern void forge_report_mode(void);
+		extern unsigned int forge_irq_count[DISP_MODULE_NUM];
+		extern unsigned int forge_ioctl_nr_count[256];
+		int fi;
+		char fbuf[240];
+		int fn = 0;
+
+		forge_report_mode();	/* report mode */
+		/* which ioctls is the HAL actually making while it
+		 * waits? Only the numbers that were used are printed. */
+		for (fi = 0; fi < 256; fi++) {
+			if (!forge_ioctl_nr_count[fi])
+				continue;
+			if (fn > (int)sizeof(fbuf) - 24)
+				break;
+			fn += snprintf(fbuf + fn, sizeof(fbuf) - fn, "%d:%u ",
+				       fi, forge_ioctl_nr_count[fi]);
+		}
+		pr_err("forge-ioctl: %s\n", fbuf);
+		pr_err("forge-irq: RDMA0=%u DSI0=%u OVL0=%u MUTEX=%u\n",
+		       forge_irq_count[DISP_MODULE_RDMA0],
+		       forge_irq_count[DISP_MODULE_DSI0],
+		       forge_irq_count[DISP_MODULE_OVL0],
+		       forge_irq_count[DISP_MODULE_MUTEX]);
+		{
+			/* underflow measured IN the IRQ handler, not
+			 * polled. INTSTA is cleared every frame, so a poll reads
+			 * ~0 (p80's RDMA0 INTSTA=0x0 was that artefact). These
+			 * latch the bits when the IRQ fires. Normalise by
+			 * ovl0_frames. rdma_uflow = RDMA0's own bit-4 counter. */
+			extern unsigned int forge_ovl0_frame_done;
+			extern unsigned int forge_ovl0_frame_underrun;
+			extern unsigned int forge_ovl0_rdma_eof_abnormal[4];
+			extern unsigned int forge_ovl0_rdma_fifo_underflow[4];
+			extern unsigned int rdma_underflow_irq_cnt[];
+
+			pr_err("forge-uflow: ovl0_frames=%u frame_underrun=%u rdma0_uflow=%u\n",
+			       forge_ovl0_frame_done, forge_ovl0_frame_underrun,
+			       rdma_underflow_irq_cnt[0]);
+			/* bits are per internal-RDMA (0-3), NOT per layer; eof_abnormal
+			 * (bits 5-8) is IRQ-enabled/reliable, fifo_underflow (bits 9-12)
+			 * is best-effort (not IRQ-enabled). See ddp_irq.c p88. */
+			pr_err("forge-uflow: ovl0 rdma_eof_abnormal[0-3]=[%u %u %u %u] rdma_fifo_underflow[0-3]=[%u %u %u %u]\n",
+			       forge_ovl0_rdma_eof_abnormal[0], forge_ovl0_rdma_eof_abnormal[1],
+			       forge_ovl0_rdma_eof_abnormal[2], forge_ovl0_rdma_eof_abnormal[3],
+			       forge_ovl0_rdma_fifo_underflow[0], forge_ovl0_rdma_fifo_underflow[1],
+			       forge_ovl0_rdma_fifo_underflow[2], forge_ovl0_rdma_fifo_underflow[3]);
+		}
+		pr_err("forge-disp: MMSYS_CG_CON0=0x%x CG_CON1=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON0),
+		       DISP_REG_GET(DISP_REG_CONFIG_MMSYS_CG_CON1));
+		pr_err("forge-disp: OVL0 STA=0x%x INTSTA=0x%x EN=0x%x ROI=0x%x L0_CON=0x%x L0_ADDR=0x%x\n",
+		       DISP_REG_GET(DISP_REG_OVL_STA),
+		       DISP_REG_GET(DISP_REG_OVL_INTSTA),
+		       DISP_REG_GET(DISP_REG_OVL_EN),
+		       DISP_REG_GET(DISP_REG_OVL_ROI_SIZE),
+		       DISP_REG_GET(DISP_REG_OVL_L0_CON),
+		       DISP_REG_GET(DISP_REG_OVL_L0_ADDR));
+		/* the registers that decide whether the configured
+		 * layer is actually FETCHED and whether the DDP path is wired
+		 * end to end. SRC_CON holds the per-layer enable bits; without
+		 * L0 set the OVL emits ROI_BGCLR (black) no matter how well
+		 * L0_CON/L0_ADDR are filled in. The MOUT/SEL_IN pairs are the
+		 * MMSYS crossbar; a port left at reset routes the pixel stream
+		 * nowhere. MUTEX0 MOD/SOF/EN decide whether any of it latches. */
+		pr_err("forge-disp: OVL0 SRC_CON=0x%x BGCLR=0x%x DATAPATH=0x%x L0_SRC_SIZE=0x%x L0_OFFSET=0x%x L0_PITCH=0x%x RDMA0_CTRL=0x%x\n",
+		       DISP_REG_GET(DISP_REG_OVL_SRC_CON),
+		       DISP_REG_GET(DISP_REG_OVL_ROI_BGCLR),
+		       DISP_REG_GET(DISP_REG_OVL_DATAPATH_CON),
+		       DISP_REG_GET(DISP_REG_OVL_L0_SRC_SIZE),
+		       DISP_REG_GET(DISP_REG_OVL_L0_OFFSET),
+		       DISP_REG_GET(DISP_REG_OVL_L0_PITCH),
+		       DISP_REG_GET(DISP_REG_OVL_RDMA0_CTRL));
+		pr_err("forge-disp: ROUTE OVL0_MOUT=0x%x DITHER_MOUT=0x%x UFOE_MOUT=0x%x COLOR0_SEL=0x%x UFOE_SEL=0x%x DSI0_SEL=0x%x RDMA0_SOUT=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_OVL0_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_DITHER_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_UFOE_MOUT_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_COLOR0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_UFOE_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DSI0_SEL_IN),
+		       DISP_REG_GET(DISP_REG_CONFIG_DISP_RDMA0_SOUT_SEL_IN));
+		pr_err("forge-disp: MUTEX0 MOD=0x%x SOF=0x%x EN=0x%x INTSTA=0x%x | RDMA0 GMC0=0x%x FIFO=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CONFIG_MUTEX0_MOD),
+		       DISP_REG_GET(DISP_REG_CONFIG_MUTEX0_SOF),
+		       DISP_REG_GET(DISP_REG_CONFIG_MUTEX0_EN),
+		       DISP_REG_GET(DISP_REG_CONFIG_MUTEX_INTSTA),
+		       DISP_REG_GET(DISP_REG_RDMA_MEM_GMC_SETTING_0),
+		       DISP_REG_GET(DISP_REG_RDMA_FIFO_CON));
+		{
+			/* DSI0 is the last stage: if it is not streaming, the
+			 * configured OVL/RDMA never reach the panel. Read it
+			 * straight from the driver's mapped registers. */
+			extern struct DSI_REGS *DSI_REG[2];
+
+			if (DSI_REG[0])
+				pr_err("forge-disp: DSI0 INTSTA=0x%x MODE_CTRL=0x%x TXRX_CTRL=0x%x PSCTRL=0x%x STA=0x%x START=0x%x\n",
+				       INREG32(&DSI_REG[0]->DSI_INTSTA),
+				       INREG32(&DSI_REG[0]->DSI_MODE_CTRL),
+				       INREG32(&DSI_REG[0]->DSI_TXRX_CTRL),
+				       INREG32(&DSI_REG[0]->DSI_PSCTRL),
+				       INREG32(&DSI_REG[0]->DSI_STA),
+				       INREG32(&DSI_REG[0]->DSI_START));
+			else
+				pr_err("forge-disp: DSI_REG[0] is NULL\n");
+			/* the PHY. Everything upstream can be perfect
+			 * and the panel still sees nothing if MIPITX is not
+			 * driving the lanes — the built-in DSI test pattern goes
+			 * through here too, which is why it also stayed black.
+			 * Also read back the BIST registers so "pattern on" is a
+			 * fact rather than an assumption. */
+			{
+				extern struct DSI_PHY_REGS *DSI_PHY_REG[2];
+
+				if (DSI_PHY_REG[0])
+					pr_err("forge-disp: MIPITX CON=0x%x CLK_LANE=0x%x D0=0x%x D1=0x%x D2=0x%x D3=0x%x TOP_CON=0x%x BG_CON=0x%x PLL0=0x%x PLL1=0x%x PLL2=0x%x\n",
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_CON),
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_CLOCK_LANE),
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_DATA_LANE0),
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_DATA_LANE1),
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_DATA_LANE2),
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_DATA_LANE3),
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_TOP_CON),
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_BG_CON),
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_PLL_CON0),
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_PLL_CON1),
+					       INREG32(&DSI_PHY_REG[0]->MIPITX_DSI_PLL_CON2));
+				if (DSI_REG[0])
+					pr_err("forge-disp: DSI0 BIST_CON=0x%x BIST_PATTERN=0x%x VACT_NL=0x%x HSA=0x%x HBP=0x%x HFP=0x%x\n",
+					       INREG32(&DSI_REG[0]->DSI_BIST_CON),
+					       INREG32(&DSI_REG[0]->DSI_BIST_PATTERN),
+					       INREG32(&DSI_REG[0]->DSI_VACT_NL),
+					       INREG32(&DSI_REG[0]->DSI_HSA_WC),
+					       INREG32(&DSI_REG[0]->DSI_HBP_WC),
+					       INREG32(&DSI_REG[0]->DSI_HFP_WC));
+			}
+		}
+		pr_err("forge-disp: CCORR EN=0x%x CFG=0x%x SIZE=0x%x | DITHER EN=0x%x CFG=0x%x SIZE=0x%x\n",
+		       DISP_REG_GET(DISP_REG_CCORR_EN),
+		       DISP_REG_GET(DISP_REG_CCORR_CFG),
+		       DISP_REG_GET(DISP_REG_CCORR_SIZE),
+		       DISP_REG_GET(DISP_REG_DITHER_EN),
+		       DISP_REG_GET(DISP_REG_DITHER_CFG),
+		       DISP_REG_GET(DISP_REG_DITHER_SIZE));
+		pr_err("forge-disp: RDMA0 INTSTA=0x%x GLOBAL_CON=0x%x SIZE0=0x%x SIZE1=0x%x STATUS=0x%x\n",
+		       DISP_REG_GET(DISP_REG_RDMA_INT_STATUS),
+		       DISP_REG_GET(DISP_REG_RDMA_GLOBAL_CON),
+		       DISP_REG_GET(DISP_REG_RDMA_SIZE_CON_0),
+		       DISP_REG_GET(DISP_REG_RDMA_SIZE_CON_1),
+		       DISP_REG_GET(DISP_REG_RDMA_GLOBAL_CON));
+		return;
+	}
+
 	if (0 == strncmp(opt, "rdma_ultra:", 11)) {
 		p = (char *)opt + 11;
 		ret = kstrtoul(p, 16, &gRDMAUltraSetting);
