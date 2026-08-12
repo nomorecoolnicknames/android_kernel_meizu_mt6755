@@ -1335,7 +1335,15 @@ static void f_midi_free_inst(struct usb_function_instance *f)
 }
 
 #ifdef CONFIG_USB_CONFIGFS_UEVENT
-extern struct device *create_function_device(char *name);
+/* this file builds two ways. Included into android.c
+ * (FORGE_G_ANDROID_TU defined) the function device already exists and
+ * the static android_lookup_function_device() from that TU finds it.
+ * Built standalone for the configfs gadget no such device exists yet,
+ * so create it with create_function_device() from configfs.c — the
+ * upstream android-common idiom, same as f_audio_source.c. */
+#ifndef FORGE_G_ANDROID_TU
+struct device *create_function_device(char *name);
+#endif
 static ssize_t alsa_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -1370,7 +1378,11 @@ static int create_alsa_device(struct usb_function_instance *fi)
 	struct device_attribute *attr;
 	int err = 0;
 
+#ifdef FORGE_G_ANDROID_TU
+	dev = android_lookup_function_device("f_midi");
+#else
 	dev = create_function_device("f_midi");
+#endif
 	if (IS_ERR(dev))
 		return PTR_ERR(dev);
 

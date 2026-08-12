@@ -30,9 +30,30 @@
 
 /* Add for HW/SW connect */
 #include "mtk_gadget.h"
+
+/* mark this TU so the #included f_* sources pick the legacy
+ * android_lookup_function_device() below instead of the configfs-path
+ * create_function_device() from configfs.c (see f_mtp.c, f_midi.c). */
+#define FORGE_G_ANDROID_TU 1
+/* fwd decl — defined later in this file, called from the f_*
+ * sources #included below (f_mtp.c, f_midi.c). */
+static struct device *android_lookup_function_device(char *name);
+/* Set once a host has configured the gadget (USB_STATE=CONFIGURED); the
+ * boot deadline (init/forge_m681_marker.c) stands down on it. */
+int forge_usb_configured;
+EXPORT_SYMBOL(forge_usb_configured);
+/* DRAM markers (defined in arch/arm64/kernel/setup.c). */
+extern void forge_kmark(int ms);
+extern void forge_kmark_ptr(int ms, unsigned long v);
+
 /* Add for HW/SW connect */
 
 #include "u_fs.h"
+
+/* legacy f_adb, from the stock 3.18 tree. The ramdisk never mounts
+ * functionfs and never writes f_ffs/aliases: its adbd talks to
+ * /dev/android_adb, i.e. this function. */
+#include "f_adb.c"
 
 #ifdef CONFIG_MTK_KERNEL_POWER_OFF_CHARGING
 #include "f_hid.c"
@@ -49,7 +70,12 @@
 #include "f_rndis.c"
 /* note ERROR macro both appear on cdev & u_ether, make sure what you want */
 #include "rndis.c"
-#include "u_ether.c"
+/* u_ether.c is NOT #included here (unlike the 3.18-style gadget):
+ * the 4.9 tree links it standalone (obj-$(CONFIG_USB_U_ETHER)) and its
+ * gether_* are EXPORT_SYMBOL_GPL'd; including it here double-defines
+ * rndis_test_* and friends at link time. */
+#include "u_ether.h"
+#include "u_ether_configfs.h"
 
 USB_ETHERNET_MODULE_PARAMETERS();
 
@@ -232,9 +258,10 @@ static void android_work(struct work_struct *data)
 		is_hwconnected = false;
 
 	spin_lock_irqsave(&cdev->lock, flags);
-	if (cdev->config)
+	if (cdev->config) {
 		uevent_envp = configured;
-	else if (dev->connected != dev->sw_connected)
+		forge_usb_configured = 1;
+	} else if (dev->connected != dev->sw_connected)
 		uevent_envp = dev->connected ? connected : disconnected;
 	dev->sw_connected = dev->connected;
 	spin_unlock_irqrestore(&cdev->lock, flags);
@@ -274,6 +301,7 @@ static void android_enable(struct android_dev *dev)
 	if (--dev->disable_depth == 0) {
 		usb_add_config(cdev, &android_config_driver,
 					android_bind_config);
+		forge_kmark(114);	/* about to pull up D+ */
 		usb_gadget_connect(cdev->gadget);
 	}
 }
@@ -308,7 +336,7 @@ static void hid_function_cleanup(struct android_usb_function *f)
 {
 	ghid_cleanup();
 }
-static struct android_usb_function hid_function = {
+static struct android_usb_function __maybe_unused hid_function = {
 	.name		= "hid",
 	.init		= hid_function_init,
 	.cleanup	= hid_function_cleanup,
@@ -339,8 +367,14 @@ static int ffs_function_init(struct android_usb_function *f,
 
 	config = f->config;
 	config->fi = usb_get_function_instance("ffs");
-	if (IS_ERR(config->fi))
-		return PTR_ERR(config->fi);
+	if (IS_ERR(config->fi)) {
+		int ret = PTR_ERR(config->fi);
+
+		/* leave no ERR_PTR behind — the unwind path
+		 * (android_cleanup_functions) blindly puts config->fi. */
+		config->fi = NULL;
+		return ret;
+	}
 
 	opts = to_f_fs_opts(config->fi);
 	opts->dev->ffs_ready_callback = functionfs_ready_callback;
@@ -355,10 +389,11 @@ static void ffs_function_cleanup(struct android_usb_function *f)
 	struct functionfs_config *config = f->config;
 
 
-	if (config)
+	if (config && !IS_ERR_OR_NULL(config->fi))
 		usb_put_function_instance(config->fi);
 
 	kfree(f->config);
+	f->config = NULL;
 }
 
 static void ffs_function_enable(struct android_usb_function *f)
@@ -469,6 +504,8 @@ static int functionfs_ready_callback(struct ffs_data *ffs)
 
 	mutex_lock(&dev->mutex);
 
+	forge_kmark(113);	/* adbd wrote ffs descriptors */
+
 	config->data = ffs;
 	config->opened = true;
 
@@ -500,6 +537,114 @@ static void functionfs_closed_callback(struct ffs_data *ffs)
 	mutex_unlock(&dev->mutex);
 }
 
+/* legacy adb function glue, as in the stock 3.18 android.c (the
+ * enable/disable/ready/closed gating is #if 0 there too: "This patch
+ * cause WHQL fail"), so the gadget does not gate on adbd. */
+struct adb_data {
+	bool opened;
+	bool enabled;
+};
+
+static int
+adb_function_init(struct android_usb_function *f,
+		struct usb_composite_dev *cdev)
+{
+	f->config = kzalloc(sizeof(struct adb_data), GFP_KERNEL);
+	if (!f->config)
+		return -ENOMEM;
+
+	return adb_setup();
+}
+
+static void adb_function_cleanup(struct android_usb_function *f)
+{
+	adb_cleanup();
+	kfree(f->config);
+	f->config = NULL;
+}
+
+static int
+adb_function_bind_config(struct android_usb_function *f,
+		struct usb_configuration *c)
+{
+	return adb_bind_config(c);
+}
+
+static void adb_android_function_enable(struct android_usb_function *f)
+{
+/* This patch cause WHQL fail */
+#if 0
+	struct android_dev *dev = _android_dev;
+	struct adb_data *data = f->config;
+
+	data->enabled = true;
+
+	/* Disable the gadget until adbd is ready */
+	if (!data->opened)
+		android_disable(dev);
+#endif
+}
+
+static void adb_android_function_disable(struct android_usb_function *f)
+{
+/* This patch cause WHQL fail */
+#if 0
+	struct android_dev *dev = _android_dev;
+	struct adb_data *data = f->config;
+
+	data->enabled = false;
+
+	/* Balance the disable that was called in closed_callback */
+	if (!data->opened)
+		android_enable(dev);
+#endif
+}
+
+static struct android_usb_function adb_function = {
+	.name		= "adb",
+	.enable		= adb_android_function_enable,
+	.disable	= adb_android_function_disable,
+	.init		= adb_function_init,
+	.cleanup	= adb_function_cleanup,
+	.bind_config	= adb_function_bind_config,
+};
+
+static void adb_ready_callback(void)
+{
+/* This patch cause WHQL fail */
+#if 0
+	struct android_dev *dev = _android_dev;
+	struct adb_data *data = adb_function.config;
+
+	mutex_lock(&dev->mutex);
+
+	data->opened = true;
+
+	if (data->enabled)
+		android_enable(dev);
+
+	mutex_unlock(&dev->mutex);
+#endif
+}
+
+static void adb_closed_callback(void)
+{
+/* This patch cause WHQL fail */
+#if 0
+	struct android_dev *dev = _android_dev;
+	struct adb_data *data = adb_function.config;
+
+	mutex_lock(&dev->mutex);
+
+	data->opened = false;
+
+	if (data->enabled)
+		android_disable(dev);
+
+	mutex_unlock(&dev->mutex);
+#endif
+}
+
 /* note all serial port number could not exceed MAX_U_SERIAL_PORTS */
 #define MAX_ACM_INSTANCES 4
 struct acm_function_config {
@@ -528,22 +673,29 @@ acm_function_init(struct android_usb_function *f,
 		config->f_acm_inst[i] = usb_get_function_instance("acm");
 		if (IS_ERR(config->f_acm_inst[i])) {
 			ret = PTR_ERR(config->f_acm_inst[i]);
-			goto err_usb_get_function_instance;
+			config->f_acm_inst[i] = NULL;
+			goto err_put;
 		}
 		config->f_acm[i] = usb_get_function(config->f_acm_inst[i]);
 		if (IS_ERR(config->f_acm[i])) {
 			ret = PTR_ERR(config->f_acm[i]);
-			goto err_usb_get_function;
+			config->f_acm[i] = NULL;
+			goto err_put;
 		}
 	}
 	return 0;
-err_usb_get_function_instance:
-	pr_err("Could not usb_get_function_instance() %d\n", i);
-	while (i-- > 0) {
-		usb_put_function(config->f_acm[i]);
-err_usb_get_function:
-		pr_err("Could not usb_get_function() %d\n", i);
-		usb_put_function_instance(config->f_acm_inst[i]);
+err_put:
+	/* unwind fully and leave the array NULL-clean — the
+	 * composite fail path calls acm_function_cleanup again, and the old
+	 * interleaved-goto version left ERR_PTRs behind for it to put. */
+	pr_err("acm init failed at instance %d (%d)\n", i, ret);
+	for (; i >= 0; i--) {
+		if (config->f_acm[i])
+			usb_put_function(config->f_acm[i]);
+		config->f_acm[i] = NULL;
+		if (config->f_acm_inst[i])
+			usb_put_function_instance(config->f_acm_inst[i]);
+		config->f_acm_inst[i] = NULL;
 	}
 	return ret;
 }
@@ -553,9 +705,15 @@ static void acm_function_cleanup(struct android_usb_function *f)
 	int i;
 	struct acm_function_config *config = f->config;
 
+	if (!config)
+		return;
 	for (i = 0; i < MAX_ACM_INSTANCES; i++) {
-		usb_put_function(config->f_acm[i]);
-		usb_put_function_instance(config->f_acm_inst[i]);
+		if (!IS_ERR_OR_NULL(config->f_acm[i]))
+			usb_put_function(config->f_acm[i]);
+		config->f_acm[i] = NULL;
+		if (!IS_ERR_OR_NULL(config->f_acm_inst[i]))
+			usb_put_function_instance(config->f_acm_inst[i]);
+		config->f_acm_inst[i] = NULL;
 	}
 	kfree(f->config);
 	f->config = NULL;
@@ -887,7 +1045,7 @@ static ssize_t serial_port_store(struct device *dev,
 static DEVICE_ATTR(port, S_IRUGO | S_IWUSR, serial_port_show, serial_port_store);
 static struct device_attribute *serial_function_attributes[] = { &dev_attr_port, NULL };
 
-static struct android_usb_function serial_function = {
+static struct android_usb_function __maybe_unused serial_function = {
 	.name		= "gser",
 	.init		= serial_function_init,
 	.cleanup	= serial_function_cleanup,
@@ -942,59 +1100,10 @@ static int mtp_function_ctrlrequest(struct android_usb_function *f,
 	return mtp_ctrlrequest(cdev, c);
 }
 
-static int cpumask_to_int(const struct cpumask *cpu_mask)
-{
-	int mask = 0;
-	int cpu;
-
-	for_each_cpu(cpu, cpu_mask) {
-		pr_debug("[USB]%d\n", cpu);
-		mask |= (1 << cpu);
-	}
-
-	return mask;
-}
-
-static ssize_t cpu_mask_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct cpumask *cpu_mask = mtp_get_cpu_mask();
-
-	return sprintf(buf, "0x%X\n", (cpu_mask?cpumask_to_int(cpu_mask):0xFFFFFFFF));
-}
-
-static ssize_t cpu_mask_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t size)
-{
-	unsigned int mask;
-
-	if (kstrtouint(buf, 16, &mask) != 0)
-		return -EINVAL;
-
-	pr_info("Store => 0x%x\n", mask);
-
-	mtp_set_cpu_mask(mask);
-
-	return size;
-}
-
-static DEVICE_ATTR(cpu_mask, S_IRUGO | S_IWUSR, cpu_mask_show,
-					       cpu_mask_store);
-
-static ssize_t mtp_server_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	return sprintf(buf, "%d\n", mtp_get_mtp_server());
-}
-
-static DEVICE_ATTR(mtp_server, S_IRUGO, mtp_server_show,
-					       NULL);
-
-static struct device_attribute *mtp_function_attributes[] = {
-	&dev_attr_cpu_mask,
-	&dev_attr_mtp_server,
-	NULL
-};
+/* the mtp attribute glue (cpumask_to_int, cpu_mask_show/store,
+ * mtp_server_show, mtp_function_attributes) used to be duplicated here;
+ * f_mtp.c — #included at the top of this file — carries the identical
+ * canonical set, and mtp_function.attributes below resolves to it. */
 
 static struct android_usb_function mtp_function = {
 	.name		= "mtp",
@@ -1111,7 +1220,7 @@ static struct device_attribute *eem_function_attributes[] = {
 	NULL
 };
 
-static struct android_usb_function eem_function = {
+static struct android_usb_function __maybe_unused eem_function = {
 	.name		= "eem",
 	.init		= eem_function_init,
 	.cleanup	= eem_function_cleanup,
@@ -1410,7 +1519,7 @@ static struct device_attribute *rndis_function_attributes[] = {
 	NULL
 };
 
-static struct android_usb_function rndis_function = {
+static struct android_usb_function __maybe_unused rndis_function = {
 	.name		= "rndis",
 	.init		= rndis_function_init,
 	.cleanup	= rndis_function_cleanup,
@@ -1609,7 +1718,7 @@ static struct device_attribute *mass_storage_function_attributes[] = {
 	NULL
 };
 
-static struct android_usb_function mass_storage_function = {
+static struct android_usb_function __maybe_unused mass_storage_function = {
 	.name		= "mass_storage",
 	.init		= mass_storage_function_init,
 	.cleanup	= mass_storage_function_cleanup,
@@ -1642,7 +1751,7 @@ static int accessory_function_ctrlrequest(struct android_usb_function *f,
 	return acc_ctrlrequest(cdev, c);
 }
 
-static struct android_usb_function accessory_function = {
+static struct android_usb_function __maybe_unused accessory_function = {
 	.name		= "accessory",
 	.init		= accessory_function_init,
 	.cleanup	= accessory_function_cleanup,
@@ -1666,13 +1775,20 @@ static int audio_source_function_init(struct android_usb_function *f,
 		return -ENOMEM;
 
 	config->f_aud_inst = usb_get_function_instance("audio_source");
-	if (IS_ERR(config->f_aud_inst))
-		return PTR_ERR(config->f_aud_inst);
+	if (IS_ERR(config->f_aud_inst)) {
+		int ret = PTR_ERR(config->f_aud_inst);
+
+		kfree(config);	/* was leaked */
+		return ret;
+	}
 
 	config->f_aud = usb_get_function(config->f_aud_inst);
 	if (IS_ERR(config->f_aud)) {
+		int ret = PTR_ERR(config->f_aud);
+
 		usb_put_function_instance(config->f_aud_inst);
-		return PTR_ERR(config->f_aud);
+		kfree(config);	/* was leaked */
+		return ret;
 	}
 
 	f->config = config;
@@ -1683,6 +1799,12 @@ static void audio_source_function_cleanup(struct android_usb_function *f)
 {
 	struct audio_source_function_config *config = f->config;
 
+	/* (BUG B): init fails before f->config is assigned when the
+	 * "audio_source" function driver isn't built (no USB_F_AUDIO_SRC) —
+	 * the composite fail-path cleanup then dereferenced NULL here and
+	 * oopsed kernel_init on every p31-p34 boot. */
+	if (!config)
+		return;
 
 	usb_put_function(config->f_aud);
 	usb_put_function_instance(config->f_aud_inst);
@@ -1700,7 +1822,7 @@ static int audio_source_function_bind_config(struct android_usb_function *f,
 	return usb_add_function(c, config->f_aud);
 }
 
-static struct android_usb_function audio_source_function = {
+static struct android_usb_function __maybe_unused audio_source_function = {
 	.name		= "audio_source",
 	.init		= audio_source_function_init,
 	.cleanup	= audio_source_function_cleanup,
@@ -1845,36 +1967,23 @@ static struct android_usb_function midi_function = {
 #endif
 
 static struct android_usb_function *supported_functions[] = {
+	&adb_function,	/* the ramdisk's adbd path (android_adb) */
 	&ffs_function,
 	&acm_function,
 	&mtp_function,
 	&ptp_function,
-	&eem_function,
-	&serial_function,
-	&rndis_function,
-	&mass_storage_function,
-	&accessory_function,
-	&audio_source_function,
-#ifdef CONFIG_SND_RAWMIDI
-	&midi_function,
-#endif
-#ifdef CONFIG_MTK_ECCCI_C2K_TMP
-	&rawbulk_modem_function,
-	&rawbulk_ets_function,
-	&rawbulk_atc_function,
-	&rawbulk_pcv_function,
-	&rawbulk_gps_function,
-#endif
-#ifdef CONFIG_USB_F_SS_LB
-	&loopback_function,
-#endif
-#ifdef CONFIG_MTK_KERNEL_POWER_OFF_CHARGING
-	&hid_function,
-#endif
+	/* Reduced function table: the functions that needed changes to link
+	 * with the legacy gadget (eem/rndis = u_ether; serial; accessory; midi)
+	 * and mass_storage/audio_source/hid/loopback/rawbulk are left out. The
+	 * ramdisk default is mtp,adb, so ffs+mtp+ptp+acm are sufficient. */
 	NULL
 };
 
-struct device *create_function_device(char *name)
+/* renamed from create_function_device — configfs.c exports a
+ * same-named but DIFFERENT function (creates a new device; this one
+ * looks up an existing function device by name). Callers are the f_*
+ * files #included into this TU (f_mtp/f_midi). */
+static struct device *android_lookup_function_device(char *name)
 {
 	struct android_dev *dev = _android_dev;
 	struct android_usb_function **functions;
@@ -1941,9 +2050,11 @@ static int android_init_functions(struct android_usb_function **functions,
 
 err_out:
 	device_destroy(android_class, f->dev->devt);
+	f->dev = NULL;		/* the composite fail path walks */
 err_create:
-	kfree(f->dev_name);
-	return err;
+	kfree(f->dev_name);	/* the whole table again via */
+	f->dev_name = NULL;	/* android_cleanup_functions — no dangling */
+	return err;		/* pointers, no double kfree (BUG B). */
 }
 
 static void android_cleanup_functions(struct android_usb_function **functions)
@@ -1957,6 +2068,8 @@ static void android_cleanup_functions(struct android_usb_function **functions)
 		if (f->dev) {
 			device_destroy(android_class, f->dev->devt);
 			kfree(f->dev_name);
+			f->dev = NULL;		/* idempotent */
+			f->dev_name = NULL;
 		}
 
 		if (f->cleanup)
@@ -2048,6 +2161,15 @@ functions_store(struct device *pdev, struct device_attribute *attr,
 	int is_ffs;
 	int ffs_enabled = 0;
 
+	/* marker slot 111: userspace reached the usb rc — value holds the
+	 * first 8 chars of the requested function list (e.g. "mtp,adb\0"). */
+	{
+		u64 v = 0;
+
+		memcpy(&v, buff, min_t(size_t, sizeof(v), size));
+		forge_kmark_ptr(111, (unsigned long)v);
+	}
+
 	mutex_lock(&dev->mutex);
 
 	if (dev->enabled) {
@@ -2122,6 +2244,11 @@ static ssize_t enable_show(struct device *pdev, struct device_attribute *attr,
 	return sprintf(buf, "%d\n", dev->enabled);
 }
 
+/* set when userspace configures android0 — the deadman
+ * uses it to cancel the diagnostic WDT deadline on healthy boots. */
+int forge_userspace_alive;
+EXPORT_SYMBOL(forge_userspace_alive);
+
 static ssize_t enable_store(struct device *pdev, struct device_attribute *attr,
 			    const char *buff, size_t size)
 {
@@ -2141,6 +2268,13 @@ static ssize_t enable_store(struct device *pdev, struct device_attribute *attr,
 	pr_notice("[USB]%s: device_attr->attr.name: %s\n", __func__, attr->attr.name);
 
 	ret = kstrtoint(buff, 0, &enabled);
+
+	/* marker slot 112: android0/enable written (0x100 | value —
+	 * distinguishable from an unstamped slot even for enable=0). */
+	forge_kmark_ptr(112, 0x100UL | (unsigned long)enabled);
+
+	if (enabled)
+		forge_userspace_alive = 1;
 
 	if (enabled && !dev->enabled) {
 		/* ALPS01770952
@@ -2447,6 +2581,8 @@ static int android_bind(struct usb_composite_dev *cdev)
 	struct usb_gadget	*gadget = cdev->gadget;
 	int			id, ret;
 
+	forge_kmark(120);	/* android_bind*/
+
 	/* Save the default handler */
 	dev->setup_complete = cdev->req->complete;
 
@@ -2459,6 +2595,7 @@ static int android_bind(struct usb_composite_dev *cdev)
 	ret = android_init_functions(dev->functions, cdev);
 	if (ret)
 		return ret;
+	forge_kmark(121);	/* functions init done */
 
 	/* Allocate string descriptor numbers ... note that string
 	 * contents can be overridden by the composite_dev glue.
@@ -2493,6 +2630,7 @@ static int android_bind(struct usb_composite_dev *cdev)
 #endif
 	dev->cdev = cdev;
 
+	forge_kmark(122);	/* android_bind out */
 	return 0;
 }
 
@@ -2569,6 +2707,7 @@ static void android_disconnect(struct usb_composite_dev *cdev)
 	acc_disconnect();
 
 	dev->connected = 0;
+	forge_usb_configured = 0;	/* bootguard: the host lost the configuration */
 	schedule_work(&dev->work);
 	pr_notice("[USB]%s: dev->connected = %d\n", __func__, dev->connected);
 }
@@ -2600,10 +2739,19 @@ static void do_android_usb_state_monitor_work(struct work_struct *work)
 	if (dev && dev->cdev && dev->cdev->config)
 		usb_state = "CONFIGURED";
 
-	pr_warn("usb_state<%s>\n", usb_state);
+	/* (A0.4): log only state CHANGES — the 3s heartbeat was
+	 * flooding the 64K rc49 ring and drowning real evidence. */
+	{
+		static const char *last_state;
+
+		if (usb_state != last_state) {
+			pr_warn("usb_state<%s>\n", usb_state);
+			last_state = usb_state;
+		}
+	}
 	schedule_delayed_work(&android_usb_state_monitor_work, msecs_to_jiffies(USB_STATE_MONITOR_DELAY));
 }
-void trigger_android_usb_state_monitor_work(void)
+static void trigger_android_usb_state_monitor_work(void)  /* static — meta.c defines a same-named global */
 {
 	static int inited;
 
@@ -2836,7 +2984,13 @@ static int __init init(void)
 
 	_android_dev = dev;
 
+	/* brackets around the probe that never returns when the
+	 * legacy gadget wedges the boot (slots 102/103). */
+	forge_kmark(102);
 	err = usb_composite_probe(&android_usb_driver);
+	/* 0x600D = returned zero (a plain 0 is indistinguishable
+	 * "never stamped" — that ambiguity cost us the whole p38 read). */
+	forge_kmark_ptr(103, err ? (unsigned long)err : 0x600D);
 	if (err) {
 		pr_err("%s: failed to probe driver %d", __func__, err);
 		_android_dev = NULL;

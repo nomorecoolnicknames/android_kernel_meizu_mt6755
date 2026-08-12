@@ -514,8 +514,11 @@ config USB_G_ANDROID
 	select USB_U_SERIAL
 	select USB_F_FS
 	select USB_F_MASS_STORAGE
-	select USB_F_AUDIO_SRC
+	# m5c: no USB_F_AUDIO_SRC — needs ALSA (CONFIG_SND off in this
+	# tree; m5c audio is MTK mt_soc, and the ramdisk never uses the
+	# audio-source accessory function)
 	select USB_F_SERIAL
+	select USB_U_ETHER
 	help
 	  The Android Composite Gadget supports multiple USB
 	  functions: adb, acm, mass storage, mtp, accessory

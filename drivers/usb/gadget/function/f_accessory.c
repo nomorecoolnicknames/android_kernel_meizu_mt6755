@@ -1212,7 +1212,7 @@ static void acc_function_disable(struct usb_function *f)
 }
 
 #ifdef CONFIG_USB_G_ANDROID
-static int acc_bind_config(struct usb_configuration *c)
+static int __maybe_unused acc_bind_config(struct usb_configuration *c)
 {
 	struct acc_dev *dev = _acc_dev;
 	int ret;

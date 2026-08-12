@@ -2084,7 +2084,10 @@ static void mtp_function_disable(struct usb_function *f)
 }
 
 #ifdef CONFIG_USB_G_ANDROID
-static int mtp_bind_config(struct usb_configuration *c,
+/* __maybe_unused — this file is also compiled standalone
+ * (usb_f_mtp.o, configfs) where the legacy-gadget entry points below
+ * are unreferenced; only android.c's translation unit calls them. */
+static int __maybe_unused mtp_bind_config(struct usb_configuration *c,
 					  bool ptp_config)
 {
 	struct mtp_dev *dev = _mtp_dev;
@@ -2173,7 +2176,7 @@ err1:
 }
 
 #ifdef CONFIG_USB_G_ANDROID
-static int mtp_setup(void)
+static int __maybe_unused mtp_setup(void)
 {
 	return __mtp_setup(NULL);
 }
@@ -2317,6 +2320,14 @@ static void mtp_free_inst(struct usb_function_instance *fi)
 	kfree(fi_mtp);
 }
 
+#ifdef CONFIG_USB_CONFIGFS_UEVENT
+#ifndef FORGE_G_ANDROID_TU
+/* see the note in f_midi.c — standalone configfs builds
+ * create their function device through configfs.c. */
+struct device *create_function_device(char *name);
+#endif
+#endif
+
 struct usb_function_instance *alloc_inst_mtp_ptp(bool mtp_config)
 {
 	struct mtp_instance *fi_mtp;
@@ -2358,7 +2369,11 @@ struct usb_function_instance *alloc_inst_mtp_ptp(bool mtp_config)
 					descs, names, THIS_MODULE);
 #ifdef CONFIG_USB_CONFIGFS_UEVENT
 	if (mtp_config) {
+#ifdef FORGE_G_ANDROID_TU
+		dev = android_lookup_function_device("f_mtp");
+#else
 		dev = create_function_device("f_mtp");
+#endif
 
 		if (IS_ERR(dev)) {
 			kfree(fi_mtp);

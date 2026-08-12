@@ -182,7 +182,7 @@ config ANDROID_DEFAULT_SETTING
 	select PROC_FS
 	select PROFILING
 	select RTC_CLASS
-	select RT_GROUP_SCHED
+	select RT_GROUP_SCHED if !MACH_MT6755
 	select SECCOMP
 	select SECCOMP_FILTER
 	select SECURITY
@@ -207,13 +207,14 @@ config ANDROID_DEFAULT_SETTING
 	select UNIX
 	select UNMAP_KERNEL_AT_EL0
 	select USB_CONFIGFS
-	select USB_CONFIGFS_F_ACC
-	select USB_CONFIGFS_F_AUDIO_SRC
-	select USB_CONFIGFS_F_FS
-	select USB_CONFIGFS_F_MIDI
-	select USB_CONFIGFS_F_MTP
-	select USB_CONFIGFS_F_PTP
 	select USB_CONFIGFS_UEVENT
+	# m5c: the configfs function selects (F_ACC/F_AUDIO_SRC/F_FS/
+	# F_MIDI/F_MTP/F_PTP) are dropped — this device uses the LEGACY
+	# android gadget (USB_G_ANDROID, /sys/class/android_usb/android0,
+	# what the LOS14.1 ramdisk drives). The legacy android.c self-
+	# contains f_mtp/f_accessory/f_rndis/f_hid/f_midi via #include;
+	# building the configfs standalones too double-defines their
+	# non-static symbols at link time.
 	select USB_GADGET
         select USB_RTL8152
 	select USB_SUPPORT
