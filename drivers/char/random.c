@@ -921,9 +921,115 @@ static inline void maybe_reseed_primary_crng(void)
 		crng_reseed(&primary_crng, &input_pool);
 }
 
-static inline void crng_wait_ready(void)
+/*
+ * Backport of mainline 50ee7529ec45 ("random: try to actively add entropy
+ * rather than passively wait for it", v5.4), with the counter-rate check of
+ * the v5.18 rewrite. Here only device SPIs feed the input pool (the per-CPU
+ * timer and IPIs bypass handle_irq_event_percpu), so a phone whose init
+ * blocks in getrandom() before any driver is busy never reaches 128 bits
+ * and userspace hangs. MT6755 has no hwrng to fall back on: its ATF does
+ * not implement the MTK_SIP_KERNEL_GET_RND call mt67xx-rng relies on.
+ */
+struct entropy_timer_state {
+	unsigned long entropy;
+	struct timer_list timer;
+	unsigned int samples_per_bit;
+	atomic_t samples;
+};
+
+/*
+ * Each time the timer fires, we expect that we got an unpredictable jump in
+ * the cycle counter. Even if the timer is running on another CPU, the timer
+ * activity will be touching the stack of the CPU that is generating entropy.
+ */
+static void entropy_timer(unsigned long data)
 {
-	wait_event_interruptible(crng_init_wait, crng_ready());
+	struct entropy_timer_state *state = (struct entropy_timer_state *)data;
+	unsigned long entropy = random_get_entropy();
+
+	mix_pool_bytes(&input_pool, &entropy, sizeof(entropy));
+	if (atomic_inc_return(&state->samples) % state->samples_per_bit == 0)
+		credit_entropy_bits(&input_pool, 1);
+}
+
+/*
+ * If we have an actual cycle counter, see if we can generate enough entropy
+ * with timing noise.
+ */
+static void try_to_generate_entropy(void)
+{
+	enum { NUM_TRIAL_SAMPLES = 8192, MAX_SAMPLES_PER_BIT = HZ / 15 };
+	struct entropy_timer_state stack;
+	unsigned int i, num_different = 0;
+	unsigned long last = random_get_entropy();
+	int cpu = -1;
+
+	for (i = 0; i < NUM_TRIAL_SAMPLES - 1; ++i) {
+		stack.entropy = random_get_entropy();
+		if (stack.entropy != last)
+			++num_different;
+		last = stack.entropy;
+	}
+	stack.samples_per_bit = DIV_ROUND_UP(NUM_TRIAL_SAMPLES,
+					     num_different + 1);
+	pr_notice_once("random: jitter: %u/%u counter samples differ, %u timer samples per bit\n",
+		       num_different, NUM_TRIAL_SAMPLES - 1,
+		       stack.samples_per_bit);
+	if (stack.samples_per_bit > MAX_SAMPLES_PER_BIT)
+		return;
+
+	atomic_set(&stack.samples, 0);
+	setup_timer_on_stack(&stack.timer, entropy_timer, (unsigned long)&stack);
+	while (!crng_ready() && !signal_pending(current)) {
+		/*
+		 * Check !timer_pending() and then ensure that any previous
+		 * callback has finished executing by checking
+		 * try_to_del_timer_sync(), before queueing the next one.
+		 */
+		if (!timer_pending(&stack.timer) &&
+		    try_to_del_timer_sync(&stack.timer) >= 0) {
+			unsigned int num_cpus;
+
+			/*
+			 * Preemption must be disabled here, both to read the
+			 * current CPU number and to avoid scheduling a timer
+			 * on a dead CPU.
+			 */
+			preempt_disable();
+			num_cpus = num_online_cpus();
+
+			/* Basic CPU round-robin, which avoids the current CPU. */
+			do {
+				cpu = cpumask_next(cpu, cpu_online_mask);
+				if (cpu >= nr_cpu_ids)
+					cpu = cpumask_first(cpu_online_mask);
+			} while (cpu == smp_processor_id() && num_cpus > 1);
+
+			/* Expiring the timer at `jiffies` means it's the next tick. */
+			stack.timer.expires = jiffies;
+			add_timer_on(&stack.timer, cpu);
+
+			preempt_enable();
+		}
+		mix_pool_bytes(&input_pool, &stack.entropy,
+			       sizeof(stack.entropy));
+		schedule();
+		stack.entropy = random_get_entropy();
+	}
+	mix_pool_bytes(&input_pool, &stack.entropy, sizeof(stack.entropy));
+
+	del_timer_sync(&stack.timer);
+	destroy_timer_on_stack(&stack.timer);
+}
+
+static void crng_wait_ready(void)
+{
+	while (!crng_ready()) {
+		if (wait_event_interruptible_timeout(crng_init_wait,
+						     crng_ready(), HZ))
+			return;
+		try_to_generate_entropy();
+	}
 }
 
 static void _extract_crng(struct crng_state *crng,
