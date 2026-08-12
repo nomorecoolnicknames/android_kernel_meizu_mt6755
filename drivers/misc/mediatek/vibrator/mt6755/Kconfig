@@ -1,0 +1,8 @@
+config MTK_M681_VIBRATOR
+	tristate "M681 MT6351 vibrator with checked power control"
+	depends on OF && LEDS_CLASS && !MTK_VIBRATOR
+	default n
+	help
+	  Expose the legacy vibrator LED attributes with checked MT6351 writes.
+	  Requires the PMIC backend to return errors for denied writes.
+	  Does not grant access through the PMIC write gate.
