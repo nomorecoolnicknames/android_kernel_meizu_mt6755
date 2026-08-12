@@ -453,6 +453,171 @@ out:
 	return ret;
 }
 
+/*
+ * the pre-4.6 Android sync ABI.
+ *
+ * This device runs an Android 7.1 userspace whose libsync, hwcomposer and
+ * libGLES_mali were built against the 3.18 sync driver, where the fence
+ * ioctls are WAIT (nr 0), MERGE (nr 1) and FENCE_INFO (nr 2). Upstream
+ * replaced them with sync_file (MERGE nr 3, FILE_INFO nr 4) and dropped the
+ * old numbers, so every sync_wait()/sync_merge() from this userspace got
+ * -ENOTTY: fences never completed and libGLES_mali dereferenced NULL inside
+ * eglp_swap_buffers on the first frame. Serve the old calls too — same
+ * semantics, original structures.
+ */
+#define SYNC_IOC_LEGACY_WAIT		_IOW(SYNC_IOC_MAGIC, 0, __s32)
+#define SYNC_IOC_LEGACY_MERGE		_IOWR(SYNC_IOC_MAGIC, 1, \
+					      struct sync_merge_data_legacy)
+#define SYNC_IOC_LEGACY_FENCE_INFO	_IOWR(SYNC_IOC_MAGIC, 2, \
+					      struct sync_fence_info_data_legacy)
+
+struct sync_merge_data_legacy {
+	char	name[32];
+	__s32	fd2;
+	__s32	fence;
+};
+
+struct sync_fence_info_data_legacy {
+	__u32	len;
+	char	name[32];
+	__s32	status;
+	__u8	pt_info[0];
+};
+
+struct sync_pt_info_legacy {
+	__u32	len;
+	char	obj_name[32];
+	char	driver_name[32];
+	__s32	status;
+	__u64	timestamp_ns;
+	__u8	driver_data[0];
+};
+
+static long sync_file_ioctl_wait_legacy(struct sync_file *sync_file,
+					unsigned long arg)
+{
+	__s32 value;
+	long timeout;
+	int ret;
+
+	if (copy_from_user(&value, (void __user *)arg, sizeof(value)))
+		return -EFAULT;
+
+	if (value < 0)
+		timeout = MAX_SCHEDULE_TIMEOUT;
+	else
+		timeout = msecs_to_jiffies(value);
+
+	ret = fence_wait_timeout(sync_file->fence, true, timeout);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ETIME;
+
+	return 0;
+}
+
+static long sync_file_ioctl_merge_legacy(struct sync_file *sync_file,
+					 unsigned long arg)
+{
+	struct sync_merge_data_legacy data;
+	struct sync_file *fence2, *fence3;
+	int fd, err;
+
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0)
+		return fd;
+
+	if (copy_from_user(&data, (void __user *)arg, sizeof(data))) {
+		err = -EFAULT;
+		goto err_put_fd;
+	}
+
+	fence2 = sync_file_fdget(data.fd2);
+	if (!fence2) {
+		err = -ENOENT;
+		goto err_put_fd;
+	}
+
+	data.name[sizeof(data.name) - 1] = '\0';
+	fence3 = sync_file_merge(data.name, sync_file, fence2);
+	if (!fence3) {
+		err = -ENOMEM;
+		goto err_put_fence2;
+	}
+
+	data.fence = fd;
+	if (copy_to_user((void __user *)arg, &data, sizeof(data))) {
+		err = -EFAULT;
+		goto err_put_fence3;
+	}
+
+	fd_install(fd, fence3->file);
+	fput(fence2->file);
+	return 0;
+
+err_put_fence3:
+	fput(fence3->file);
+err_put_fence2:
+	fput(fence2->file);
+err_put_fd:
+	put_unused_fd(fd);
+	return err;
+}
+
+static long sync_file_ioctl_fence_info_legacy(struct sync_file *sync_file,
+					      unsigned long arg)
+{
+	struct sync_fence_info_data_legacy *data;
+	struct sync_pt_info_legacy *pt;
+	struct fence **fences;
+	__u32 size, len = 0;
+	int num_fences, i, ret = 0;
+
+	if (copy_from_user(&size, (void __user *)arg, sizeof(size)))
+		return -EFAULT;
+
+	if (size < sizeof(*data) || size > 4096)
+		return -EINVAL;
+
+	data = kzalloc(size, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	strlcpy(data->name, sync_file->name, sizeof(data->name));
+	data->status = fence_is_signaled(sync_file->fence);
+	if (data->status >= 0)
+		data->status = !!data->status;
+	len = sizeof(*data);
+
+	fences = get_fences(sync_file, &num_fences);
+	for (i = 0; i < num_fences; i++) {
+		struct fence *f = fences[i];
+
+		if (len + sizeof(*pt) > size)
+			break;
+
+		pt = (struct sync_pt_info_legacy *)((u8 *)data + len);
+		pt->len = sizeof(*pt);
+		strlcpy(pt->obj_name, f->ops->get_timeline_name(f),
+			sizeof(pt->obj_name));
+		strlcpy(pt->driver_name, f->ops->get_driver_name(f),
+			sizeof(pt->driver_name));
+		pt->status = fence_get_status(f);
+		pt->timestamp_ns =
+			test_bit(FENCE_FLAG_TIMESTAMP_BIT, &f->flags) ?
+			ktime_to_ns(f->timestamp) : 0;
+		len += sizeof(*pt);
+	}
+
+	data->len = len;
+	if (copy_to_user((void __user *)arg, data, len))
+		ret = -EFAULT;
+
+	kfree(data);
+	return ret;
+}
+
 static long sync_file_ioctl(struct file *file, unsigned int cmd,
 			    unsigned long arg)
 {
@@ -464,6 +629,16 @@ static long sync_file_ioctl(struct file *file, unsigned int cmd,
 
 	case SYNC_IOC_FILE_INFO:
 		return sync_file_ioctl_fence_info(sync_file, arg);
+
+	/* 3.18-era ABI this device's userspace speaks */
+	case SYNC_IOC_LEGACY_WAIT:
+		return sync_file_ioctl_wait_legacy(sync_file, arg);
+
+	case SYNC_IOC_LEGACY_MERGE:
+		return sync_file_ioctl_merge_legacy(sync_file, arg);
+
+	case SYNC_IOC_LEGACY_FENCE_INFO:
+		return sync_file_ioctl_fence_info_legacy(sync_file, arg);
 
 	default:
 		return -ENOTTY;
