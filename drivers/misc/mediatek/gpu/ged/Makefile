@@ -65,6 +65,7 @@ ccflags-y += -DMET_USER_EVENT_SUPPORT
 ccflags-y += \
 	     -I$(srctree)/include/ \
 	     -I$(MTK_TOP)/include/ \
+	     -I$(MTK_TOP)/include/mt-plat/ \
 	     -I$(GED_TOP)/include/ \
 	     -I$(MTK_TOP)/base/power/$(MTK_PLATFORM)/ \
 	     -I$(srctree)/drivers/misc/mediatek/video/include \

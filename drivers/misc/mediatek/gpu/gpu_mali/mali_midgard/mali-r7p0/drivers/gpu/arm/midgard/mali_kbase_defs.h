@@ -36,6 +36,9 @@
 #include <mali_kbase_instr.h>
 
 #include <linux/atomic.h>
+/* 4.9 fence support (see mali_kbase_sync_compat.h) */
+#include <linux/fence.h>
+#include <linux/sync_file.h>
 #include <linux/mempool.h>
 #include <linux/slab.h>
 
@@ -354,6 +357,11 @@ struct kbase_jd_atom {
 #ifdef CONFIG_SYNC
 	struct sync_fence *fence;
 	struct sync_fence_waiter sync_waiter;
+#elif defined(CONFIG_SYNC_FILE)
+	/* 4.9 fence support (see mali_kbase_sync_compat.h) */
+	struct sync_file *fence;
+	struct fence_cb sync_cb;
+	struct fence *sync_fence_waited;
 #endif				/* CONFIG_SYNC */
 
 	/* Note: refer to kbasep_js_atom_retained_state, which will take a copy of some of the following members */

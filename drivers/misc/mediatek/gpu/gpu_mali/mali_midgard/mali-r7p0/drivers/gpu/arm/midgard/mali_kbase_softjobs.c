@@ -20,10 +20,17 @@
 #include <mali_kbase.h>
 
 #include <linux/dma-mapping.h>
-#ifdef CONFIG_SYNC
+#if defined(CONFIG_SYNC) || defined(KBASE_FORGE_SYNC49)
 #include "sync.h"
 #include <linux/syscalls.h>
 #include "mali_kbase_sync.h"
+#endif
+#if !defined(CONFIG_SYNC) && defined(CONFIG_SYNC_FILE)
+/* 4.9 fence support */
+#include <linux/sync_file.h>
+#include <linux/syscalls.h>
+#include "mali_kbase_sync_compat.h"
+#define KBASE_FORGE_SYNC49 1
 #endif
 #include <mali_kbase_hwaccess_time.h>
 #include <linux/version.h>
@@ -126,7 +133,7 @@ static int kbase_dump_cpu_gpu_time(struct kbase_jd_atom *katom)
 	return 0;
 }
 
-#ifdef CONFIG_SYNC
+#if defined(CONFIG_SYNC) || defined(KBASE_FORGE_SYNC49)
 
 /* Complete an atom that has returned '1' from kbase_process_soft_job (i.e. has waited)
  *
@@ -146,6 +153,16 @@ static void complete_soft_job(struct kbase_jd_atom *katom)
 
 static enum base_jd_event_code kbase_fence_trigger(struct kbase_jd_atom *katom, int result)
 {
+#ifdef KBASE_FORGE_SYNC49
+	/* the atom carries a sync_file created by
+	 * kbase_stream_create_fence(); advancing its stream's timeline
+	 * signals it. A fence that did not come from one of our streams is
+	 * rejected, exactly as the original code did. */
+	if (kbase_sync_fence_signal(katom->fence) != 0)
+		return BASE_JD_EVENT_JOB_CANCELLED;
+
+	return (result < 0) ? BASE_JD_EVENT_JOB_CANCELLED : BASE_JD_EVENT_DONE;
+#else
 	struct sync_pt *pt;
 	struct sync_timeline *timeline;
 
@@ -175,6 +192,7 @@ static enum base_jd_event_code kbase_fence_trigger(struct kbase_jd_atom *katom, 
 	sync_timeline_signal(timeline);
 
 	return (result < 0) ? BASE_JD_EVENT_JOB_CANCELLED : BASE_JD_EVENT_DONE;
+#endif
 }
 
 static void kbase_fence_wait_worker(struct work_struct *data)
@@ -188,6 +206,7 @@ static void kbase_fence_wait_worker(struct work_struct *data)
 	complete_soft_job(katom);
 }
 
+#ifndef KBASE_FORGE_SYNC49
 static void kbase_fence_wait_callback(struct sync_fence *fence, struct sync_fence_waiter *waiter)
 {
 	struct kbase_jd_atom *katom = container_of(waiter, struct kbase_jd_atom, sync_waiter);
@@ -264,6 +283,76 @@ static void kbase_fence_cancel_wait(struct kbase_jd_atom *katom)
 	if (jd_done_nolock(katom, NULL))
 		kbase_js_sched_all(katom->kctx->kbdev);
 }
+#else /* KBASE_FORGE_SYNC49 */
+/* the same three steps on 4.9 primitives — a fence callback
+ * instead of sync_fence_waiter, sync_file instead of sync_fence. */
+static void kbase_fence_wait_cb_49(struct fence *fence, struct fence_cb *cb)
+{
+	struct kbase_jd_atom *katom = container_of(cb, struct kbase_jd_atom,
+						   sync_cb);
+	struct kbase_context *kctx = katom->kctx;
+
+	if (fence->error < 0)
+		katom->event_code = BASE_JD_EVENT_JOB_CANCELLED;
+
+	/* Defer: this callback runs from the signalling context. */
+	INIT_WORK(&katom->work, kbase_fence_wait_worker);
+	queue_work(kctx->jctx.job_done_wq, &katom->work);
+}
+
+static int kbase_fence_wait(struct kbase_jd_atom *katom)
+{
+	struct fence *fence;
+	int ret;
+
+	if (!katom->fence || !katom->fence->fence)
+		goto cancel_atom;
+
+	fence = katom->fence->fence;
+	katom->sync_fence_waited = fence_get(fence);
+
+	ret = fence_add_callback(fence, &katom->sync_cb, kbase_fence_wait_cb_49);
+	if (ret == -ENOENT) {
+		/* Already signalled */
+		fence_put(katom->sync_fence_waited);
+		katom->sync_fence_waited = NULL;
+		if (fence->error < 0)
+			katom->event_code = BASE_JD_EVENT_JOB_CANCELLED;
+		return 0;
+	} else if (ret < 0) {
+		fence_put(katom->sync_fence_waited);
+		katom->sync_fence_waited = NULL;
+		goto cancel_atom;
+	}
+
+	return 1;
+
+cancel_atom:
+	katom->event_code = BASE_JD_EVENT_JOB_CANCELLED;
+	INIT_WORK(&katom->work, kbase_fence_wait_worker);
+	queue_work(katom->kctx->jctx.job_done_wq, &katom->work);
+	return 1;
+}
+
+static void kbase_fence_cancel_wait(struct kbase_jd_atom *katom)
+{
+	struct fence *fence = katom->sync_fence_waited;
+
+	if (!fence || !fence_remove_callback(fence, &katom->sync_cb)) {
+		/* Callback already running — it owns the cleanup. */
+		return;
+	}
+
+	fence_put(fence);
+	katom->sync_fence_waited = NULL;
+
+	katom->event_code = BASE_JD_EVENT_JOB_CANCELLED;
+	kbase_finish_soft_job(katom);
+
+	if (jd_done_nolock(katom, NULL))
+		kbase_js_sched_all(katom->kctx->kbdev);
+}
+#endif /* KBASE_FORGE_SYNC49 */
 #endif /* CONFIG_SYNC */
 
 int kbase_process_soft_job(struct kbase_jd_atom *katom)
@@ -271,7 +360,7 @@ int kbase_process_soft_job(struct kbase_jd_atom *katom)
 	switch (katom->core_req & BASEP_JD_REQ_ATOM_TYPE) {
 	case BASE_JD_REQ_SOFT_DUMP_CPU_GPU_TIME:
 		return kbase_dump_cpu_gpu_time(katom);
-#ifdef CONFIG_SYNC
+#if defined(CONFIG_SYNC) || defined(KBASE_FORGE_SYNC49)
 	case BASE_JD_REQ_SOFT_FENCE_TRIGGER:
 		KBASE_DEBUG_ASSERT(katom->fence != NULL);
 		katom->event_code = kbase_fence_trigger(katom, katom->event_code == BASE_JD_EVENT_DONE ? 0 : -EFAULT);
@@ -293,7 +382,7 @@ int kbase_process_soft_job(struct kbase_jd_atom *katom)
 void kbase_cancel_soft_job(struct kbase_jd_atom *katom)
 {
 	switch (katom->core_req & BASEP_JD_REQ_ATOM_TYPE) {
-#ifdef CONFIG_SYNC
+#if defined(CONFIG_SYNC) || defined(KBASE_FORGE_SYNC49)
 	case BASE_JD_REQ_SOFT_FENCE_WAIT:
 		kbase_fence_cancel_wait(katom);
 		break;
@@ -313,7 +402,7 @@ int kbase_prepare_soft_job(struct kbase_jd_atom *katom)
 				return -EINVAL;
 		}
 		break;
-#ifdef CONFIG_SYNC
+#if defined(CONFIG_SYNC) || defined(KBASE_FORGE_SYNC49)
 	case BASE_JD_REQ_SOFT_FENCE_TRIGGER:
 		{
 			struct base_fence fence;
@@ -370,7 +459,7 @@ void kbase_finish_soft_job(struct kbase_jd_atom *katom)
 	case BASE_JD_REQ_SOFT_DUMP_CPU_GPU_TIME:
 		/* Nothing to do */
 		break;
-#ifdef CONFIG_SYNC
+#if defined(CONFIG_SYNC) || defined(KBASE_FORGE_SYNC49)
 	case BASE_JD_REQ_SOFT_FENCE_TRIGGER:
 		/* If fence has not yet been signalled, do it now */
 		if (katom->fence) {

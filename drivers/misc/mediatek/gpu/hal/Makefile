@@ -13,6 +13,7 @@
 
 ccflags-y += \
 	-I$(srctree)/drivers/misc/mediatek/gpu/ged/include \
+	-I$(srctree)/drivers/misc/mediatek/include/ \
 
 obj-y += hal.o
 hal-y := mtk_gpu_utility.o

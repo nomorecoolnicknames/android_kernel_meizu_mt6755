@@ -29,8 +29,14 @@
 #include <linux/fs.h>
 #include <linux/version.h>
 #include <linux/dma-mapping.h>
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0))
+	/* struct dma_attrs was removed in 4.8; attrs are an unsigned long bitmask */
+	#define DEFINE_DMA_ATTRS(x) unsigned long x = 0
+	#define dma_set_attr(attr, x) (*(x) |= (attr))
+	#define dma_attrs_arg(x) (x)
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0))
 	#include <linux/dma-attrs.h>
+	#define dma_attrs_arg(x) (&x)
 #endif
 #ifdef CONFIG_DMA_SHARED_BUFFER
 #include <linux/dma-buf.h>
@@ -1911,7 +1917,7 @@ void *kbase_va_alloc(struct kbase_context *kctx, u32 size, struct kbase_hwc_dma_
 	/* All the alloc calls return zeroed memory */
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0))
 	dma_set_attr(DMA_ATTR_WRITE_COMBINE, &attrs);
-	va = dma_alloc_attrs(kctx->kbdev->dev, size, &dma_pa, GFP_KERNEL, &attrs);
+	va = dma_alloc_attrs(kctx->kbdev->dev, size, &dma_pa, GFP_KERNEL, dma_attrs_arg(attrs));
 #else
 	va = dma_alloc_writecombine(kctx->kbdev->dev, size, &dma_pa, GFP_KERNEL);
 #endif
@@ -1959,7 +1965,7 @@ no_alloc:
 	kfree(reg);
 no_reg:
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0))
-	dma_free_attrs(kctx->kbdev->dev, size, va, dma_pa, &attrs);
+	dma_free_attrs(kctx->kbdev->dev, size, va, dma_pa, dma_attrs_arg(attrs));
 #else
 	dma_free_writecombine(kctx->kbdev->dev, size, va, dma_pa);
 #endif
@@ -1993,7 +1999,7 @@ void kbase_va_free(struct kbase_context *kctx, struct kbase_hwc_dma_mapping *han
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0))
 	dma_set_attr(DMA_ATTR_WRITE_COMBINE, &attrs);
 	dma_free_attrs(kctx->kbdev->dev, handle->size,
-			handle->cpu_va, handle->dma_pa, &attrs);
+			handle->cpu_va, handle->dma_pa, dma_attrs_arg(attrs));
 #else
 	dma_free_writecombine(kctx->kbdev->dev, handle->size,
 				handle->cpu_va, handle->dma_pa);

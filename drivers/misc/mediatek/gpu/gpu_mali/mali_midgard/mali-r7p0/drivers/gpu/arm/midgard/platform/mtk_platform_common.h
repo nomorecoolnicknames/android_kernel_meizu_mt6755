@@ -18,7 +18,11 @@
 
 #ifdef ENABLE_COMMON_DVFS
 /* MTK */
+#ifdef CONFIG_MACH_MT6735M
+#include "mt_gpufreq.h"
+#else
 #include "mtk_gpufreq.h"
+#endif
 #endif
 
 int mtk_platform_init(struct platform_device *pdev, struct kbase_device *kbdev);

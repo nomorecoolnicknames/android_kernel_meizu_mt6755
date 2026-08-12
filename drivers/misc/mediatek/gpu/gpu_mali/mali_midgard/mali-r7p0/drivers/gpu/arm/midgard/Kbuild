@@ -105,6 +105,7 @@ SRC := \
 	mali_kbase_core_linux.c \
 	mali_kbase_sync.c \
 	mali_kbase_sync_user.c \
+	mali_kbase_sync_49.c \
 	mali_kbase_replay.c \
 	mali_kbase_mem_profile_debugfs.c \
 	mali_kbase_mmu_mode_lpae.c \
