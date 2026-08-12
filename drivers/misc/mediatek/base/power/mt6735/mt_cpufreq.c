@@ -29,6 +29,9 @@
 #include <linux/sched.h>
 #include <linux/init.h>
 #include <linux/cpu.h>
+
+/* Boot markers (defined in arch/arm64/kernel/setup.c) */
+extern void forge_kmark_ptr(int ms, unsigned long v);
 #include <linux/cpufreq.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
@@ -220,6 +223,21 @@
 
 /* DVFS OPP table */
 #ifdef CONFIG_MACH_MT6735M
+/*
+ * One operating point above the fused segment.
+ *
+ * This part reports segment_code 0x52, which _mt_cpufreq_get_cpu_level
+ * maps to CPU_LEVEL_2 ("35P+ 1.25GHz"); 1248 MHz is the highest frequency
+ * MediaTek defines for MT6735M. The 1.3/1.45/1.5 GHz tables belong to
+ * MT6735 and MT6753 silicon.
+ *
+ * MAX_VPROC_VOLT is 125000 and the top OPP already sits on it, so 1352 MHz
+ * runs at the same 1.25 V as 1248 MHz. A 1495 MHz point was never reached
+ * and broke frequency selection below it, so it is not here. A bad point
+ * shows up as a spontaneous reboot or memory corruption, not an error
+ * message.
+ */
+#define CPU_DVFS_FREQ_OC1 (1352000)	/* KHz, overclock */
 #define CPU_DVFS_FREQ0_1 (1248000)	/* KHz */
 #define CPU_DVFS_FREQ0   (1144000)	/* KHz */
 #define CPU_DVFS_FREQ1_1 (1092000)	/* KHz */
@@ -754,6 +772,7 @@ static struct mt_cpu_freq_info opp_tbl_e1_1[] = {
 
 /* CPU LEVEL 2, 1.25GHz segment */
 static struct mt_cpu_freq_info opp_tbl_e1_2[] = {
+	OP(CPU_DVFS_FREQ_OC1, 125000),	/* 1352MHz, invented — see the define */
 	OP(CPU_DVFS_FREQ0_1, 125000),
 	OP(CPU_DVFS_FREQ1,  121875),
 	OP(CPU_DVFS_FREQ5,  118750),
@@ -2718,6 +2737,11 @@ static int _mt_cpufreq_set_locked(struct mt_cpu_dvfs *p, unsigned int cur_khz,
 
 	FUNC_ENTER(FUNC_LV_HELP);
 
+	/* DVFS transition markers: slot 70 = target_khz on entry, slot 71 =
+	 * volt on exit. 70 without 71 means a hang inside
+	 * set_cur_volt/set_cur_freq. */
+	forge_kmark_ptr(70, target_khz);
+
 	volt = _mt_cpufreq_search_available_volt(p, target_khz);
 
 #ifdef CONFIG_CPU_DVFS_TURBO_MODE
@@ -2814,6 +2838,8 @@ static int _mt_cpufreq_set_locked(struct mt_cpu_dvfs *p, unsigned int cur_khz,
 
 	FUNC_EXIT(FUNC_LV_HELP);
 out:
+	/* closes slot 70 (see entry above) */
+	forge_kmark_ptr(71, volt);
 	return ret;
 }
 
