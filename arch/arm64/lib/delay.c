@@ -27,9 +27,25 @@
 void __delay(unsigned long cycles)
 {
 	cycles_t start = get_cycles();
+#ifdef CONFIG_MACH_MT6755
+	/*
+	 * Guard against a frozen CNTVCT_EL0: LK hands over with cpuxgpt stopped,
+	 * and the counter only runs once forge_enable_cpuxgpt() (SMC 0x82000201)
+	 * has run. A udelay() before that, or if the SMC does not take, would
+	 * never exit. On a live counter the real condition exits first; on a
+	 * frozen one the cap gives a longer (never shorter) delay.
+	 */
+	unsigned long guard = (cycles << 8) + 0x10000UL;
 
+	while ((get_cycles() - start) < cycles) {
+		cpu_relax();
+		if (!guard--)
+			break;
+	}
+#else
 	while ((get_cycles() - start) < cycles)
 		cpu_relax();
+#endif
 }
 EXPORT_SYMBOL(__delay);
 
