@@ -25,6 +25,9 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#ifdef CONFIG_MACH_MT6755
+#include "../../init/forge_m681_marker.h"
+#endif
 
 const struct of_device_id of_default_bus_match_table[] = {
 	{ .compatible = "simple-bus", },
@@ -386,6 +389,37 @@ static int of_platform_bus_create(struct device_node *bus,
 		return 0;
 	}
 
+#ifdef CONFIG_MACH_MT6755
+	/*
+	 * Node -> platform_device creation gate. Some power/clock domains are
+	 * left ungated here, and a register access into such a block hangs the
+	 * AXI bus with no fault. Each skip marks 0xBC (aux = list index); every
+	 * created node is named first (forge_m681_mark_ofnode) so a hang inside
+	 * of_device_alloc/device_add is pinpointed.
+	 */
+	{
+		static const char * const forge_of_deny[] = {
+			"nfc", "irq_nfc", "md_ccif", "ccci",
+			"thermal", "tscpu", "wmt", "fmradio",
+			"msdc2", "msdc3", "fdvt",
+			"jpeg", "vcodec", "venc", "vdec",
+			"irtx", "mrdump_ext_rst", "eint_wpc", "usb_typec", "swtp",
+			"ext_buck_oc", "ext_buck_vmd1", "rt5081_pmu_eint", "rt5081_pd",
+			"cpuhvfs", "vcorefs", "eem", "ptp_fsm", "devapc",
+			"systracker", "watchpoint", "freqhop", "freqhopping",
+			"toprgu",
+			NULL };
+		const char *ofn = bus->full_name ? bus->full_name : "";
+		int dk;
+
+		for (dk = 0; forge_of_deny[dk]; dk++)
+			if (strstr(ofn, forge_of_deny[dk])) {
+				forge_m681_mark_aux(0xBC, (unsigned int)dk);
+				return 0;
+			}
+		forge_m681_mark_ofnode(bus->full_name);
+	}
+#endif
 	dev = of_platform_device_create_pdata(bus, bus_id, platform_data, parent);
 	if (!dev || !of_match_node(matches, bus))
 		return 0;

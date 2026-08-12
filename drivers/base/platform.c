@@ -12,6 +12,10 @@
 
 #include <linux/string.h>
 #include <linux/platform_device.h>
+#ifdef CONFIG_MACH_MT6755
+#include <linux/ctype.h>
+#include "../../init/forge_m681_marker.h"
+#endif
 #include <linux/of_device.h>
 #include <linux/of_irq.h>
 #include <linux/module.h>
@@ -574,6 +578,47 @@ static int platform_drv_probe(struct device *_dev)
 	struct platform_device *dev = to_platform_device(_dev);
 	int ret;
 
+#ifdef CONFIG_MACH_MT6755
+	/*
+	 * Probe mark (0xC0, aux = .probe) and a central probe denylist. It skips
+	 * only non-essential debug/profiling/multimedia/connectivity probes that
+	 * poke unpowered blocks and wedge the AXI bus; mmc, usb, pmic, clk,
+	 * pinctrl, gpio, i2c, uart and rtc are never listed. "wdt": the marker
+	 * code owns the toprgu watchdog (arm + kick).
+	 * Each skip marks 0xCD (aux = skipped .probe).
+	 */
+	forge_m681_mark_aux(0xC0, (unsigned int)(unsigned long)drv->probe);
+	{
+		static const char * const forge_deny[] = {
+			"mt-eem", "ptp_fsm",
+			"ispsys", "fdvt", "venc", "vdec", "vcodec",
+			"mdp", "jpeg", "jpg", "connectivity",
+			"wlan", "mediatek,gps", "devapc", "systracker",
+			"watchpoint", "freqhop", "wdt", NULL };
+		const char *src = _dev->driver->name ? _dev->driver->name : "";
+		const char *cmp = NULL;
+		char nm[48], cb[72];
+		int k, j;
+
+		for (k = 0; k < 47 && src[k]; k++)
+			nm[k] = tolower(src[k]);
+		nm[k] = 0;
+		cb[0] = 0;
+		if (_dev->of_node &&
+		    !of_property_read_string(_dev->of_node, "compatible", &cmp) && cmp) {
+			for (j = 0; j < 71 && cmp[j]; j++)
+				cb[j] = tolower(cmp[j]);
+			cb[j] = 0;
+		}
+		for (k = 0; forge_deny[k]; k++)
+			if (strstr(nm, forge_deny[k]) ||
+			    (cb[0] && strstr(cb, forge_deny[k]))) {
+				forge_m681_mark_aux(0xCD,
+					(unsigned int)(unsigned long)drv->probe);
+				return -ENODEV;
+			}
+	}
+#endif
 	ret = of_clk_set_defaults(_dev->of_node, false);
 	if (ret < 0)
 		return ret;
